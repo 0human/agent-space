@@ -210,7 +210,7 @@ AI Team 不只是配置分组，还应包含：
 - 本地项目目录关联
 - 基础文件选择与上下文注入
 - CLI Agent 调用失败提示与重试
-- ccswitch 格式配置导入
+- 外部 Runtime 配置导入，MVP 优先兼容 ccswitch Provider
 - CLI Agent 可执行命令检测
 - CLI Agent 基础进程启动、停止和输出记录
 
@@ -294,13 +294,20 @@ AI Team 不只是配置分组，还应包含：
 
 #### 9.1.6 导入配置
 
-用户可以从外部配置导入 AI Runtime 配置。MVP 阶段优先支持 ccswitch 中与 CLI Agent 相关的 Provider 导入格式。
+用户可以从外部配置导入 AI Runtime 配置。MVP 阶段优先支持通用外部配置导入能力，并把 ccswitch Provider 作为首个兼容格式，而不是依赖或唤起 ccswitch 应用本身。
 
 支持的导入来源：
 
-- ccswitch deep link：`ccswitch://v1/import?resource=provider&...`
-- ccswitch 导出的 Provider 配置片段
-- ccswitch 数据备份中的 Provider 配置，首版可先支持用户选择性导入，不直接覆盖本应用数据库
+- 粘贴外部配置文本
+- 粘贴 ccswitch deep link 文本，例如 `ccswitch://v1/import?resource=provider&...`
+- 粘贴 ccswitch 导出的 Provider 配置片段
+- 选择外部配置文件或备份文件，首版可先支持用户选择性导入，不直接覆盖本应用数据库
+
+说明：
+
+- 应用只解析用户提供的文本或文件内容，不主动调用 `ccswitch://` 协议，也不打开 ccswitch 软件。
+- deep link 在本应用中只被视为一种可解析的字符串格式。
+- 导入能力应设计为可扩展的 Import Adapter 架构，ccswitch 只是其中一个格式适配器。
 
 ccswitch Provider 字段映射：
 
@@ -315,8 +322,9 @@ ccswitch Provider 字段映射：
 
 导入流程：
 
-- 用户粘贴 deep link、选择文件或粘贴配置文本。
+- 用户粘贴配置文本、粘贴 deep link 文本或选择文件。
 - 应用解析并展示导入预览。
+- 应用自动识别格式，或允许用户手动选择格式提示，例如 `ccswitch`。
 - 应用提示是否包含敏感字段，例如 API Key、Token、Usage API Key 或 CLI 凭据字段。
 - 用户选择导入为新的 Runtime 配置，或合并到已有配置。
 - 如果配置名称重复，应用提供重命名、覆盖、跳过三种处理方式。
@@ -327,6 +335,7 @@ ccswitch Provider 字段映射：
 - 仅从可信来源导入配置。
 - 默认不自动启用导入配置，需要用户确认。
 - 默认不自动写入 Claude Code、Codex 等外部 CLI 的真实配置目录。
+- 默认不唤起外部应用，不执行 deep link 协议跳转。
 - ccswitch 数据库备份导入不得覆盖本应用数据库。
 
 ### 9.2 Agent 公用配置管理
@@ -1156,7 +1165,7 @@ CLI Agent 输出应优先使用结构化格式，例如 JSON、JSON Lines 或事
 - 编辑配置
 - 删除配置
 - 设置默认配置
-- 导入 ccswitch 配置
+- 导入外部 Runtime 配置
 - 检测 CLI 命令
 
 ### 10.3 Agent 公用配置页
@@ -1546,9 +1555,11 @@ interface AIRuntime {
 
 系统需要提供外部配置导入能力，降低用户迁移多个 CLI Agent 配置的成本。
 
-### 14.1 ccswitch 格式导入
+### 14.1 外部配置格式兼容
 
-MVP 阶段需要支持 ccswitch Provider 导入格式。应用需要能够解析 ccswitch deep link 和配置片段，将其中与 CLI Agent 相关的 Provider 信息转换为本应用的 AI Runtime 配置。
+MVP 阶段需要支持外部 Runtime 配置导入，并优先兼容 ccswitch Provider 格式。应用需要能够解析用户粘贴或选择的配置内容，将其中与 CLI Agent 相关的信息转换为本应用的 AI Runtime 配置。
+
+ccswitch deep link 只作为文本格式兼容，不作为协议跳转能力。应用不得主动调用 `ccswitch://` 打开外部软件。
 
 导入对象：
 
@@ -1556,6 +1567,14 @@ MVP 阶段需要支持 ccswitch Provider 导入格式。应用需要能够解析
 - Codex CLI 相关 Provider
 - Gemini CLI 相关 Provider
 - 其他可映射到 Custom CLI 的 Provider
+
+导入入口：
+
+- 粘贴配置文本
+- 粘贴 deep link 文本
+- 从剪贴板读取
+- 选择文件
+- 后续可扩展为扫描常见本地配置路径
 
 ### 14.2 导入预览
 
@@ -1682,7 +1701,7 @@ MVP 可用性的判断指标：
 - 用户可以成功添加至少一个 AI Runtime 配置。
 - 用户可以成功创建至少一个 Agent 公用配置。
 - 用户可以成功创建至少一个 AI Team。
-- 用户可以从 ccswitch 格式成功导入至少一个 AI Runtime 配置。
+- 用户可以从外部配置格式成功导入至少一个 AI Runtime 配置，MVP 优先兼容 ccswitch Provider。
 - 用户可以成功创建项目并打开工作窗口。
 - 用户可以在创建项目时通过选择默认 AI Team 或默认 AI Runtime 让系统自动推导项目模式。
 - 用户可以在 Team 模式项目中选择默认 AI Team。
@@ -1702,7 +1721,7 @@ MVP 可用性的判断指标：
 - AI Runtime 配置管理
 - Agent 公用配置管理
 - AI Team 管理
-- ccswitch 格式配置导入
+- 外部 Runtime 配置导入，MVP 优先兼容 ccswitch Provider
 - 项目管理
 - Team 模式与自由模式
 - 创建项目时可选择默认 AI Team、默认 AI Runtime，也可跳过 Team
@@ -1770,8 +1789,8 @@ MVP 可用性的判断指标：
 - CLI 凭据加密方案使用系统 Keychain，还是应用级主密钥。
 - CLI Agent 的文件修改是否在 MVP 阶段只记录，不做应用侧 diff 审批。
 - CLI Agent 的登录认证是否完全交给 CLI 自身处理。
-- ccswitch 导入首版支持 deep link 即可，还是同时支持备份数据库文件。
-- 从 ccswitch 导入后是否需要回写到 Claude Code、Codex CLI 等工具的原生配置。
+- 外部配置导入首版支持粘贴文本和选择文件，deep link 仅作为文本解析，不执行协议跳转。
+- 从外部配置导入后是否需要回写到 Claude Code、Codex CLI 等工具的原生配置。
 
 ## 20. 验收标准
 
@@ -1783,7 +1802,7 @@ MVP 完成时，应满足以下验收标准：
 - 用户可以创建、编辑、删除 AI Runtime 配置。
 - 用户可以创建、编辑、复制、删除 Agent 公用配置。
 - 用户可以创建、编辑、删除 AI Team。
-- 用户可以粘贴 ccswitch deep link 并导入为 AI Runtime 配置。
+- 用户可以粘贴外部 Runtime 配置文本，或粘贴 ccswitch deep link 文本并作为普通文本解析导入。
 - 用户可以在导入前看到配置预览和敏感字段脱敏提示。
 - 用户可以在创建项目时通过选择默认 AI Team 或默认 AI Runtime 让系统自动推导项目模式。
 - 用户可以在 Team 模式下选择一个默认 AI Team，或在自由模式下选择一个默认 AI Runtime。

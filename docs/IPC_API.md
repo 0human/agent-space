@@ -148,6 +148,11 @@ interface RuntimeSummary {
 }
 ```
 
+说明：
+
+- `permissionPreset` 仅用于快捷预设和 UI 摘要，不表示最终权限结果。
+- 最终权限由 `permissionPolicySetIds` / `permission_policy_sets` 按合并规则计算。
+
 Preload：
 
 ```ts
@@ -180,6 +185,10 @@ interface RuntimeSecretSummary {
   lastValidatedAt?: ISODateTime;
 }
 ```
+
+说明：
+
+- `defaultArgs` 在返回详情时始终返回数组；未配置时返回空数组 `[]`
 
 Preload：
 
@@ -468,6 +477,10 @@ interface AgentProfileSummary {
 }
 ```
 
+说明：
+
+- `permissionPreset` 仅用于摘要展示和快捷初始化，不作为最终权限模型来源。
+
 ### `agentProfile:create`
 
 ```ts
@@ -486,6 +499,11 @@ interface AgentProfileCreateInput {
   envWhitelist?: string[];
 }
 ```
+
+说明：
+
+- `permissionPolicySetIds` 才是最终权限边界的主要来源。
+- `permissionPreset` 只用于帮助用户快速生成默认权限设置和展示摘要。
 
 ### `agentProfile:resolvePreview`
 
@@ -639,6 +657,8 @@ interface ProjectCreateResult {
 - 主进程根据 `defaultAiTeamId` 推导 `mode`。
 - 项目创建与指标初始化在同一事务中完成。
 - 如果创建首个工作窗口失败，项目保留并返回 `postCreateWarning`。
+- `postCreateAction` 属于创建后的附加动作，不影响项目主记录是否创建成功。
+- `defaultAiTeamId` 与 `defaultAiRuntimeConfigId` 在请求中只能传一个；主进程应拒绝同时传值的输入。
 
 ### `project:update`
 
@@ -679,6 +699,11 @@ interface ProjectDeleteInput {
   confirmName: string;
 }
 ```
+
+规则：
+
+- `deleteHistory = false` 时，主进程应将项目归档，而不是删除项目主记录。
+- `deleteHistory = true` 时，主进程删除项目记录及其本地历史数据。
 
 ## 11. Work Session API
 
@@ -733,6 +758,9 @@ interface SessionCreateInput {
 - Team 模式项目创建窗口时默认带入项目 Team。
 - 自由模式项目优先带入项目默认 Runtime。
 - Runtime 不可用时返回可恢复错误，不创建半成品窗口。
+- `activeAssigneeType = 'team_member'` 时，`aiTeamMemberId` 必填，`aiRuntimeConfigId` 不作为必填输入。
+- `activeAssigneeType = 'runtime'` 时，`aiRuntimeConfigId` 必填。
+- 当执行者为 Team 成员时，实际 Runtime 由主进程在启动 Run 时从 `aiTeamMemberId` 解析，并写入 `runtime_runs.runtime_config_id` 与相关快照。
 
 ### `session:get`
 
@@ -803,6 +831,9 @@ interface SessionSendMessageResult {
 - 主进程创建用户消息、输入包快照和 Runtime Run。
 - CLI 输出通过订阅事件推送。
 - 同一工作窗口同时只能有一个活动 Run。
+- 每次调用都创建新的 `runtime_runs` 记录。
+- `resumeExternalSessionId` 仅作为外部 CLI 会话恢复线索，是否透传由 Runtime Adapter 决定。
+- `waiting_input` 后的用户补充输入仍通过本接口发送；是否复用外部 CLI 会话取决于对应 Adapter 能力。
 
 ### `session:stopRun`
 
@@ -896,6 +927,7 @@ interface ContextSelectedFile {
   title: string;
   contentHash?: string;
   sizeBytes: number;
+  contentSummary?: string;
 }
 ```
 
@@ -903,6 +935,8 @@ interface ContextSelectedFile {
 
 - 文件选择由主进程打开系统选择器。
 - 默认限制在项目目录内，跨目录需要 UI 明确提示。
+- `context:selectFiles` 默认只返回文件引用信息和可选摘要，不返回完整文件内容。
+- 完整文件内容仅在用户确认发送时进入单次输入包。
 
 ### `context:resolveForSession`
 

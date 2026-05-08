@@ -74,11 +74,11 @@ MVP 的最低可用目标：
 
 ### Phase 1：SQLite 与数据访问层
 
-目标：完成本地数据库初始化、迁移和基础 Repository。
+目标：完成基于 `Drizzle ORM + better-sqlite3` 的本地数据库初始化、迁移和基础 Repository。
 
 任务：
 
-- 根据 `docs/DB_SCHEMA.md` 建立 Drizzle schema 或等价 schema。
+- 根据 `docs/DB_SCHEMA.md` 建立 Drizzle schema。
 - 建立迁移流程和数据库初始化服务。
 - 启用 `PRAGMA foreign_keys = ON;`。
 - 实现基础 Repository：
@@ -117,6 +117,7 @@ MVP 的最低可用目标：
 - 实现 Runtime 检测：
   - `claude --version`
   - `codex --version`
+  - `gemini --version`
   - Custom CLI 可执行性检测
 - 实现通用 Runtime 导入预览。
 - 实现通用 Runtime 导入提交：
@@ -129,7 +130,7 @@ MVP 的最低可用目标：
 
 验收：
 
-- 能保存一个 Claude / Codex / Custom Runtime。
+- 能保存一个 Claude / Codex / Gemini / Custom Runtime。
 - 能检测命令是否存在。
 - 敏感字段不会明文出现在业务表、日志和 UI 明细里。
 - Runtime 禁用后不会被新工作窗口默认选中。
@@ -235,6 +236,7 @@ MVP 的最低可用目标：
   - 保存用户消息
   - 组装 RuntimeInputEnvelope
   - 创建 `runtime_runs`
+  - 按 Runtime Adapter 能力透传 `resumeExternalSessionId`
   - 启动子进程
   - 流式写入 `runtime_events`
   - 写入 assistant 消息
@@ -267,6 +269,8 @@ MVP 的最低可用目标：
 
 - 发送消息前用户能看到本轮包含哪些上下文。
 - 本地文件内容只在用户显式选择后进入输入包。
+- `local_file` 默认只保存引用路径、hash、大小和摘要。
+- 上下文超限时不能静默自动压缩，需要用户确认并保留关键问题、关键结论和关键决策。
 - 输入包展示前完成敏感字段脱敏。
 
 ### Phase 8：Dashboard 与项目指标

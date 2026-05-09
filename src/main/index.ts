@@ -1,6 +1,8 @@
 import { app, BrowserWindow } from 'electron'
 import { join } from 'node:path'
+import { closeDatabase, initializeDatabase } from './db'
 import { registerAppIpc } from './ipc/app'
+import { recoverInterruptedRuns } from './services/startupRecovery'
 
 const isDev = Boolean(process.env.ELECTRON_RENDERER_URL)
 
@@ -32,6 +34,8 @@ function createMainWindow(): void {
 }
 
 app.whenReady().then(() => {
+  const database = initializeDatabase()
+  recoverInterruptedRuns(database.db)
   registerAppIpc()
   createMainWindow()
 
@@ -46,4 +50,8 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit()
   }
+})
+
+app.on('before-quit', () => {
+  closeDatabase()
 })

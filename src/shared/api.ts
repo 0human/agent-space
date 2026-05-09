@@ -19,6 +19,7 @@ export interface AppInfo {
   appVersion: string
   platform: NodeJS.Platform
   databaseReady: boolean
+  databasePath?: string
 }
 
 export interface AppAPI {

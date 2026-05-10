@@ -45,6 +45,8 @@
 
 - 桌面容器：Electron
 - 前端：React + TypeScript
+- UI 样式：Tailwind CSS
+- 组件体系：shadcn/ui 源码组件模式
 - 构建工具：Vite
 - 路由：React Router
 - 状态管理：Zustand
@@ -57,6 +59,7 @@
 说明：
 
 - React + Zustand 足够支撑 MVP 的多视图、多工作窗口状态同步，不需要过早引入更重的全局架构。
+- Renderer 组件优先使用 Tailwind CSS 和 shadcn/ui 风格的本地源码组件，避免把页面级样式长期沉淀到全局 CSS。shadcn/ui 不作为运行时黑盒依赖，而是把组件源码纳入 `src/renderer/components/ui` 维护。
 - SQLite 更适合项目、消息、运行事件、指标聚合和后续检索，不建议用 JSON 文件作为主存储。
 - 原生多窗口先不做成硬依赖，可以减少状态同步和窗口恢复复杂度。
 

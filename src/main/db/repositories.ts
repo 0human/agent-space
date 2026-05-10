@@ -39,7 +39,8 @@ import {
 type MutableTimestamps = { createdAt: string; updatedAt: string }
 type GeneratedFields = 'id' | 'createdAt' | 'updatedAt'
 type CreateInput<T> = Omit<T, GeneratedFields> & Partial<Pick<T, Extract<keyof T, GeneratedFields>>>
-type CreatedAtInput<T> = Omit<T, 'id' | 'createdAt'> & Partial<Pick<T, Extract<keyof T, 'id' | 'createdAt'>>>
+type CreatedAtInput<T> = Omit<T, 'id' | 'createdAt'> &
+  Partial<Pick<T, Extract<keyof T, 'id' | 'createdAt'>>>
 type IdInput<T> = Omit<T, 'id'> & Partial<Pick<T, Extract<keyof T, 'id'>>>
 
 function now(): string {
@@ -69,7 +70,7 @@ function withCreatedAt<T extends { createdAt?: string }>(input: T): T & { create
   }
 }
 
-type RepositoryDatabase = Pick<AppDatabase, 'select' | 'insert' | 'update'>
+type RepositoryDatabase = Pick<AppDatabase, 'select' | 'insert' | 'update' | 'delete'>
 
 export function createRepositories(db: RepositoryDatabase) {
   return {
@@ -81,7 +82,11 @@ export function createRepositories(db: RepositoryDatabase) {
         return db.select().from(agentProfiles).all()
       },
       create(input: CreateInput<NewAgentProfile>) {
-        return db.insert(agentProfiles).values(withTimestamps(withId(input))).returning().get()
+        return db
+          .insert(agentProfiles)
+          .values(withTimestamps(withId(input)))
+          .returning()
+          .get()
       },
       update(id: string, input: Partial<NewAgentProfile>) {
         return db
@@ -95,17 +100,17 @@ export function createRepositories(db: RepositoryDatabase) {
 
     permissionPolicySets: {
       getById(id: string) {
-        return db
-          .select()
-          .from(permissionPolicySets)
-          .where(eq(permissionPolicySets.id, id))
-          .get()
+        return db.select().from(permissionPolicySets).where(eq(permissionPolicySets.id, id)).get()
       },
       list() {
         return db.select().from(permissionPolicySets).all()
       },
       create(input: CreateInput<NewPermissionPolicySet>) {
-        return db.insert(permissionPolicySets).values(withTimestamps(withId(input))).returning().get()
+        return db
+          .insert(permissionPolicySets)
+          .values(withTimestamps(withId(input)))
+          .returning()
+          .get()
       },
       update(id: string, input: Partial<NewPermissionPolicySet>) {
         return db
@@ -149,7 +154,11 @@ export function createRepositories(db: RepositoryDatabase) {
         return db.select().from(aiRuntimeConfigs).all()
       },
       create(input: CreateInput<NewAiRuntimeConfig>) {
-        return db.insert(aiRuntimeConfigs).values(withTimestamps(withId(input))).returning().get()
+        return db
+          .insert(aiRuntimeConfigs)
+          .values(withTimestamps(withId(input)))
+          .returning()
+          .get()
       },
       update(id: string, input: Partial<NewAiRuntimeConfig>) {
         return db
@@ -171,13 +180,24 @@ export function createRepositories(db: RepositoryDatabase) {
 
     runtimeSecrets: {
       create(input: CreateInput<NewAiRuntimeSecret>) {
-        return db.insert(aiRuntimeSecrets).values(withTimestamps(withId(input))).returning().get()
+        return db
+          .insert(aiRuntimeSecrets)
+          .values(withTimestamps(withId(input)))
+          .returning()
+          .get()
       },
       listByRuntime(runtimeConfigId: string) {
         return db
           .select()
           .from(aiRuntimeSecrets)
           .where(eq(aiRuntimeSecrets.runtimeConfigId, runtimeConfigId))
+          .all()
+      },
+      deleteByRuntime(runtimeConfigId: string) {
+        return db
+          .delete(aiRuntimeSecrets)
+          .where(eq(aiRuntimeSecrets.runtimeConfigId, runtimeConfigId))
+          .returning()
           .all()
       }
     },
@@ -190,7 +210,11 @@ export function createRepositories(db: RepositoryDatabase) {
         return db.select().from(aiTeams).all()
       },
       create(input: CreateInput<NewAiTeam>) {
-        return db.insert(aiTeams).values(withTimestamps(withId(input))).returning().get()
+        return db
+          .insert(aiTeams)
+          .values(withTimestamps(withId(input)))
+          .returning()
+          .get()
       },
       update(id: string, input: Partial<NewAiTeam>) {
         return db
@@ -204,7 +228,11 @@ export function createRepositories(db: RepositoryDatabase) {
 
     teamMembers: {
       create(input: CreateInput<NewAiTeamMember>) {
-        return db.insert(aiTeamMembers).values(withTimestamps(withId(input))).returning().get()
+        return db
+          .insert(aiTeamMembers)
+          .values(withTimestamps(withId(input)))
+          .returning()
+          .get()
       },
       listByTeam(teamId: string) {
         return db
@@ -261,11 +289,7 @@ export function createRepositories(db: RepositoryDatabase) {
 
     projectMetricSnapshots: {
       create(input: IdInput<NewProjectMetricSnapshot>) {
-        return db
-          .insert(projectMetricSnapshots)
-          .values(withId(input))
-          .returning()
-          .get()
+        return db.insert(projectMetricSnapshots).values(withId(input)).returning().get()
       },
       listByProject(projectId: string) {
         return db
@@ -284,7 +308,11 @@ export function createRepositories(db: RepositoryDatabase) {
         return db.select().from(workSessions).all()
       },
       create(input: CreateInput<NewWorkSession>) {
-        return db.insert(workSessions).values(withTimestamps(withId(input))).returning().get()
+        return db
+          .insert(workSessions)
+          .values(withTimestamps(withId(input)))
+          .returning()
+          .get()
       },
       update(id: string, input: Partial<NewWorkSession>) {
         return db
@@ -314,7 +342,11 @@ export function createRepositories(db: RepositoryDatabase) {
 
     messages: {
       create(input: CreatedAtInput<NewMessage>) {
-        return db.insert(messages).values(withCreatedAt(withId(input))).returning().get()
+        return db
+          .insert(messages)
+          .values(withCreatedAt(withId(input)))
+          .returning()
+          .get()
       },
       listBySession(workSessionId: string, limit = 50, offset = 0) {
         return db
@@ -347,7 +379,11 @@ export function createRepositories(db: RepositoryDatabase) {
 
     runtimeEvents: {
       create(input: CreatedAtInput<NewRuntimeEvent>) {
-        return db.insert(runtimeEvents).values(withCreatedAt(withId(input))).returning().get()
+        return db
+          .insert(runtimeEvents)
+          .values(withCreatedAt(withId(input)))
+          .returning()
+          .get()
       },
       listByRun(runId: string) {
         return db
@@ -361,7 +397,11 @@ export function createRepositories(db: RepositoryDatabase) {
 
     contextItems: {
       create(input: CreateInput<NewContextItem>) {
-        return db.insert(contextItems).values(withTimestamps(withId(input))).returning().get()
+        return db
+          .insert(contextItems)
+          .values(withTimestamps(withId(input)))
+          .returning()
+          .get()
       },
       listByProject(projectId: string) {
         return db.select().from(contextItems).where(eq(contextItems.projectId, projectId)).all()
@@ -370,13 +410,21 @@ export function createRepositories(db: RepositoryDatabase) {
 
     contextSnapshots: {
       create(input: CreateInput<NewContextSnapshot>) {
-        return db.insert(contextSnapshots).values(withTimestamps(withId(input))).returning().get()
+        return db
+          .insert(contextSnapshots)
+          .values(withTimestamps(withId(input)))
+          .returning()
+          .get()
       }
     },
 
     sessionContextRefs: {
       create(input: CreatedAtInput<NewSessionContextRef>) {
-        return db.insert(sessionContextRefs).values(withCreatedAt(withId(input))).returning().get()
+        return db
+          .insert(sessionContextRefs)
+          .values(withCreatedAt(withId(input)))
+          .returning()
+          .get()
       },
       listBySessions(workSessionIds: string[]) {
         if (workSessionIds.length === 0) {

@@ -1,233 +1,53 @@
-:root {
-  color: #1c2430;
-  background: #f7f8fa;
-  font-family:
-    Inter,
-    ui-sans-serif,
-    system-ui,
-    -apple-system,
-    BlinkMacSystemFont,
-    'Segoe UI',
-    sans-serif;
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
+@import 'tailwindcss';
+
+@theme {
+  --color-background: hsl(210 20% 98%);
+  --color-foreground: hsl(215 28% 15%);
+  --color-card: hsl(0 0% 100%);
+  --color-card-foreground: hsl(215 28% 15%);
+  --color-popover: hsl(0 0% 100%);
+  --color-popover-foreground: hsl(215 28% 15%);
+  --color-primary: hsl(212 67% 34%);
+  --color-primary-foreground: hsl(0 0% 100%);
+  --color-secondary: hsl(210 22% 94%);
+  --color-secondary-foreground: hsl(215 28% 20%);
+  --color-muted: hsl(210 20% 94%);
+  --color-muted-foreground: hsl(213 13% 44%);
+  --color-accent: hsl(210 24% 92%);
+  --color-accent-foreground: hsl(215 28% 18%);
+  --color-destructive: hsl(4 74% 46%);
+  --color-border: hsl(212 22% 88%);
+  --color-input: hsl(212 22% 82%);
+  --color-ring: hsl(212 67% 34%);
 }
 
-* {
-  box-sizing: border-box;
-}
-
-body {
-  margin: 0;
-  min-width: 320px;
-}
-
-button {
-  border: 1px solid #1d4f91;
-  border-radius: 6px;
-  background: #1d4f91;
-  color: #ffffff;
-  cursor: pointer;
-  font: inherit;
-  font-weight: 650;
-  min-height: 38px;
-  padding: 0 14px;
-}
-
-button.secondary {
-  background: #ffffff;
-  color: #1d4f91;
-}
-
-.app-shell {
-  display: grid;
-  grid-template-columns: 220px minmax(0, 1fr) 280px;
-  min-height: 100vh;
-}
-
-.global-nav {
-  background: #171b20;
-  color: #f5f7fa;
-  padding: 18px 14px;
-}
-
-.brand {
-  align-items: center;
-  display: flex;
-  font-weight: 750;
-  gap: 10px;
-  margin-bottom: 22px;
-}
-
-.global-nav nav {
-  display: grid;
-  gap: 4px;
-}
-
-.global-nav a {
-  align-items: center;
-  border-radius: 6px;
-  color: #cfd6df;
-  display: flex;
-  gap: 10px;
-  min-height: 38px;
-  padding: 0 10px;
-  text-decoration: none;
-}
-
-.global-nav a.active,
-.global-nav a:hover {
-  background: #27313c;
-  color: #ffffff;
-}
-
-.main-content {
-  min-width: 0;
-  padding: 26px;
-}
-
-.inspector {
-  background: #ffffff;
-  border-left: 1px solid #e1e6ed;
-  padding: 24px;
-}
-
-.inspector section + section {
-  margin-top: 28px;
-}
-
-.page {
-  margin: 0 auto;
-  max-width: 980px;
-}
-
-.page-header {
-  align-items: center;
-  display: flex;
-  gap: 20px;
-  justify-content: space-between;
-  margin-bottom: 24px;
-}
-
-.page-header h1,
-.empty-state h2,
-.inspector h2,
-article h2 {
-  letter-spacing: 0;
-  margin: 4px 0 0;
-}
-
-.page-header h1 {
-  font-size: 30px;
-}
-
-.eyebrow {
-  color: #647487;
-  font-size: 12px;
-  font-weight: 750;
-  letter-spacing: 0;
-  text-transform: uppercase;
-}
-
-.dashboard-grid {
-  display: grid;
-  gap: 16px;
-  grid-template-columns: minmax(0, 1.25fr) minmax(280px, 0.75fr);
-}
-
-article,
-.empty-state {
-  background: #ffffff;
-  border: 1px solid #e1e6ed;
-  border-radius: 8px;
-  padding: 22px;
-}
-
-.empty-state p,
-article p,
-.inspector p {
-  color: #566579;
-  line-height: 1.55;
-}
-
-.actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin-top: 18px;
-}
-
-dl {
-  display: grid;
-  gap: 14px;
-  margin: 18px 0 0;
-}
-
-dl div,
-.metric-list div {
-  align-items: center;
-  display: flex;
-  justify-content: space-between;
-}
-
-dt,
-.metric-list span {
-  color: #647487;
-}
-
-dd {
-  font-weight: 700;
-  margin: 0;
-}
-
-.metric-list {
-  display: grid;
-  gap: 12px;
-}
-
-.metric-list strong {
-  font-size: 22px;
-}
-
-.error {
-  color: #b42318;
-}
-
-@media (max-width: 1080px) {
-  .app-shell {
-    grid-template-columns: 76px minmax(0, 1fr);
+@layer base {
+  * {
+    box-sizing: border-box;
   }
 
-  .global-nav span:not(.brand span),
-  .brand span,
-  .inspector {
-    display: none;
+  body {
+    min-width: 320px;
+    margin: 0;
+    background: var(--color-background);
+    color: var(--color-foreground);
+    font-family:
+      Inter,
+      ui-sans-serif,
+      system-ui,
+      -apple-system,
+      BlinkMacSystemFont,
+      'Segoe UI',
+      sans-serif;
+    font-synthesis: none;
+    text-rendering: optimizeLegibility;
   }
 
-  .global-nav a {
-    justify-content: center;
-  }
-}
-
-@media (max-width: 760px) {
-  .app-shell {
-    grid-template-columns: 1fr;
-  }
-
-  .global-nav {
-    display: none;
-  }
-
-  .dashboard-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .main-content {
-    padding: 18px;
-  }
-
-  .page-header {
-    align-items: flex-start;
-    flex-direction: column;
+  h1,
+  h2,
+  h3,
+  p {
+    margin: 0;
+    letter-spacing: 0;
   }
 }

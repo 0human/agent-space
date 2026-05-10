@@ -2,6 +2,8 @@ import { app, BrowserWindow } from 'electron'
 import { join } from 'node:path'
 import { closeDatabase, initializeDatabase } from './db'
 import { registerAppIpc } from './ipc/app'
+import { registerRuntimeIpc } from './ipc/runtime'
+import { FileSecretService, NodeProcessRunner, RuntimeService, RuntimeTester } from './runtime'
 import { recoverInterruptedRuns } from './services/startupRecovery'
 
 const isDev = Boolean(process.env.ELECTRON_RENDERER_URL)
@@ -37,6 +39,13 @@ app.whenReady().then(() => {
   const database = initializeDatabase()
   recoverInterruptedRuns(database.db)
   registerAppIpc()
+  registerRuntimeIpc(
+    new RuntimeService(
+      database.db,
+      new FileSecretService(join(app.getPath('userData'), 'secrets')),
+      new RuntimeTester(new NodeProcessRunner())
+    )
+  )
   createMainWindow()
 
   app.on('activate', () => {

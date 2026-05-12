@@ -3,7 +3,13 @@ import { join } from 'node:path'
 import { closeDatabase, initializeDatabase } from './db'
 import { registerAppIpc } from './ipc/app'
 import { registerRuntimeIpc } from './ipc/runtime'
-import { FileSecretService, NodeProcessRunner, RuntimeService, RuntimeTester } from './runtime'
+import {
+  FileSecretService,
+  NodeProcessRunner,
+  RuntimeImportService,
+  RuntimeService,
+  RuntimeTester
+} from './runtime'
 import { recoverInterruptedRuns } from './services/startupRecovery'
 
 const isDev = Boolean(process.env.ELECTRON_RENDERER_URL)
@@ -38,14 +44,13 @@ function createMainWindow(): void {
 app.whenReady().then(() => {
   const database = initializeDatabase()
   recoverInterruptedRuns(database.db)
-  registerAppIpc()
-  registerRuntimeIpc(
-    new RuntimeService(
-      database.db,
-      new FileSecretService(join(app.getPath('userData'), 'secrets')),
-      new RuntimeTester(new NodeProcessRunner())
-    )
+  const runtimeService = new RuntimeService(
+    database.db,
+    new FileSecretService(join(app.getPath('userData'), 'secrets')),
+    new RuntimeTester(new NodeProcessRunner())
   )
+  registerAppIpc()
+  registerRuntimeIpc(runtimeService, new RuntimeImportService(database.db, runtimeService))
   createMainWindow()
 
   app.on('activate', () => {

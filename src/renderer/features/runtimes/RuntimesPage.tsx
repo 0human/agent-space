@@ -1,4 +1,4 @@
-import { Bot, FlaskConical, Plus, PowerOff } from 'lucide-react'
+import { Bot, FileJson, FlaskConical, Plus, PowerOff } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import type { FormEvent, ReactElement } from 'react'
 import { Badge } from '@components/ui/badge'
@@ -18,6 +18,8 @@ import { cn } from '@lib/utils'
 import type {
   RuntimeCreateInput,
   RuntimeDetail,
+  RuntimeImportPreview,
+  RuntimeImportPreviewResult,
   RuntimeProvider,
   RuntimeSummary,
   RuntimeTestResult
@@ -63,6 +65,8 @@ export function RuntimesPage(): ReactElement {
   const [error, setError] = useState<string | null>(null)
   const [testResult, setTestResult] = useState<RuntimeTestResult | null>(null)
   const [loading, setLoading] = useState(false)
+  const [importText, setImportText] = useState('')
+  const [importPreview, setImportPreview] = useState<RuntimeImportPreviewResult | null>(null)
 
   const activeCount = useMemo(
     () => runtimes.filter((runtime) => runtime.enabled).length,
@@ -166,6 +170,64 @@ export function RuntimesPage(): ReactElement {
     }
   }
 
+  async function handleImportPreview(): Promise<void> {
+    setError(null)
+    setMessage(null)
+    const result = await window.agentSpace.runtimes.importPreview({
+      sourceType: importText.trim().startsWith('ccswitch://') ? 'deep_link_text' : 'json_text',
+      formatHint: 'auto',
+      content: importText
+    })
+
+    if (result.ok) {
+      setImportPreview(result.data)
+    } else {
+      setError(result.error.message)
+    }
+  }
+
+  async function handleImportCommit(): Promise<void> {
+    if (!importPreview) {
+      return
+    }
+
+    const result = await window.agentSpace.runtimes.importCommit({
+      importSessionId: importPreview.importSessionId,
+      previews: importPreview.previews.map((preview) => ({
+        tempId: preview.tempId,
+        action: preview.conflict === 'name_exists' ? 'rename' : 'create',
+        newName: preview.conflict === 'name_exists' ? `${preview.name} Imported` : undefined,
+        importSecrets: true
+      }))
+    })
+
+    if (result.ok) {
+      setMessage(
+        `Imported ${result.data.createdCount + result.data.updatedCount} Runtime config${
+          result.data.createdCount + result.data.updatedCount === 1 ? '' : 's'
+        }.`
+      )
+      setImportText('')
+      setImportPreview(null)
+      await loadRuntimes()
+    } else {
+      setError(result.error.message)
+    }
+  }
+
+  function renderPreviewBadges(preview: RuntimeImportPreview): ReactElement {
+    return (
+      <div className="flex flex-wrap gap-2">
+        <Badge variant={preview.conflict === 'none' ? 'outline' : 'secondary'}>
+          {preview.conflict === 'none' ? 'No conflict' : 'Name exists'}
+        </Badge>
+        {preview.containsSecrets ? (
+          <Badge variant="secondary">Secrets: {preview.secretKinds.join(', ')}</Badge>
+        ) : null}
+      </div>
+    )
+  }
+
   return (
     <div className="mx-auto max-w-7xl">
       <header className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -180,124 +242,186 @@ export function RuntimesPage(): ReactElement {
       </header>
 
       <section className="grid items-start gap-4 xl:grid-cols-[minmax(260px,0.9fr)_minmax(320px,1fr)_minmax(280px,0.8fr)]">
-        <Card>
-          <CardHeader>
-            <div className="flex items-center gap-2">
-              <Plus aria-hidden="true" size={18} />
-              <CardTitle>Add Runtime</CardTitle>
-            </div>
-          </CardHeader>
-          <CardContent>
-            <form className="grid gap-4" onSubmit={(event) => void handleCreate(event)}>
-              <div className="grid gap-2">
-                <Label htmlFor="runtime-name">Name</Label>
-                <Input
-                  id="runtime-name"
-                  value={form.name}
-                  onChange={(event) =>
-                    setForm((current) => ({ ...current, name: event.target.value }))
-                  }
-                  placeholder="Codex CLI"
-                  required
-                />
+        <div className="grid gap-4">
+          <Card>
+            <CardHeader>
+              <div className="flex items-center gap-2">
+                <Plus aria-hidden="true" size={18} />
+                <CardTitle>Add Runtime</CardTitle>
               </div>
-
-              <div className="grid gap-2">
-                <Label>Provider</Label>
-                <Select
-                  value={form.provider}
-                  onValueChange={(value) => updateProvider(value as RuntimeProvider)}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {providerOptions.map((option) => (
-                      <SelectItem key={option.value} value={option.value}>
-                        {option.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div className="grid gap-2">
-                <Label htmlFor="runtime-executable">Executable</Label>
-                <Input
-                  id="runtime-executable"
-                  value={form.executablePath ?? ''}
-                  onChange={(event) =>
-                    setForm((current) => ({ ...current, executablePath: event.target.value }))
-                  }
-                  placeholder="codex"
-                />
-              </div>
-
-              <div className="grid gap-2">
-                <Label htmlFor="runtime-args">Default args</Label>
-                <Input
-                  id="runtime-args"
-                  value={defaultArgsText}
-                  onChange={(event) => setDefaultArgsText(event.target.value)}
-                  placeholder="--model gpt-5"
-                />
-              </div>
-
-              <div className="grid gap-2">
-                <Label htmlFor="runtime-model">Model</Label>
-                <Input
-                  id="runtime-model"
-                  value={form.model ?? ''}
-                  onChange={(event) =>
-                    setForm((current) => ({ ...current, model: event.target.value }))
-                  }
-                  placeholder="optional"
-                />
-              </div>
-
-              <div className="grid gap-3 sm:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
+            </CardHeader>
+            <CardContent>
+              <form className="grid gap-4" onSubmit={(event) => void handleCreate(event)}>
                 <div className="grid gap-2">
-                  <Label htmlFor="secret-kind">Secret kind</Label>
+                  <Label htmlFor="runtime-name">Name</Label>
                   <Input
-                    id="secret-kind"
-                    value={secretKind}
-                    onChange={(event) => setSecretKind(event.target.value)}
+                    id="runtime-name"
+                    value={form.name}
+                    onChange={(event) =>
+                      setForm((current) => ({ ...current, name: event.target.value }))
+                    }
+                    placeholder="Codex CLI"
+                    required
                   />
                 </div>
+
                 <div className="grid gap-2">
-                  <Label htmlFor="secret-value">Secret value</Label>
+                  <Label>Provider</Label>
+                  <Select
+                    value={form.provider}
+                    onValueChange={(value) => updateProvider(value as RuntimeProvider)}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {providerOptions.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="grid gap-2">
+                  <Label htmlFor="runtime-executable">Executable</Label>
                   <Input
-                    id="secret-value"
-                    type="password"
-                    value={secretValue}
-                    onChange={(event) => setSecretValue(event.target.value)}
-                    placeholder="Stored encrypted"
+                    id="runtime-executable"
+                    value={form.executablePath ?? ''}
+                    onChange={(event) =>
+                      setForm((current) => ({ ...current, executablePath: event.target.value }))
+                    }
+                    placeholder="codex"
                   />
                 </div>
+
+                <div className="grid gap-2">
+                  <Label htmlFor="runtime-args">Default args</Label>
+                  <Input
+                    id="runtime-args"
+                    value={defaultArgsText}
+                    onChange={(event) => setDefaultArgsText(event.target.value)}
+                    placeholder="--model gpt-5"
+                  />
+                </div>
+
+                <div className="grid gap-2">
+                  <Label htmlFor="runtime-model">Model</Label>
+                  <Input
+                    id="runtime-model"
+                    value={form.model ?? ''}
+                    onChange={(event) =>
+                      setForm((current) => ({ ...current, model: event.target.value }))
+                    }
+                    placeholder="optional"
+                  />
+                </div>
+
+                <div className="grid gap-3 sm:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
+                  <div className="grid gap-2">
+                    <Label htmlFor="secret-kind">Secret kind</Label>
+                    <Input
+                      id="secret-kind"
+                      value={secretKind}
+                      onChange={(event) => setSecretKind(event.target.value)}
+                    />
+                  </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="secret-value">Secret value</Label>
+                    <Input
+                      id="secret-value"
+                      type="password"
+                      value={secretValue}
+                      onChange={(event) => setSecretValue(event.target.value)}
+                      placeholder="Stored encrypted"
+                    />
+                  </div>
+                </div>
+
+                <label className="flex items-center gap-2 text-sm font-semibold">
+                  <Checkbox
+                    checked={Boolean(form.isDefault)}
+                    onCheckedChange={(checked) =>
+                      setForm((current) => ({ ...current, isDefault: checked === true }))
+                    }
+                  />
+                  Default Runtime
+                </label>
+
+                <div className="flex flex-wrap gap-2">
+                  <Button type="submit" disabled={loading}>
+                    Save Runtime
+                  </Button>
+                  <Button type="button" variant="secondary" onClick={() => void handleTest()}>
+                    <FlaskConical aria-hidden="true" />
+                    Test
+                  </Button>
+                </div>
+              </form>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <div className="flex items-center gap-2">
+                <FileJson aria-hidden="true" size={18} />
+                <CardTitle>Import Runtime</CardTitle>
               </div>
-
-              <label className="flex items-center gap-2 text-sm font-semibold">
-                <Checkbox
-                  checked={Boolean(form.isDefault)}
-                  onCheckedChange={(checked) =>
-                    setForm((current) => ({ ...current, isDefault: checked === true }))
-                  }
-                />
-                Default Runtime
-              </label>
-
+              <CardDescription>
+                Paste generic JSON or ccswitch provider text. Deep links are parsed as plain text.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="grid gap-3">
+              <textarea
+                className="min-h-28 w-full rounded-md border border-input bg-background p-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                value={importText}
+                onChange={(event) => setImportText(event.target.value)}
+                placeholder='{"name":"Codex","provider":"codex_cli","model":"gpt-5"}'
+              />
               <div className="flex flex-wrap gap-2">
-                <Button type="submit" disabled={loading}>
-                  Save Runtime
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={!importText.trim()}
+                  onClick={() => void handleImportPreview()}
+                >
+                  Preview Import
                 </Button>
-                <Button type="button" variant="secondary" onClick={() => void handleTest()}>
-                  <FlaskConical aria-hidden="true" />
-                  Test
+                <Button
+                  type="button"
+                  disabled={!importPreview}
+                  onClick={() => void handleImportCommit()}
+                >
+                  Import
                 </Button>
               </div>
-            </form>
-          </CardContent>
-        </Card>
+              {importPreview ? (
+                <div className="grid gap-2">
+                  {importPreview.previews.map((preview) => (
+                    <div
+                      key={preview.tempId}
+                      className="grid gap-2 rounded-md border border-border p-3"
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <strong>{preview.name}</strong>
+                        <span className="text-sm text-muted-foreground">
+                          {providerLabel(preview.provider)}
+                        </span>
+                      </div>
+                      {renderPreviewBadges(preview)}
+                      {preview.warnings.map((warning) => (
+                        <p key={warning} className="text-sm text-muted-foreground">
+                          {warning}
+                        </p>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+            </CardContent>
+          </Card>
+        </div>
 
         <div className="grid gap-3">
           {runtimes.length === 0 ? (

@@ -127,6 +127,48 @@ export interface RuntimeTestResult {
   testedAt: string
 }
 
+export interface RuntimeImportPreviewInput {
+  sourceType: 'text' | 'deep_link_text' | 'json_text' | 'file' | 'clipboard'
+  formatHint?: 'auto' | 'ccswitch' | 'generic_json'
+  content?: string
+  filePath?: string
+}
+
+export interface RuntimeImportPreview {
+  tempId: string
+  name: string
+  provider: RuntimeProvider
+  model?: string
+  containsSecrets: boolean
+  secretKinds: string[]
+  conflict: 'none' | 'name_exists'
+  rawSummary?: string
+  warnings: string[]
+}
+
+export interface RuntimeImportPreviewResult {
+  importSessionId: string
+  previews: RuntimeImportPreview[]
+}
+
+export interface RuntimeImportCommitInput {
+  importSessionId?: string
+  previews: {
+    tempId: string
+    action: 'create' | 'rename' | 'overwrite' | 'skip'
+    targetRuntimeId?: string
+    newName?: string
+    importSecrets?: boolean
+  }[]
+}
+
+export interface RuntimeImportCommitResult {
+  createdCount: number
+  updatedCount: number
+  skippedCount: number
+  failed: { tempId: string; reason: string }[]
+}
+
 export interface AppAPI {
   getInfo: () => Promise<ApiResult<AppInfo>>
 }
@@ -138,6 +180,10 @@ export interface RuntimeAPI {
   update: (input: RuntimeUpdateInput) => Promise<ApiResult<RuntimeDetail>>
   delete: (input: RuntimeDeleteInput) => Promise<ApiResult<RuntimeDetail>>
   test: (input: RuntimeTestInput) => Promise<ApiResult<RuntimeTestResult>>
+  importPreview: (
+    input: RuntimeImportPreviewInput
+  ) => Promise<ApiResult<RuntimeImportPreviewResult>>
+  importCommit: (input: RuntimeImportCommitInput) => Promise<ApiResult<RuntimeImportCommitResult>>
 }
 
 export interface AgentSpaceAPI {

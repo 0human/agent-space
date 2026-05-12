@@ -2,11 +2,13 @@ import { ipcMain } from 'electron'
 import type {
   RuntimeCreateInput,
   RuntimeDeleteInput,
+  RuntimeImportCommitInput,
+  RuntimeImportPreviewInput,
   RuntimeListInput,
   RuntimeTestInput,
   RuntimeUpdateInput
 } from '../../shared/api'
-import type { RuntimeService } from '../runtime'
+import type { RuntimeImportService, RuntimeService } from '../runtime'
 import { ValidationError } from '../runtime'
 import { fail, ok } from './result'
 
@@ -16,6 +18,8 @@ export const RUNTIME_CREATE_CHANNEL = 'runtime:create'
 export const RUNTIME_UPDATE_CHANNEL = 'runtime:update'
 export const RUNTIME_DELETE_CHANNEL = 'runtime:delete'
 export const RUNTIME_TEST_CHANNEL = 'runtime:test'
+export const RUNTIME_IMPORT_PREVIEW_CHANNEL = 'runtime:importPreview'
+export const RUNTIME_IMPORT_COMMIT_CHANNEL = 'runtime:importCommit'
 
 function toRuntimeResult<T>(callback: () => T) {
   try {
@@ -32,7 +36,10 @@ function toRuntimeResult<T>(callback: () => T) {
   }
 }
 
-export function registerRuntimeIpc(runtimeService: RuntimeService): void {
+export function registerRuntimeIpc(
+  runtimeService: RuntimeService,
+  runtimeImportService: RuntimeImportService
+): void {
   ipcMain.handle(RUNTIME_LIST_CHANNEL, (_event, input?: RuntimeListInput) => {
     return toRuntimeResult(() => runtimeService.list(input))
   })
@@ -67,5 +74,13 @@ export function registerRuntimeIpc(runtimeService: RuntimeService): void {
 
       return fail('runtime_error', error instanceof Error ? error.message : 'Runtime test failed.')
     }
+  })
+
+  ipcMain.handle(RUNTIME_IMPORT_PREVIEW_CHANNEL, (_event, input: RuntimeImportPreviewInput) => {
+    return toRuntimeResult(() => runtimeImportService.preview(input))
+  })
+
+  ipcMain.handle(RUNTIME_IMPORT_COMMIT_CHANNEL, (_event, input: RuntimeImportCommitInput) => {
+    return toRuntimeResult(() => runtimeImportService.commit(input))
   })
 }

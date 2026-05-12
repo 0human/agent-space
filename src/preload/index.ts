@@ -5,6 +5,8 @@ import {
   RUNTIME_CREATE_CHANNEL,
   RUNTIME_DELETE_CHANNEL,
   RUNTIME_GET_CHANNEL,
+  RUNTIME_IMPORT_COMMIT_CHANNEL,
+  RUNTIME_IMPORT_PREVIEW_CHANNEL,
   RUNTIME_LIST_CHANNEL,
   RUNTIME_TEST_CHANNEL,
   RUNTIME_UPDATE_CHANNEL
@@ -20,7 +22,9 @@ const agentSpace: AgentSpaceAPI = {
     create: (input) => ipcRenderer.invoke(RUNTIME_CREATE_CHANNEL, input),
     update: (input) => ipcRenderer.invoke(RUNTIME_UPDATE_CHANNEL, input),
     delete: (input) => ipcRenderer.invoke(RUNTIME_DELETE_CHANNEL, input),
-    test: (input) => ipcRenderer.invoke(RUNTIME_TEST_CHANNEL, input)
+    test: (input) => ipcRenderer.invoke(RUNTIME_TEST_CHANNEL, input),
+    importPreview: (input) => ipcRenderer.invoke(RUNTIME_IMPORT_PREVIEW_CHANNEL, input),
+    importCommit: (input) => ipcRenderer.invoke(RUNTIME_IMPORT_COMMIT_CHANNEL, input)
   }
 }
 

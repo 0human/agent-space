@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { createDatabaseHandle, type DatabaseHandle } from '../db/client'
 import { createRepositories } from '../db/repositories'
 import type { ProcessRunner, ProcessRunResult } from './processRunner'
+import { RuntimeImportService } from './runtimeImportService'
 import { MemorySecretService } from './secretService'
 import { RuntimeService } from './runtimeService'
 import { RuntimeTester } from './runtimeTester'
@@ -32,7 +33,9 @@ function createService(
   )
   handles.push(handle)
 
-  return { handle, service, secretService }
+  const importService = new RuntimeImportService(handle.db, service)
+
+  return { handle, service, importService, secretService }
 }
 
 afterEach(() => {
@@ -130,5 +133,120 @@ describe('RuntimeService', () => {
     expect(disabled.enabled).toBe(false)
     expect(disabled.isDefault).toBe(false)
     expect(service.list({ enabled: true })).toHaveLength(0)
+  })
+
+  it('previews and commits generic JSON imports without exposing secret values', () => {
+    const { handle, importService, secretService } = createService()
+    const preview = importService.preview({
+      sourceType: 'json_text',
+      formatHint: 'generic_json',
+      content: JSON.stringify({
+        name: 'Imported Codex',
+        provider: 'codex_cli',
+        model: 'gpt-5',
+        apiKey: 'sk-imported'
+      })
+    })
+
+    expect(preview.previews).toEqual([
+      expect.objectContaining({
+        name: 'Imported Codex',
+        provider: 'codex_cli',
+        containsSecrets: true,
+        secretKinds: ['api_key']
+      })
+    ])
+    expect(JSON.stringify(preview)).not.toContain('sk-imported')
+
+    const result = importService.commit({
+      importSessionId: preview.importSessionId,
+      previews: [{ tempId: preview.previews[0].tempId, action: 'create', importSecrets: true }]
+    })
+
+    expect(result.createdCount).toBe(1)
+    const runtime = createRepositories(handle.db).runtimes.list()[0]
+    const secret = createRepositories(handle.db).runtimeSecrets.listByRuntime(runtime.id)[0]
+    expect(secretService.readSecret(secret.secretRef)).toBe('sk-imported')
+  })
+
+  it('supports ccswitch deep link preview and rename conflict handling', () => {
+    const { service, importService } = createService()
+    service.create({
+      name: 'Codex',
+      provider: 'codex_cli',
+      executablePath: 'codex'
+    })
+    const payload = encodeURIComponent(
+      JSON.stringify({
+        app: 'codex',
+        name: 'Codex',
+        model: 'gpt-5-mini',
+        apiKey: 'sk-ccswitch'
+      })
+    )
+
+    const preview = importService.preview({
+      sourceType: 'deep_link_text',
+      formatHint: 'ccswitch',
+      content: `ccswitch://v1/import?resource=provider&payload=${payload}`
+    })
+
+    expect(preview.previews[0]).toEqual(
+      expect.objectContaining({
+        conflict: 'name_exists',
+        provider: 'codex_cli'
+      })
+    )
+
+    const result = importService.commit({
+      importSessionId: preview.importSessionId,
+      previews: [
+        {
+          tempId: preview.previews[0].tempId,
+          action: 'rename',
+          newName: 'Codex Imported',
+          importSecrets: false
+        }
+      ]
+    })
+
+    expect(result.createdCount).toBe(1)
+    expect(service.list().map((runtime) => runtime.name)).toContain('Codex Imported')
+    expect(
+      service.get(service.list().find((runtime) => runtime.name === 'Codex Imported')!.id).secrets
+    ).toEqual([])
+  })
+
+  it('supports skip and overwrite import actions', () => {
+    const { service, importService } = createService()
+    const runtime = service.create({
+      name: 'Codex',
+      provider: 'codex_cli',
+      executablePath: 'codex'
+    })
+    const preview = importService.preview({
+      sourceType: 'json_text',
+      content: JSON.stringify([
+        { name: 'Skip Me', provider: 'gemini_cli' },
+        { name: 'Codex Overwrite', provider: 'codex_cli', model: 'gpt-5.1' }
+      ])
+    })
+
+    const result = importService.commit({
+      importSessionId: preview.importSessionId,
+      previews: [
+        { tempId: preview.previews[0].tempId, action: 'skip' },
+        {
+          tempId: preview.previews[1].tempId,
+          action: 'overwrite',
+          targetRuntimeId: runtime.id,
+          importSecrets: true
+        }
+      ]
+    })
+
+    expect(result.skippedCount).toBe(1)
+    expect(result.updatedCount).toBe(1)
+    expect(service.get(runtime.id).model).toBe('gpt-5.1')
   })
 })

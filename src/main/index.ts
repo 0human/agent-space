@@ -1,8 +1,12 @@
 import { app, BrowserWindow } from 'electron'
 import { join } from 'node:path'
 import { closeDatabase, initializeDatabase } from './db'
+import { registerAgentProfileIpc } from './ipc/agentProfiles'
 import { registerAppIpc } from './ipc/app'
+import { registerPermissionIpc } from './ipc/permissions'
 import { registerRuntimeIpc } from './ipc/runtime'
+import { PermissionService } from './permissions/permissionService'
+import { AgentProfileService } from './profiles/agentProfileService'
 import {
   FileSecretService,
   NodeProcessRunner,
@@ -44,12 +48,17 @@ function createMainWindow(): void {
 app.whenReady().then(() => {
   const database = initializeDatabase()
   recoverInterruptedRuns(database.db)
+  const permissionService = new PermissionService(database.db)
+  permissionService.ensureRecommendedPolicySets()
+  const agentProfileService = new AgentProfileService(database.db, permissionService)
   const runtimeService = new RuntimeService(
     database.db,
     new FileSecretService(join(app.getPath('userData'), 'secrets')),
     new RuntimeTester(new NodeProcessRunner())
   )
   registerAppIpc()
+  registerPermissionIpc(permissionService)
+  registerAgentProfileIpc(agentProfileService)
   registerRuntimeIpc(runtimeService, new RuntimeImportService(database.db, runtimeService))
   createMainWindow()
 

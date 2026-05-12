@@ -3,6 +3,8 @@ import ReactDOM from 'react-dom/client'
 import { createHashRouter, RouterProvider } from 'react-router-dom'
 import { AppShell } from './app/AppShell'
 import { DashboardPage } from './features/dashboard/DashboardPage'
+import { PermissionsPage } from './features/permissions/PermissionsPage'
+import { AgentProfilesPage } from './features/profiles/AgentProfilesPage'
 import { RuntimesPage } from './features/runtimes/RuntimesPage'
 import { PlaceholderPage } from './features/shared/PlaceholderPage'
 import './styles.css'
@@ -16,8 +18,8 @@ const router = createHashRouter([
       { path: 'projects', element: <PlaceholderPage title="Projects" /> },
       { path: 'sessions', element: <PlaceholderPage title="Work Sessions" /> },
       { path: 'runtimes', element: <RuntimesPage /> },
-      { path: 'profiles', element: <PlaceholderPage title="Agent Profiles" /> },
-      { path: 'permissions', element: <PlaceholderPage title="Permissions" /> },
+      { path: 'profiles', element: <AgentProfilesPage /> },
+      { path: 'permissions', element: <PermissionsPage /> },
       { path: 'teams', element: <PlaceholderPage title="Teams" /> },
       { path: 'settings', element: <PlaceholderPage title="Settings" /> }
     ]

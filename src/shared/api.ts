@@ -27,6 +27,33 @@ export type RuntimeType = 'cli_agent' | 'api_provider'
 export type RuntimeSource = 'manual' | 'ccswitch' | 'imported'
 export type DefaultCwdMode = 'project_root' | 'custom_path'
 export type PermissionPreset = 'read_only' | 'project_write' | 'command_approval' | 'full_access'
+export type PermissionPolicyOwnerType =
+  | 'agent_profile'
+  | 'runtime_config'
+  | 'team_member'
+  | 'project'
+  | 'work_session'
+export type PermissionPolicyMergeStrategy = 'additive' | 'override' | 'restrictive'
+export type PermissionScope =
+  | 'workspace'
+  | 'filesystem'
+  | 'command'
+  | 'network'
+  | 'environment'
+  | 'credential'
+  | 'runtime'
+  | 'tool'
+export type PermissionAction =
+  | 'read'
+  | 'write'
+  | 'create'
+  | 'delete'
+  | 'execute'
+  | 'list'
+  | 'request'
+  | 'approve'
+  | 'deny'
+export type PermissionDecision = 'allow' | 'ask' | 'deny'
 export type RuntimeTestStatus =
   | 'success'
   | 'command_not_found'
@@ -169,6 +196,116 @@ export interface RuntimeImportCommitResult {
   failed: { tempId: string; reason: string }[]
 }
 
+export interface PermissionRule {
+  scope: PermissionScope
+  action: PermissionAction
+  decision: PermissionDecision
+  resources?: string[]
+  description?: string
+}
+
+export interface PermissionPolicySetSummary {
+  id: string
+  name: string
+  description?: string
+  preset?: PermissionPreset
+  enabled: boolean
+  lastUsedAt?: string
+}
+
+export interface PermissionPolicySetDetail extends PermissionPolicySetSummary {
+  rules: PermissionRule[]
+  createdAt: string
+  updatedAt: string
+}
+
+export interface PermissionPolicySetCreateInput {
+  name: string
+  description?: string
+  preset?: PermissionPreset
+  rules: PermissionRule[]
+  enabled?: boolean
+}
+
+export interface PermissionPolicySetUpdateInput extends Partial<PermissionPolicySetCreateInput> {
+  id: string
+}
+
+export interface PermissionPolicyBindingInput {
+  ownerType: PermissionPolicyOwnerType
+  ownerId: string
+  permissionPolicySetId: string
+  mergeStrategy?: PermissionPolicyMergeStrategy
+  priority?: number
+  enabled?: boolean
+}
+
+export interface PermissionPolicyBindingSummary extends PermissionPolicyBindingInput {
+  id: string
+  policySetName: string
+}
+
+export interface PermissionResolvePreviewInput {
+  agentProfileId?: string
+  runtimeConfigId?: string
+  teamMemberId?: string
+  projectId?: string
+  workSessionId?: string
+}
+
+export interface PermissionResolvePreview {
+  summary: string
+  effectiveRules: PermissionRule[]
+  sources: {
+    ownerType: string
+    ownerId: string
+    policySetId: string
+    policySetName: string
+    mergeStrategy: string
+    priority: number
+  }[]
+}
+
+export interface AgentProfileSummary {
+  id: string
+  name: string
+  description?: string
+  permissionPreset?: PermissionPreset
+  outputStyle?: 'concise' | 'structured' | 'detailed'
+  approvalMode?: 'auto' | 'manual'
+  lastUsedAt?: string
+}
+
+export interface AgentProfileDetail extends AgentProfileSummary {
+  baseSystemPrompt?: string
+  rolePromptTemplate?: string
+  defaultArgs: string[]
+  defaultCwdMode: DefaultCwdMode
+  customCwd?: string
+  envWhitelist: string[]
+  createdAt: string
+  updatedAt: string
+}
+
+export interface AgentProfileCreateInput {
+  name: string
+  description?: string
+  permissionPreset?: PermissionPreset
+  permissionPolicySetIds?: string[]
+  baseSystemPrompt?: string
+  rolePromptTemplate?: string
+  defaultArgs?: string[]
+  defaultCwdMode?: DefaultCwdMode
+  customCwd?: string
+  outputStyle?: 'concise' | 'structured' | 'detailed'
+  approvalMode?: 'auto' | 'manual'
+  envWhitelist?: string[]
+}
+
+export interface AgentProfileUpdateInput extends Partial<AgentProfileCreateInput> {
+  id: string
+}
+
 export interface AppAPI {
   getInfo: () => Promise<ApiResult<AppInfo>>
 }
@@ -186,7 +323,33 @@ export interface RuntimeAPI {
   importCommit: (input: RuntimeImportCommitInput) => Promise<ApiResult<RuntimeImportCommitResult>>
 }
 
+export interface PermissionAPI {
+  listPolicySets: () => Promise<ApiResult<PermissionPolicySetSummary[]>>
+  getPolicySet: (id: string) => Promise<ApiResult<PermissionPolicySetDetail>>
+  createPolicySet: (
+    input: PermissionPolicySetCreateInput
+  ) => Promise<ApiResult<PermissionPolicySetDetail>>
+  updatePolicySet: (
+    input: PermissionPolicySetUpdateInput
+  ) => Promise<ApiResult<PermissionPolicySetDetail>>
+  bindPolicySet: (
+    input: PermissionPolicyBindingInput
+  ) => Promise<ApiResult<PermissionPolicyBindingSummary>>
+  resolvePreview: (
+    input: PermissionResolvePreviewInput
+  ) => Promise<ApiResult<PermissionResolvePreview>>
+}
+
+export interface AgentProfileAPI {
+  list: () => Promise<ApiResult<AgentProfileSummary[]>>
+  get: (id: string) => Promise<ApiResult<AgentProfileDetail>>
+  create: (input: AgentProfileCreateInput) => Promise<ApiResult<AgentProfileDetail>>
+  update: (input: AgentProfileUpdateInput) => Promise<ApiResult<AgentProfileDetail>>
+}
+
 export interface AgentSpaceAPI {
   app: AppAPI
   runtimes: RuntimeAPI
+  permissions: PermissionAPI
+  agentProfiles: AgentProfileAPI
 }

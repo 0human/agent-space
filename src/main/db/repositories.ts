@@ -130,6 +130,9 @@ export function createRepositories(db: RepositoryDatabase) {
           .returning()
           .get()
       },
+      list() {
+        return db.select().from(permissionPolicyBindings).all()
+      },
       listByOwner(ownerType: string, ownerId: string) {
         return db
           .select()
@@ -143,6 +146,21 @@ export function createRepositories(db: RepositoryDatabase) {
           )
           .orderBy(asc(permissionPolicyBindings.priority))
           .all()
+      },
+      listByOwners(owners: { ownerType: string; ownerId: string }[]) {
+        if (owners.length === 0) {
+          return []
+        }
+
+        return owners.flatMap((owner) => this.listByOwner(owner.ownerType, owner.ownerId))
+      },
+      update(id: string, input: Partial<NewPermissionPolicyBinding>) {
+        return db
+          .update(permissionPolicyBindings)
+          .set({ ...input, updatedAt: now() })
+          .where(eq(permissionPolicyBindings.id, id))
+          .returning()
+          .get()
       }
     },
 

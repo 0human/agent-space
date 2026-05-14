@@ -5,3 +5,5 @@
 使用 pnpm 进行库管理
 
 pnpm 添加包时使用 -E 来固定版本
+
+components/ui 优先使用 shadcn 存在的组件

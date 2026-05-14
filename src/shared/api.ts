@@ -54,6 +54,24 @@ export type PermissionAction =
   | 'approve'
   | 'deny'
 export type PermissionDecision = 'allow' | 'ask' | 'deny'
+export type ProjectMode = 'team' | 'manual'
+export type ProjectPhase =
+  | 'requirements'
+  | 'design'
+  | 'development'
+  | 'testing'
+  | 'delivery'
+  | 'archived'
+export type RiskStatus = 'normal' | 'attention' | 'risk'
+export type TeamDefaultLaunchMode = 'analysis' | 'development' | 'custom'
+export type TeamMemberRole =
+  | 'analyst'
+  | 'architect'
+  | 'developer'
+  | 'tester'
+  | 'reviewer'
+  | 'summarizer'
+  | 'custom'
 export type RuntimeTestStatus =
   | 'success'
   | 'command_not_found'
@@ -306,6 +324,121 @@ export interface AgentProfileUpdateInput extends Partial<AgentProfileCreateInput
   id: string
 }
 
+export interface TeamSummary {
+  id: string
+  name: string
+  goal?: string
+  memberCount: number
+  lastUsedAt?: string
+}
+
+export interface TeamMemberCreateInput {
+  name: string
+  role: TeamMemberRole
+  runtimeConfigId: string
+  agentProfileId?: string
+  permissionPolicySetIds?: string[]
+  taskInstruction?: string
+  enabled?: boolean
+  sortOrder?: number
+}
+
+export interface TeamCreateInput {
+  name: string
+  goal?: string
+  description?: string
+  defaultLaunchMode?: TeamDefaultLaunchMode
+  members?: TeamMemberCreateInput[]
+}
+
+export interface TeamUpdateInput extends Partial<TeamCreateInput> {
+  id: string
+}
+
+export interface TeamMemberDetail extends TeamMemberCreateInput {
+  id: string
+  runtimeName: string
+  runtimeProvider: RuntimeProvider
+  createdAt: string
+  updatedAt: string
+}
+
+export interface TeamDetail extends TeamSummary {
+  description?: string
+  defaultLaunchMode?: TeamDefaultLaunchMode
+  members: TeamMemberDetail[]
+  createdAt: string
+  updatedAt: string
+}
+
+export interface ProjectMetrics {
+  activeSessionCount: number
+  runningAgentCount: number
+  waitingInputCount: number
+  waitingPermissionCount: number
+  errorSessionCount: number
+  recentOutputAt?: string
+  recentFailureAt?: string
+  recentRuntimeType?: RuntimeProvider
+  fileChangeCount: number
+}
+
+export interface ProjectListInput {
+  archived?: boolean
+  riskStatus?: RiskStatus
+  phase?: ProjectPhase
+  sortBy?: 'last_active_at' | 'risk_status' | 'phase'
+}
+
+export interface ProjectSummary {
+  id: string
+  name: string
+  localPath: string
+  mode: ProjectMode
+  phase: ProjectPhase
+  riskStatus: RiskStatus
+  defaultAiTeamId?: string
+  defaultAiRuntimeConfigId?: string
+  metrics?: ProjectMetrics
+  lastActiveAt?: string
+}
+
+export interface ProjectCreateInput {
+  name: string
+  description?: string
+  localPath: string
+  phase?: ProjectPhase
+  defaultAiTeamId?: string
+  defaultAiRuntimeConfigId?: string
+  defaultAgentProfileId?: string
+  permissionPolicySetIds?: string[]
+  postCreateAction?: 'open_project' | 'open_dashboard' | 'open_first_session'
+}
+
+export interface ProjectDetail extends ProjectSummary {
+  description?: string
+  defaultAgentProfileId?: string
+  createdAt: string
+  updatedAt: string
+  archivedAt?: string
+}
+
+export interface ProjectCreateResult {
+  project: ProjectDetail
+  createdSessionId?: string
+  postCreateWarning?: string
+}
+
+export interface ProjectUpdateInput extends Partial<ProjectCreateInput> {
+  id: string
+  archived?: boolean
+}
+
+export interface ProjectArchiveInput {
+  id: string
+  archiveSessions?: boolean
+}
+
 export interface AppAPI {
   getInfo: () => Promise<ApiResult<AppInfo>>
 }
@@ -347,9 +480,26 @@ export interface AgentProfileAPI {
   update: (input: AgentProfileUpdateInput) => Promise<ApiResult<AgentProfileDetail>>
 }
 
+export interface TeamAPI {
+  list: () => Promise<ApiResult<TeamSummary[]>>
+  get: (id: string) => Promise<ApiResult<TeamDetail>>
+  create: (input: TeamCreateInput) => Promise<ApiResult<TeamDetail>>
+  update: (input: TeamUpdateInput) => Promise<ApiResult<TeamDetail>>
+}
+
+export interface ProjectAPI {
+  list: (input?: ProjectListInput) => Promise<ApiResult<ProjectSummary[]>>
+  get: (id: string) => Promise<ApiResult<ProjectDetail>>
+  create: (input: ProjectCreateInput) => Promise<ApiResult<ProjectCreateResult>>
+  update: (input: ProjectUpdateInput) => Promise<ApiResult<ProjectDetail>>
+  archive: (input: ProjectArchiveInput) => Promise<ApiResult<ProjectDetail>>
+}
+
 export interface AgentSpaceAPI {
   app: AppAPI
   runtimes: RuntimeAPI
   permissions: PermissionAPI
   agentProfiles: AgentProfileAPI
+  teams: TeamAPI
+  projects: ProjectAPI
 }

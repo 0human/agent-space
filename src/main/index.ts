@@ -4,9 +4,12 @@ import { closeDatabase, initializeDatabase } from './db'
 import { registerAgentProfileIpc } from './ipc/agentProfiles'
 import { registerAppIpc } from './ipc/app'
 import { registerPermissionIpc } from './ipc/permissions'
+import { registerProjectIpc } from './ipc/projects'
 import { registerRuntimeIpc } from './ipc/runtime'
+import { registerTeamIpc } from './ipc/teams'
 import { PermissionService } from './permissions/permissionService'
 import { AgentProfileService } from './profiles/agentProfileService'
+import { ProjectService } from './projects/projectService'
 import {
   FileSecretService,
   NodeProcessRunner,
@@ -15,6 +18,7 @@ import {
   RuntimeTester
 } from './runtime'
 import { recoverInterruptedRuns } from './services/startupRecovery'
+import { TeamService } from './teams/teamService'
 
 const isDev = Boolean(process.env.ELECTRON_RENDERER_URL)
 
@@ -51,6 +55,8 @@ app.whenReady().then(() => {
   const permissionService = new PermissionService(database.db)
   permissionService.ensureRecommendedPolicySets()
   const agentProfileService = new AgentProfileService(database.db, permissionService)
+  const teamService = new TeamService(database.db)
+  const projectService = new ProjectService(database.db)
   const runtimeService = new RuntimeService(
     database.db,
     new FileSecretService(join(app.getPath('userData'), 'secrets')),
@@ -59,6 +65,8 @@ app.whenReady().then(() => {
   registerAppIpc()
   registerPermissionIpc(permissionService)
   registerAgentProfileIpc(agentProfileService)
+  registerTeamIpc(teamService)
+  registerProjectIpc(projectService)
   registerRuntimeIpc(runtimeService, new RuntimeImportService(database.db, runtimeService))
   createMainWindow()
 

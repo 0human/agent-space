@@ -245,6 +245,9 @@ export function createRepositories(db: RepositoryDatabase) {
     },
 
     teamMembers: {
+      getById(id: string) {
+        return db.select().from(aiTeamMembers).where(eq(aiTeamMembers.id, id)).get()
+      },
       create(input: CreateInput<NewAiTeamMember>) {
         return db
           .insert(aiTeamMembers)
@@ -259,6 +262,14 @@ export function createRepositories(db: RepositoryDatabase) {
           .where(eq(aiTeamMembers.teamId, teamId))
           .orderBy(asc(aiTeamMembers.sortOrder))
           .all()
+      },
+      update(id: string, input: Partial<NewAiTeamMember>) {
+        return db
+          .update(aiTeamMembers)
+          .set({ ...input, updatedAt: now() })
+          .where(eq(aiTeamMembers.id, id))
+          .returning()
+          .get()
       }
     },
 
@@ -315,6 +326,14 @@ export function createRepositories(db: RepositoryDatabase) {
           .from(projectMetricSnapshots)
           .where(eq(projectMetricSnapshots.projectId, projectId))
           .all()
+      },
+      latestByProject(projectId: string) {
+        return db
+          .select()
+          .from(projectMetricSnapshots)
+          .where(eq(projectMetricSnapshots.projectId, projectId))
+          .orderBy(desc(projectMetricSnapshots.snapshotAt))
+          .get()
       }
     },
 

@@ -25,6 +25,19 @@ import {
   RUNTIME_TEST_CHANNEL,
   RUNTIME_UPDATE_CHANNEL
 } from '../main/ipc/runtime'
+import {
+  PROJECT_ARCHIVE_CHANNEL,
+  PROJECT_CREATE_CHANNEL,
+  PROJECT_GET_CHANNEL,
+  PROJECT_LIST_CHANNEL,
+  PROJECT_UPDATE_CHANNEL
+} from '../main/ipc/projects'
+import {
+  TEAM_CREATE_CHANNEL,
+  TEAM_GET_CHANNEL,
+  TEAM_LIST_CHANNEL,
+  TEAM_UPDATE_CHANNEL
+} from '../main/ipc/teams'
 
 const agentSpace: AgentSpaceAPI = {
   app: {
@@ -53,6 +66,19 @@ const agentSpace: AgentSpaceAPI = {
     get: (id) => ipcRenderer.invoke(AGENT_PROFILE_GET_CHANNEL, id),
     create: (input) => ipcRenderer.invoke(AGENT_PROFILE_CREATE_CHANNEL, input),
     update: (input) => ipcRenderer.invoke(AGENT_PROFILE_UPDATE_CHANNEL, input)
+  },
+  teams: {
+    list: () => ipcRenderer.invoke(TEAM_LIST_CHANNEL),
+    get: (id) => ipcRenderer.invoke(TEAM_GET_CHANNEL, id),
+    create: (input) => ipcRenderer.invoke(TEAM_CREATE_CHANNEL, input),
+    update: (input) => ipcRenderer.invoke(TEAM_UPDATE_CHANNEL, input)
+  },
+  projects: {
+    list: (input) => ipcRenderer.invoke(PROJECT_LIST_CHANNEL, input),
+    get: (id) => ipcRenderer.invoke(PROJECT_GET_CHANNEL, id),
+    create: (input) => ipcRenderer.invoke(PROJECT_CREATE_CHANNEL, input),
+    update: (input) => ipcRenderer.invoke(PROJECT_UPDATE_CHANNEL, input),
+    archive: (input) => ipcRenderer.invoke(PROJECT_ARCHIVE_CHANNEL, input)
   }
 }
 

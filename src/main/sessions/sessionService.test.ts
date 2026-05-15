@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { createDatabaseHandle, type DatabaseHandle } from '../db/client'
 import { createRepositories } from '../db/repositories'
 import { ProjectService } from '../projects/projectService'
-import type { ProcessRunner, ProcessRunResult } from '../runtime'
+import type { ProcessRunOptions, ProcessRunner, ProcessRunResult, RunningProcess } from '../runtime'
 import { SessionService } from './sessionService'
 
 const handles: DatabaseHandle[] = []
@@ -13,8 +13,49 @@ const handles: DatabaseHandle[] = []
 class FakeProcessRunner implements ProcessRunner {
   constructor(private readonly result: ProcessRunResult) {}
 
-  run(): Promise<ProcessRunResult> {
-    return Promise.resolve(this.result)
+  start(_command: string, _args: string[], options?: ProcessRunOptions): RunningProcess {
+    if (this.result.stdout) {
+      options?.onStdoutChunk?.(this.result.stdout)
+    }
+    if (this.result.stderr) {
+      options?.onStderrChunk?.(this.result.stderr)
+    }
+
+    return {
+      result: Promise.resolve(this.result),
+      stop: () => undefined
+    }
+  }
+
+  run(command: string, args: string[], options?: ProcessRunOptions): Promise<ProcessRunResult> {
+    return this.start(command, args, options).result
+  }
+}
+
+class ControllableProcessRunner implements ProcessRunner {
+  private resolveResult?: (result: ProcessRunResult) => void
+
+  start(command: string, args: string[], options?: ProcessRunOptions): RunningProcess {
+    void command
+    void args
+    void options
+    return {
+      result: new Promise<ProcessRunResult>((resolve) => {
+        this.resolveResult = resolve
+      }),
+      stop: () => {
+        this.resolveResult?.({
+          exitCode: null,
+          stdout: '',
+          stderr: '',
+          error: Object.assign(new Error('Process stopped by user.'), { code: 'STOPPED' })
+        })
+      }
+    }
+  }
+
+  run(_command: string, _args: string[], options?: ProcessRunOptions): Promise<ProcessRunResult> {
+    return this.start(_command, _args, options).result
   }
 }
 
@@ -44,6 +85,19 @@ function createServicesWithRunner(result: ProcessRunResult) {
     repositories,
     projectService: new ProjectService(handle.db),
     sessionService: new SessionService(handle.db, new FakeProcessRunner(result))
+  }
+}
+
+function createServicesWithProcessRunner(processRunner: ProcessRunner) {
+  const dir = mkdtempSync(join(tmpdir(), 'agent-space-sessions-'))
+  const handle = createDatabaseHandle(join(dir, 'test.sqlite'))
+  const repositories = createRepositories(handle.db)
+  handles.push(handle)
+
+  return {
+    repositories,
+    projectService: new ProjectService(handle.db),
+    sessionService: new SessionService(handle.db, processRunner)
   }
 }
 
@@ -151,15 +205,19 @@ describe('SessionService', () => {
       content: 'Say something'
     })
 
-    expect(result.run.status).toBe('completed')
-    expect(result.assistantMessage?.content).toBe('assistant reply')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(result.run.status).toBe('starting')
     expect(sessionService.listRuns(session.id)).toHaveLength(1)
     expect(sessionService.listEvents(result.run.id)).toEqual(
       expect.arrayContaining([
+        expect.objectContaining({ type: 'stdout_chunk', content: 'assistant reply' }),
         expect.objectContaining({ type: 'run_started' }),
-        expect.objectContaining({ type: 'stdout', content: 'assistant reply' }),
         expect.objectContaining({ type: 'run_completed' })
       ])
+    )
+    expect(sessionService.listMessages({ workSessionId: session.id }).at(-1)?.content).toBe(
+      'assistant reply'
     )
     expect(sessionService.get(session.id).status).toBe('completed')
   })
@@ -190,9 +248,53 @@ describe('SessionService', () => {
       content: 'This should fail'
     })
 
-    expect(result.run.status).toBe('failed')
-    expect(result.run.errorSummary).toContain('boom')
-    expect(result.assistantMessage?.content).toContain('boom')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(result.run.status).toBe('starting')
+    expect(sessionService.listEvents(result.run.id)).toEqual(
+      expect.arrayContaining([expect.objectContaining({ type: 'stderr_chunk', content: 'boom' })])
+    )
+    expect(sessionService.listMessages({ workSessionId: session.id }).at(-1)?.content).toContain(
+      'boom'
+    )
     expect(sessionService.get(session.id).status).toBe('error')
+  })
+
+  it('stops an active run and marks it as stopped', async () => {
+    const runner = new ControllableProcessRunner()
+    const { repositories, projectService, sessionService } = createServicesWithProcessRunner(runner)
+    const runtime = repositories.runtimes.create({
+      name: 'Long Runtime',
+      provider: 'custom_cli',
+      executablePath: '/bin/sleep'
+    })
+    const project = projectService.create({
+      name: 'Stop Project',
+      localPath: '/tmp/stop-project',
+      defaultAiRuntimeConfigId: runtime.id
+    }).project
+    const session = sessionService.create({
+      projectId: project.id,
+      title: 'Stop it'
+    })
+
+    const sendPromise = sessionService.sendMessage({
+      workSessionId: session.id,
+      content: 'Run until stopped'
+    })
+
+    const runBeforeStop = sessionService.listRuns(session.id)[0]
+    expect(runBeforeStop.status).toBe('starting')
+
+    sessionService.stopRun({ workSessionId: session.id })
+    await sendPromise
+
+    const stoppedRun = sessionService.listRuns(session.id)[0]
+    expect(stoppedRun.status).toBe('stopped')
+    expect(stoppedRun.errorSummary).toContain('stopped by user')
+    expect(sessionService.get(session.id).status).toBe('idle')
+    expect(sessionService.listEvents(stoppedRun.id)).toEqual(
+      expect.arrayContaining([expect.objectContaining({ type: 'run_stopped' })])
+    )
   })
 })

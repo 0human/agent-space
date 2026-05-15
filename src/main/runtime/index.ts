@@ -1,4 +1,10 @@
-export { NodeProcessRunner, type ProcessRunner, type ProcessRunResult } from './processRunner'
+export {
+  NodeProcessRunner,
+  type ProcessRunner,
+  type ProcessRunOptions,
+  type ProcessRunResult,
+  type RunningProcess
+} from './processRunner'
 export {
   CcswitchProviderImportAdapter,
   GenericJsonRuntimeImportAdapter,

@@ -1,4 +1,4 @@
-import { Archive, MessageSquare, Plus, SendHorizontal } from 'lucide-react'
+import { Archive, MessageSquare, Plus, SendHorizontal, Square } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import type { FormEvent, ReactElement } from 'react'
 import { Badge } from '@components/ui/badge'
@@ -25,6 +25,7 @@ import { cn } from '@lib/utils'
 import type {
   MessageSummary,
   ProjectSummary,
+  RuntimeEventSummary,
   RuntimeSummary,
   RuntimeRunSummary,
   WorkSessionSummary
@@ -37,6 +38,7 @@ export function WorkSessionsPage(): ReactElement {
   const [selectedSession, setSelectedSession] = useState<WorkSessionSummary | null>(null)
   const [messages, setMessages] = useState<MessageSummary[]>([])
   const [runs, setRuns] = useState<RuntimeRunSummary[]>([])
+  const [events, setEvents] = useState<RuntimeEventSummary[]>([])
   const [createOpen, setCreateOpen] = useState(false)
   const [projectId, setProjectId] = useState('')
   const [runtimeId, setRuntimeId] = useState('project-default')
@@ -87,6 +89,16 @@ export function WorkSessionsPage(): ReactElement {
 
     if (runResult.ok) {
       setRuns(runResult.data)
+      if (runResult.data[0]) {
+        const eventResult = await window.agentSpace.sessions.listEvents(runResult.data[0].id)
+        if (eventResult.ok) {
+          setEvents(eventResult.data)
+        } else {
+          setError(eventResult.error.message)
+        }
+      } else {
+        setEvents([])
+      }
     } else {
       setError(runResult.error.message)
     }
@@ -101,6 +113,8 @@ export function WorkSessionsPage(): ReactElement {
       void loadMessages(selectedSession.id)
     } else {
       setMessages([])
+      setRuns([])
+      setEvents([])
     }
   }, [selectedSession])
 
@@ -161,6 +175,28 @@ export function WorkSessionsPage(): ReactElement {
       setMessage(`Archived: ${result.data.title}`)
       setSelectedSession(null)
       setMessages([])
+      setRuns([])
+      setEvents([])
+      await load()
+    } else {
+      setError(result.error.message)
+    }
+  }
+
+  async function handleStopRun(): Promise<void> {
+    if (!selectedSession) {
+      return
+    }
+
+    setError(null)
+    setMessage(null)
+    const result = await window.agentSpace.sessions.stopRun({
+      workSessionId: selectedSession.id
+    })
+
+    if (result.ok) {
+      setMessage(`Run stop requested: ${result.data.provider}`)
+      await loadMessages(selectedSession.id)
       await load()
     } else {
       setError(result.error.message)
@@ -249,7 +285,7 @@ export function WorkSessionsPage(): ReactElement {
           </CardHeader>
           <CardContent className="grid gap-4">
             {runs[0] ? (
-              <div className="grid gap-2 rounded-md border border-border p-3 text-sm">
+              <div className="grid gap-3 rounded-md border border-border p-3 text-sm">
                 <div className="flex flex-wrap gap-2">
                   <Badge variant="secondary">{runs[0].status}</Badge>
                   <Badge variant="outline">{runs[0].provider}</Badge>
@@ -263,6 +299,45 @@ export function WorkSessionsPage(): ReactElement {
                 {runs[0].errorSummary ? (
                   <p className="text-destructive">{runs[0].errorSummary}</p>
                 ) : null}
+                {runs[0].status === 'running' || runs[0].status === 'starting' ? (
+                  <div>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => void handleStopRun()}
+                    >
+                      <Square aria-hidden="true" />
+                      Stop Run
+                    </Button>
+                  </div>
+                ) : null}
+                <div className="grid gap-2 rounded-md border border-border bg-muted/30 p-3">
+                  <div className="flex items-center justify-between gap-4">
+                    <strong className="text-sm">Runtime Events</strong>
+                    <span className="text-xs text-muted-foreground">{events.length} entries</span>
+                  </div>
+                  {events.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">No runtime events yet.</p>
+                  ) : (
+                    <div className="grid max-h-52 gap-2 overflow-y-auto">
+                      {events.map((event) => (
+                        <div
+                          key={event.id}
+                          className="grid gap-1 rounded-md border border-border bg-background p-2"
+                        >
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Badge variant="outline">{event.displayCategory}</Badge>
+                            <span className="text-xs text-muted-foreground">{event.type}</span>
+                          </div>
+                          <p className="whitespace-pre-wrap break-words text-sm leading-6">
+                            {event.content ?? 'No content'}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
             ) : null}
             <div className="grid max-h-[440px] min-h-64 gap-3 overflow-y-auto rounded-md border border-border p-3">
@@ -289,7 +364,7 @@ export function WorkSessionsPage(): ReactElement {
               <Input
                 value={draft}
                 onChange={(event) => setDraft(event.target.value)}
-                placeholder="Save a user message"
+                placeholder="Send a message to the configured Runtime"
                 disabled={!selectedSession}
               />
               <Button type="submit" size="icon" disabled={!selectedSession || !draft.trim()}>
@@ -307,7 +382,7 @@ export function WorkSessionsPage(): ReactElement {
           <DialogHeader>
             <DialogTitle>Create Work Session</DialogTitle>
             <DialogDescription>
-              Start with saved history first; CLI execution comes in the next phase.
+              Create a session first, then send a message to run the configured CLI Runtime.
             </DialogDescription>
           </DialogHeader>
           <form

@@ -4,7 +4,12 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createDatabaseHandle, type DatabaseHandle } from '../db/client'
 import { createRepositories } from '../db/repositories'
-import type { ProcessRunner, ProcessRunResult } from './processRunner'
+import type {
+  ProcessRunOptions,
+  ProcessRunner,
+  ProcessRunResult,
+  RunningProcess
+} from './processRunner'
 import { RuntimeImportService } from './runtimeImportService'
 import { MemorySecretService } from './secretService'
 import { RuntimeService } from './runtimeService'
@@ -13,8 +18,22 @@ import { RuntimeTester } from './runtimeTester'
 class FakeProcessRunner implements ProcessRunner {
   constructor(private readonly result: ProcessRunResult) {}
 
-  run(): Promise<ProcessRunResult> {
-    return Promise.resolve(this.result)
+  start(_command: string, _args: string[], options?: ProcessRunOptions): RunningProcess {
+    if (this.result.stdout) {
+      options?.onStdoutChunk?.(this.result.stdout)
+    }
+    if (this.result.stderr) {
+      options?.onStderrChunk?.(this.result.stderr)
+    }
+
+    return {
+      result: Promise.resolve(this.result),
+      stop: () => undefined
+    }
+  }
+
+  run(_command: string, _args: string[], options?: ProcessRunOptions): Promise<ProcessRunResult> {
+    return this.start(_command, _args, options).result
   }
 }
 

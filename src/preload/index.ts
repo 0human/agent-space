@@ -35,6 +35,7 @@ import {
   SESSION_LIST_MESSAGES_CHANNEL,
   SESSION_LIST_RUNS_CHANNEL,
   SESSION_SEND_MESSAGE_CHANNEL,
+  SESSION_STOP_RUN_CHANNEL,
   SESSION_UPDATE_CHANNEL
 } from '../main/ipc/sessions'
 import {
@@ -101,6 +102,7 @@ const agentSpace: AgentSpaceAPI = {
     listMessages: (input) => ipcRenderer.invoke(SESSION_LIST_MESSAGES_CHANNEL, input),
     addMessage: (input) => ipcRenderer.invoke(SESSION_ADD_MESSAGE_CHANNEL, input),
     sendMessage: (input) => ipcRenderer.invoke(SESSION_SEND_MESSAGE_CHANNEL, input),
+    stopRun: (input) => ipcRenderer.invoke(SESSION_STOP_RUN_CHANNEL, input),
     listRuns: (workSessionId) => ipcRenderer.invoke(SESSION_LIST_RUNS_CHANNEL, workSessionId),
     listEvents: (runId) => ipcRenderer.invoke(SESSION_LIST_EVENTS_CHANNEL, runId)
   }

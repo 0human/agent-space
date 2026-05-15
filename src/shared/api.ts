@@ -596,6 +596,10 @@ export interface SessionSendMessageResult {
   events: RuntimeEventSummary[]
 }
 
+export interface SessionStopRunInput {
+  workSessionId: string
+}
+
 export interface AppAPI {
   getInfo: () => Promise<ApiResult<AppInfo>>
 }
@@ -661,6 +665,7 @@ export interface SessionAPI {
   listMessages: (input: MessageListInput) => Promise<ApiResult<MessageSummary[]>>
   addMessage: (input: MessageCreateInput) => Promise<ApiResult<MessageSummary>>
   sendMessage: (input: SessionSendMessageInput) => Promise<ApiResult<SessionSendMessageResult>>
+  stopRun: (input: SessionStopRunInput) => Promise<ApiResult<RuntimeRunSummary>>
   listRuns: (workSessionId: string) => Promise<ApiResult<RuntimeRunSummary[]>>
   listEvents: (runId: string) => Promise<ApiResult<RuntimeEventSummary[]>>
 }

@@ -7,6 +7,7 @@ import type {
   RuntimeRunSummary,
   SessionSendMessageInput,
   SessionSendMessageResult,
+  SessionStopRunInput,
   WorkSessionArchiveInput,
   WorkSessionAssigneeType,
   WorkSessionCreateInput,
@@ -18,7 +19,7 @@ import type {
 import { createRepositories, type Repositories } from '../db'
 import type { AppDatabase } from '../db/client'
 import type { Message, RuntimeEvent, RuntimeRun, WorkSession } from '../db/schema'
-import type { ProcessRunner } from '../runtime'
+import type { ProcessRunner, RunningProcess } from '../runtime'
 import { ValidationError } from '../runtime'
 import {
   validateMessageCreateInput,
@@ -52,6 +53,15 @@ function now(): string {
 }
 
 export class SessionService {
+  private readonly activeRuns = new Map<
+    string,
+    {
+      runningProcess: RunningProcess
+      workSessionId: string
+      runtimeConfigId: string
+    }
+  >()
+
   constructor(
     private readonly db: AppDatabase,
     private readonly processRunner: ProcessRunner
@@ -235,6 +245,7 @@ export class SessionService {
       const args = this.parseArgs(runtime.defaultArgsJson)
       const cwd =
         runtime.defaultCwdMode === 'custom_path' ? (runtime.customCwd ?? undefined) : undefined
+      const stdin = this.buildRuntimeInput(session, runtime.provider, validated.content)
       const userMessage = repositories.messages.create({
         workSessionId: session.id,
         role: 'user',
@@ -263,138 +274,74 @@ export class SessionService {
       repositories.projects.update(session.projectId, { lastActiveAt: startTime })
       this.refreshProjectMetrics(session.projectId, repositories)
 
-      return { session, runtime, userMessage, run, command, args, cwd }
+      return { session, runtime, userMessage, run, command, args, cwd, stdin }
     })
 
-    const processResult = await this.processRunner.run(setup.command, setup.args, {
-      timeoutMs: 15000
-    })
-    const finishTime = now()
-
-    return this.db.transaction((tx) => {
-      const repositories = createRepositories(tx)
-      const events: RuntimeEventSummary[] = []
-      let sequenceNo = 1
-
-      const statusEvent = repositories.runtimeEvents.create({
-        runId: setup.run.id,
-        workSessionId: setup.session.id,
-        runtimeConfigId: setup.runtime.id,
-        type: 'run_started',
-        content: `Started ${setup.command}`,
-        displayCategory: 'status',
-        sequenceNo: sequenceNo++,
-        createdAt: setup.run.startedAt
-      })
-      events.push(this.toRuntimeEventSummary(statusEvent))
-
-      if (processResult.stdout.trim()) {
-        const stdoutEvent = repositories.runtimeEvents.create({
-          runId: setup.run.id,
-          workSessionId: setup.session.id,
-          runtimeConfigId: setup.runtime.id,
-          type: 'stdout',
-          content: processResult.stdout.trim(),
-          displayCategory: 'stdout',
-          sequenceNo: sequenceNo++,
-          createdAt: finishTime
-        })
-        events.push(this.toRuntimeEventSummary(stdoutEvent))
-      }
-
-      if (processResult.stderr.trim()) {
-        const stderrEvent = repositories.runtimeEvents.create({
-          runId: setup.run.id,
-          workSessionId: setup.session.id,
-          runtimeConfigId: setup.runtime.id,
-          type: 'stderr',
-          content: processResult.stderr.trim(),
-          displayCategory: 'stderr',
-          sequenceNo: sequenceNo++,
-          createdAt: finishTime
-        })
-        events.push(this.toRuntimeEventSummary(stderrEvent))
-      }
-
-      const isSuccess = processResult.exitCode === 0 && !processResult.error
-      const errorSummary = processResult.error
-        ? processResult.error.message
-        : isSuccess
-          ? undefined
-          : processResult.stderr.trim() ||
-            `Process exited with code ${processResult.exitCode ?? 'unknown'}.`
-
-      const completedEvent = repositories.runtimeEvents.create({
-        runId: setup.run.id,
-        workSessionId: setup.session.id,
-        runtimeConfigId: setup.runtime.id,
-        type: isSuccess ? 'run_completed' : 'run_failed',
-        content: isSuccess ? 'Run completed.' : errorSummary,
-        displayCategory: 'status',
-        sequenceNo,
-        createdAt: finishTime
-      })
-      events.push(this.toRuntimeEventSummary(completedEvent))
-
-      const updatedRun = repositories.runtimeRuns.update(setup.run.id, {
-        status: isSuccess ? 'completed' : 'failed',
-        endedAt: finishTime,
-        exitCode: processResult.exitCode ?? undefined,
-        errorSummary
-      })
-
-      let assistantMessage: MessageSummary | undefined
-      if (processResult.stdout.trim()) {
-        assistantMessage = this.toMessageSummary(
-          repositories.messages.create({
-            workSessionId: setup.session.id,
-            role: 'assistant',
-            eventType: 'message',
-            aiTeamMemberId: setup.session.aiTeamMemberId ?? undefined,
-            content: processResult.stdout.trim(),
-            runtimeSnapshotJson: JSON.stringify({
-              runId: updatedRun.id,
-              provider: updatedRun.provider,
-              status: updatedRun.status
-            }),
-            createdAt: finishTime
-          })
+    const runningProcess = this.processRunner.start(setup.command, setup.args, {
+      timeoutMs: 15000,
+      stdin: setup.stdin,
+      onStdoutChunk: (chunk) => {
+        this.appendRuntimeEvent(
+          setup.run.id,
+          setup.session.id,
+          setup.runtime.id,
+          'stdout_chunk',
+          chunk,
+          'stdout'
         )
-      } else if (!isSuccess) {
-        assistantMessage = this.toMessageSummary(
-          repositories.messages.create({
-            workSessionId: setup.session.id,
-            role: 'assistant',
-            eventType: 'message',
-            aiTeamMemberId: setup.session.aiTeamMemberId ?? undefined,
-            content: errorSummary ?? 'Run failed.',
-            errorJson: JSON.stringify({
-              runId: updatedRun.id,
-              status: updatedRun.status
-            }),
-            createdAt: finishTime
-          })
+      },
+      onStderrChunk: (chunk) => {
+        this.appendRuntimeEvent(
+          setup.run.id,
+          setup.session.id,
+          setup.runtime.id,
+          'stderr_chunk',
+          chunk,
+          'stderr'
         )
       }
-
-      repositories.workSessions.update(setup.session.id, {
-        status: isSuccess ? 'completed' : 'error',
-        lastMessageAt: finishTime
-      })
-      repositories.projects.update(setup.session.projectId, { lastActiveAt: finishTime })
-      this.refreshProjectMetrics(setup.session.projectId, repositories)
-
-      return {
-        userMessage: this.toMessageSummary(
-          repositories.messages
-            .listBySession(setup.session.id, 1, 0)
-            .find((message) => message.id === setup.userMessage.id) ?? setup.userMessage
-        ),
-        assistantMessage,
-        run: this.toRuntimeRunSummary(updatedRun),
-        events
-      }
     })
+    this.activeRuns.set(setup.run.id, {
+      runningProcess,
+      workSessionId: setup.session.id,
+      runtimeConfigId: setup.runtime.id
+    })
+    this.appendRuntimeEvent(
+      setup.run.id,
+      setup.session.id,
+      setup.runtime.id,
+      'run_started',
+      `Started ${setup.command}`,
+      'status',
+      startTime
+    )
+
+    void this.finalizeRun(setup, runningProcess)
+
+    return {
+      userMessage: this.toMessageSummary(setup.userMessage),
+      run: this.toRuntimeRunSummary(setup.run),
+      events: this.listEvents(setup.run.id)
+    }
+  }
+
+  stopRun(input: SessionStopRunInput): RuntimeRunSummary {
+    const repositories = createRepositories(this.db)
+    const session = repositories.workSessions.getById(input.workSessionId)
+    if (!session) {
+      throw new ValidationError('Work Session not found.')
+    }
+    if (!session.latestRunId) {
+      throw new ValidationError('No active Runtime Run found for this Work Session.')
+    }
+
+    const activeRun = this.activeRuns.get(session.latestRunId)
+    if (!activeRun) {
+      throw new ValidationError('Runtime Run is not currently active.')
+    }
+
+    activeRun.runningProcess.stop()
+    return this.toRuntimeRunSummary(repositories.runtimeRuns.getById(session.latestRunId)!)
   }
 
   listRuns(workSessionId: string): RuntimeRunSummary[] {
@@ -522,6 +469,176 @@ export class SessionService {
     } catch {
       return []
     }
+  }
+
+  private buildRuntimeInput(
+    session: WorkSession,
+    provider: string,
+    content: string
+  ): string | undefined {
+    if (provider !== 'custom_cli') {
+      return undefined
+    }
+
+    return JSON.stringify(
+      {
+        workSessionId: session.id,
+        title: session.title,
+        goal: session.goal ?? undefined,
+        prompt: content
+      },
+      null,
+      2
+    )
+  }
+
+  private async finalizeRun(
+    setup: {
+      session: WorkSession
+      runtime: { id: string; provider: string }
+      userMessage: Message
+      run: RuntimeRun
+      command: string
+      args: string[]
+      cwd?: string
+      stdin?: string
+    },
+    runningProcess: RunningProcess
+  ): Promise<void> {
+    const processResult = await runningProcess.result
+    this.activeRuns.delete(setup.run.id)
+    const finishTime = now()
+
+    this.db.transaction((tx) => {
+      const repositories = createRepositories(tx)
+      const existingEvents = repositories.runtimeEvents.listByRun(setup.run.id)
+      let sequenceNo = existingEvents.length + 1
+
+      const isSuccess = processResult.exitCode === 0 && !processResult.error
+      const wasStopped = processResult.error?.code === 'STOPPED'
+      const errorSummary = processResult.error
+        ? processResult.error.message
+        : isSuccess
+          ? undefined
+          : processResult.stderr.trim() ||
+            `Process exited with code ${processResult.exitCode ?? 'unknown'}.`
+
+      if (
+        processResult.stdout.trim() &&
+        !existingEvents.some((event) => event.displayCategory === 'stdout')
+      ) {
+        repositories.runtimeEvents.create({
+          runId: setup.run.id,
+          workSessionId: setup.session.id,
+          runtimeConfigId: setup.runtime.id,
+          type: 'stdout',
+          content: processResult.stdout.trim(),
+          displayCategory: 'stdout',
+          sequenceNo: sequenceNo++,
+          createdAt: finishTime
+        })
+      }
+
+      if (
+        processResult.stderr.trim() &&
+        !existingEvents.some((event) => event.displayCategory === 'stderr')
+      ) {
+        repositories.runtimeEvents.create({
+          runId: setup.run.id,
+          workSessionId: setup.session.id,
+          runtimeConfigId: setup.runtime.id,
+          type: 'stderr',
+          content: processResult.stderr.trim(),
+          displayCategory: 'stderr',
+          sequenceNo: sequenceNo++,
+          createdAt: finishTime
+        })
+      }
+
+      repositories.runtimeEvents.create({
+        runId: setup.run.id,
+        workSessionId: setup.session.id,
+        runtimeConfigId: setup.runtime.id,
+        type: isSuccess ? 'run_completed' : wasStopped ? 'run_stopped' : 'run_failed',
+        content: isSuccess ? 'Run completed.' : errorSummary,
+        displayCategory: 'status',
+        sequenceNo,
+        createdAt: finishTime
+      })
+
+      const updatedRun = repositories.runtimeRuns.update(setup.run.id, {
+        status: isSuccess ? 'completed' : wasStopped ? 'stopped' : 'failed',
+        endedAt: finishTime,
+        exitCode: processResult.exitCode ?? undefined,
+        errorSummary
+      })
+
+      if (processResult.stdout.trim()) {
+        repositories.messages.create({
+          workSessionId: setup.session.id,
+          role: 'assistant',
+          eventType: 'message',
+          aiTeamMemberId: setup.session.aiTeamMemberId ?? undefined,
+          content: processResult.stdout.trim(),
+          runtimeSnapshotJson: JSON.stringify({
+            runId: updatedRun.id,
+            provider: updatedRun.provider,
+            status: updatedRun.status
+          }),
+          createdAt: finishTime
+        })
+      } else if (!isSuccess) {
+        repositories.messages.create({
+          workSessionId: setup.session.id,
+          role: 'assistant',
+          eventType: 'message',
+          aiTeamMemberId: setup.session.aiTeamMemberId ?? undefined,
+          content: errorSummary ?? 'Run failed.',
+          errorJson: JSON.stringify({
+            runId: updatedRun.id,
+            status: updatedRun.status
+          }),
+          createdAt: finishTime
+        })
+      }
+
+      repositories.workSessions.update(setup.session.id, {
+        status: isSuccess ? 'completed' : wasStopped ? 'idle' : 'error',
+        lastMessageAt: finishTime
+      })
+      repositories.projects.update(setup.session.projectId, { lastActiveAt: finishTime })
+      this.refreshProjectMetrics(setup.session.projectId, repositories)
+    })
+  }
+
+  private appendRuntimeEvent(
+    runId: string,
+    workSessionId: string,
+    runtimeConfigId: string,
+    type: string,
+    rawContent: string,
+    displayCategory: RuntimeEventSummary['displayCategory'],
+    createdAt = now()
+  ): void {
+    const content = rawContent.trim()
+    if (!content) {
+      return
+    }
+
+    this.db.transaction((tx) => {
+      const repositories = createRepositories(tx)
+      const sequenceNo = repositories.runtimeEvents.listByRun(runId).length + 1
+      repositories.runtimeEvents.create({
+        runId,
+        workSessionId,
+        runtimeConfigId,
+        type,
+        content,
+        displayCategory,
+        sequenceNo,
+        createdAt
+      })
+    })
   }
 
   private toSummary(session: WorkSession, repositories: Repositories): WorkSessionSummary {

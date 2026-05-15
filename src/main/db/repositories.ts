@@ -398,6 +398,9 @@ export function createRepositories(db: RepositoryDatabase) {
     },
 
     runtimeRuns: {
+      getById(id: string) {
+        return db.select().from(runtimeRuns).where(eq(runtimeRuns.id, id)).get()
+      },
       create(input: IdInput<NewRuntimeRun>) {
         return db.insert(runtimeRuns).values(withId(input)).returning().get()
       },

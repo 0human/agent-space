@@ -29,6 +29,7 @@ import {
   SESSION_ADD_MESSAGE_CHANNEL,
   SESSION_ARCHIVE_CHANNEL,
   SESSION_CREATE_CHANNEL,
+  SESSION_CHANGED_CHANNEL,
   SESSION_GET_CHANNEL,
   SESSION_LIST_CHANNEL,
   SESSION_LIST_EVENTS_CHANNEL,
@@ -104,7 +105,14 @@ const agentSpace: AgentSpaceAPI = {
     sendMessage: (input) => ipcRenderer.invoke(SESSION_SEND_MESSAGE_CHANNEL, input),
     stopRun: (input) => ipcRenderer.invoke(SESSION_STOP_RUN_CHANNEL, input),
     listRuns: (workSessionId) => ipcRenderer.invoke(SESSION_LIST_RUNS_CHANNEL, workSessionId),
-    listEvents: (runId) => ipcRenderer.invoke(SESSION_LIST_EVENTS_CHANNEL, runId)
+    listEvents: (runId) => ipcRenderer.invoke(SESSION_LIST_EVENTS_CHANNEL, runId),
+    onChanged: (callback) => {
+      const listener = (_event: Electron.IpcRendererEvent, payload: unknown) => {
+        callback(payload as Parameters<typeof callback>[0])
+      }
+      ipcRenderer.on(SESSION_CHANGED_CHANNEL, listener)
+      return () => ipcRenderer.off(SESSION_CHANGED_CHANNEL, listener)
+    }
   }
 }
 

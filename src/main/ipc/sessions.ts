@@ -1,7 +1,8 @@
-import { ipcMain } from 'electron'
+import { BrowserWindow, ipcMain } from 'electron'
 import type {
   MessageCreateInput,
   MessageListInput,
+  SessionChangedEvent,
   SessionSendMessageInput,
   SessionStopRunInput,
   WorkSessionArchiveInput,
@@ -24,6 +25,7 @@ export const SESSION_SEND_MESSAGE_CHANNEL = 'session:sendMessage'
 export const SESSION_STOP_RUN_CHANNEL = 'session:stopRun'
 export const SESSION_LIST_RUNS_CHANNEL = 'session:listRuns'
 export const SESSION_LIST_EVENTS_CHANNEL = 'session:listEvents'
+export const SESSION_CHANGED_CHANNEL = 'session:changed'
 
 function toSessionResult<T>(callback: () => T) {
   try {
@@ -40,6 +42,12 @@ function toSessionResult<T>(callback: () => T) {
 }
 
 export function registerSessionIpc(sessionService: SessionService): void {
+  sessionService.onChanged((event: SessionChangedEvent) => {
+    for (const window of BrowserWindow.getAllWindows()) {
+      window.webContents.send(SESSION_CHANGED_CHANNEL, event)
+    }
+  })
+
   ipcMain.handle(SESSION_LIST_CHANNEL, (_event, input?: WorkSessionListInput) =>
     toSessionResult(() => sessionService.list(input))
   )

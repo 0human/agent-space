@@ -28,6 +28,7 @@ import type {
   RuntimeEventSummary,
   RuntimeSummary,
   RuntimeRunSummary,
+  SessionChangedEvent,
   WorkSessionSummary
 } from '../../../shared/api'
 
@@ -62,7 +63,11 @@ export function WorkSessionsPage(): ReactElement {
 
     if (sessionResult.ok) {
       setSessions(sessionResult.data)
-      setSelectedSession((current) => current ?? sessionResult.data[0] ?? null)
+      setSelectedSession((current) =>
+        current
+          ? (sessionResult.data.find((session) => session.id === current.id) ?? current)
+          : (sessionResult.data[0] ?? null)
+      )
     } else {
       setError(sessionResult.error.message)
     }
@@ -117,6 +122,17 @@ export function WorkSessionsPage(): ReactElement {
       setEvents([])
     }
   }, [selectedSession])
+
+  useEffect(() => {
+    function handleSessionChanged(event: SessionChangedEvent): void {
+      void load()
+      if (selectedSession?.id === event.workSessionId) {
+        void loadMessages(event.workSessionId)
+      }
+    }
+
+    return window.agentSpace.sessions.onChanged(handleSessionChanged)
+  }, [selectedSession?.id])
 
   async function handleCreate(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault()

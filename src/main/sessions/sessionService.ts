@@ -5,6 +5,7 @@ import type {
   ProjectMetrics,
   RuntimeEventSummary,
   RuntimeRunSummary,
+  SessionChangedEvent,
   SessionSendMessageInput,
   SessionSendMessageResult,
   SessionStopRunInput,
@@ -53,6 +54,8 @@ function now(): string {
 }
 
 export class SessionService {
+  private readonly changeListeners = new Set<(event: SessionChangedEvent) => void>()
+
   private readonly activeRuns = new Map<
     string,
     {
@@ -66,6 +69,11 @@ export class SessionService {
     private readonly db: AppDatabase,
     private readonly processRunner: ProcessRunner
   ) {}
+
+  onChanged(listener: (event: SessionChangedEvent) => void): () => void {
+    this.changeListeners.add(listener)
+    return () => this.changeListeners.delete(listener)
+  }
 
   list(input: WorkSessionListInput = {}): WorkSessionSummary[] {
     const validated = validateWorkSessionListInput(input)
@@ -143,7 +151,9 @@ export class SessionService {
       repositories.projects.update(project.id, { lastActiveAt: createdAt })
       this.refreshProjectMetrics(project.id, repositories)
 
-      return this.toDetail(session, repositories)
+      const detail = this.toDetail(session, repositories)
+      this.emitChanged({ workSessionId: session.id, reason: 'session_created' })
+      return detail
     })
   }
 
@@ -161,6 +171,7 @@ export class SessionService {
     }
 
     this.refreshProjectMetrics(session.projectId, repositories)
+    this.emitChanged({ workSessionId: session.id, reason: 'session_updated' })
     return this.toDetail(session, repositories)
   }
 
@@ -172,6 +183,7 @@ export class SessionService {
     }
 
     this.refreshProjectMetrics(session.projectId, repositories)
+    this.emitChanged({ workSessionId: session.id, reason: 'session_archived' })
     return this.toDetail(session, repositories)
   }
 
@@ -216,7 +228,9 @@ export class SessionService {
       repositories.projects.update(session.projectId, { lastActiveAt: createdAt })
       this.refreshProjectMetrics(session.projectId, repositories)
 
-      return this.toMessageSummary(message)
+      const summary = this.toMessageSummary(message)
+      this.emitChanged({ workSessionId: session.id, reason: 'message_created' })
+      return summary
     })
   }
 
@@ -315,6 +329,11 @@ export class SessionService {
       'status',
       startTime
     )
+    this.emitChanged({
+      workSessionId: setup.session.id,
+      runId: setup.run.id,
+      reason: 'run_started'
+    })
 
     void this.finalizeRun(setup, runningProcess)
 
@@ -609,6 +628,11 @@ export class SessionService {
       repositories.projects.update(setup.session.projectId, { lastActiveAt: finishTime })
       this.refreshProjectMetrics(setup.session.projectId, repositories)
     })
+    this.emitChanged({
+      workSessionId: setup.session.id,
+      runId: setup.run.id,
+      reason: 'run_finished'
+    })
   }
 
   private appendRuntimeEvent(
@@ -639,6 +663,13 @@ export class SessionService {
         createdAt
       })
     })
+    this.emitChanged({ workSessionId, runId, reason: 'run_event_created' })
+  }
+
+  private emitChanged(event: SessionChangedEvent): void {
+    for (const listener of this.changeListeners) {
+      listener(event)
+    }
   }
 
   private toSummary(session: WorkSession, repositories: Repositories): WorkSessionSummary {

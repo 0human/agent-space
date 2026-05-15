@@ -600,6 +600,19 @@ export interface SessionStopRunInput {
   workSessionId: string
 }
 
+export interface SessionChangedEvent {
+  workSessionId: string
+  runId?: string
+  reason:
+    | 'session_created'
+    | 'session_updated'
+    | 'session_archived'
+    | 'message_created'
+    | 'run_started'
+    | 'run_event_created'
+    | 'run_finished'
+}
+
 export interface AppAPI {
   getInfo: () => Promise<ApiResult<AppInfo>>
 }
@@ -668,6 +681,7 @@ export interface SessionAPI {
   stopRun: (input: SessionStopRunInput) => Promise<ApiResult<RuntimeRunSummary>>
   listRuns: (workSessionId: string) => Promise<ApiResult<RuntimeRunSummary[]>>
   listEvents: (runId: string) => Promise<ApiResult<RuntimeEventSummary[]>>
+  onChanged: (callback: (event: SessionChangedEvent) => void) => () => void
 }
 
 export interface AgentSpaceAPI {

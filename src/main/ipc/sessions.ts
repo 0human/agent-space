@@ -2,6 +2,7 @@ import { ipcMain } from 'electron'
 import type {
   MessageCreateInput,
   MessageListInput,
+  SessionSendMessageInput,
   WorkSessionArchiveInput,
   WorkSessionCreateInput,
   WorkSessionListInput,
@@ -18,6 +19,9 @@ export const SESSION_UPDATE_CHANNEL = 'session:update'
 export const SESSION_ARCHIVE_CHANNEL = 'session:archive'
 export const SESSION_LIST_MESSAGES_CHANNEL = 'session:listMessages'
 export const SESSION_ADD_MESSAGE_CHANNEL = 'session:addMessage'
+export const SESSION_SEND_MESSAGE_CHANNEL = 'session:sendMessage'
+export const SESSION_LIST_RUNS_CHANNEL = 'session:listRuns'
+export const SESSION_LIST_EVENTS_CHANNEL = 'session:listEvents'
 
 function toSessionResult<T>(callback: () => T) {
   try {
@@ -54,5 +58,14 @@ export function registerSessionIpc(sessionService: SessionService): void {
   )
   ipcMain.handle(SESSION_ADD_MESSAGE_CHANNEL, (_event, input: MessageCreateInput) =>
     toSessionResult(() => sessionService.addMessage(input))
+  )
+  ipcMain.handle(SESSION_SEND_MESSAGE_CHANNEL, (_event, input: SessionSendMessageInput) =>
+    toSessionResult(() => sessionService.sendMessage(input))
+  )
+  ipcMain.handle(SESSION_LIST_RUNS_CHANNEL, (_event, workSessionId: string) =>
+    toSessionResult(() => sessionService.listRuns(workSessionId))
+  )
+  ipcMain.handle(SESSION_LIST_EVENTS_CHANNEL, (_event, runId: string) =>
+    toSessionResult(() => sessionService.listEvents(runId))
   )
 }

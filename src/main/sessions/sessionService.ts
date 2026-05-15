@@ -3,6 +3,10 @@ import type {
   MessageListInput,
   MessageSummary,
   ProjectMetrics,
+  RuntimeEventSummary,
+  RuntimeRunSummary,
+  SessionSendMessageInput,
+  SessionSendMessageResult,
   WorkSessionArchiveInput,
   WorkSessionAssigneeType,
   WorkSessionCreateInput,
@@ -13,11 +17,13 @@ import type {
 } from '../../shared/api'
 import { createRepositories, type Repositories } from '../db'
 import type { AppDatabase } from '../db/client'
-import type { Message, WorkSession } from '../db/schema'
+import type { Message, RuntimeEvent, RuntimeRun, WorkSession } from '../db/schema'
+import type { ProcessRunner } from '../runtime'
 import { ValidationError } from '../runtime'
 import {
   validateMessageCreateInput,
   validateMessageListInput,
+  validateSessionSendMessageInput,
   validateWorkSessionCreateInput,
   validateWorkSessionListInput,
   validateWorkSessionUpdateInput
@@ -46,7 +52,10 @@ function now(): string {
 }
 
 export class SessionService {
-  constructor(private readonly db: AppDatabase) {}
+  constructor(
+    private readonly db: AppDatabase,
+    private readonly processRunner: ProcessRunner
+  ) {}
 
   list(input: WorkSessionListInput = {}): WorkSessionSummary[] {
     const validated = validateWorkSessionListInput(input)
@@ -201,6 +210,211 @@ export class SessionService {
     })
   }
 
+  async sendMessage(input: SessionSendMessageInput): Promise<SessionSendMessageResult> {
+    const validated = validateSessionSendMessageInput(input)
+    const startTime = now()
+    const setup = this.db.transaction((tx) => {
+      const repositories = createRepositories(tx)
+      const session = repositories.workSessions.getById(validated.workSessionId)
+      if (!session || session.archivedAt) {
+        throw new ValidationError('Work Session not found.')
+      }
+
+      const runtime = session.aiRuntimeConfigId
+        ? repositories.runtimes.getById(session.aiRuntimeConfigId)
+        : undefined
+      if (!runtime) {
+        throw new ValidationError('Runtime not configured for this Work Session.')
+      }
+
+      const command = runtime.executablePath?.trim()
+      if (!command) {
+        throw new ValidationError('Runtime executablePath is required before sending a message.')
+      }
+
+      const args = this.parseArgs(runtime.defaultArgsJson)
+      const cwd =
+        runtime.defaultCwdMode === 'custom_path' ? (runtime.customCwd ?? undefined) : undefined
+      const userMessage = repositories.messages.create({
+        workSessionId: session.id,
+        role: 'user',
+        eventType: 'message',
+        aiTeamMemberId: session.aiTeamMemberId ?? undefined,
+        content: validated.content,
+        inputSummaryJson: JSON.stringify({ source: 'session_send_message' }),
+        createdAt: startTime
+      })
+      const run = repositories.runtimeRuns.create({
+        workSessionId: session.id,
+        runtimeConfigId: runtime.id,
+        provider: runtime.provider,
+        status: 'starting',
+        command,
+        argsJson: JSON.stringify(args),
+        cwd,
+        envSummaryJson: JSON.stringify({}),
+        startedAt: startTime
+      })
+      repositories.workSessions.update(session.id, {
+        status: 'running',
+        latestRunId: run.id,
+        lastMessageAt: startTime
+      })
+      repositories.projects.update(session.projectId, { lastActiveAt: startTime })
+      this.refreshProjectMetrics(session.projectId, repositories)
+
+      return { session, runtime, userMessage, run, command, args, cwd }
+    })
+
+    const processResult = await this.processRunner.run(setup.command, setup.args, {
+      timeoutMs: 15000
+    })
+    const finishTime = now()
+
+    return this.db.transaction((tx) => {
+      const repositories = createRepositories(tx)
+      const events: RuntimeEventSummary[] = []
+      let sequenceNo = 1
+
+      const statusEvent = repositories.runtimeEvents.create({
+        runId: setup.run.id,
+        workSessionId: setup.session.id,
+        runtimeConfigId: setup.runtime.id,
+        type: 'run_started',
+        content: `Started ${setup.command}`,
+        displayCategory: 'status',
+        sequenceNo: sequenceNo++,
+        createdAt: setup.run.startedAt
+      })
+      events.push(this.toRuntimeEventSummary(statusEvent))
+
+      if (processResult.stdout.trim()) {
+        const stdoutEvent = repositories.runtimeEvents.create({
+          runId: setup.run.id,
+          workSessionId: setup.session.id,
+          runtimeConfigId: setup.runtime.id,
+          type: 'stdout',
+          content: processResult.stdout.trim(),
+          displayCategory: 'stdout',
+          sequenceNo: sequenceNo++,
+          createdAt: finishTime
+        })
+        events.push(this.toRuntimeEventSummary(stdoutEvent))
+      }
+
+      if (processResult.stderr.trim()) {
+        const stderrEvent = repositories.runtimeEvents.create({
+          runId: setup.run.id,
+          workSessionId: setup.session.id,
+          runtimeConfigId: setup.runtime.id,
+          type: 'stderr',
+          content: processResult.stderr.trim(),
+          displayCategory: 'stderr',
+          sequenceNo: sequenceNo++,
+          createdAt: finishTime
+        })
+        events.push(this.toRuntimeEventSummary(stderrEvent))
+      }
+
+      const isSuccess = processResult.exitCode === 0 && !processResult.error
+      const errorSummary = processResult.error
+        ? processResult.error.message
+        : isSuccess
+          ? undefined
+          : processResult.stderr.trim() ||
+            `Process exited with code ${processResult.exitCode ?? 'unknown'}.`
+
+      const completedEvent = repositories.runtimeEvents.create({
+        runId: setup.run.id,
+        workSessionId: setup.session.id,
+        runtimeConfigId: setup.runtime.id,
+        type: isSuccess ? 'run_completed' : 'run_failed',
+        content: isSuccess ? 'Run completed.' : errorSummary,
+        displayCategory: 'status',
+        sequenceNo,
+        createdAt: finishTime
+      })
+      events.push(this.toRuntimeEventSummary(completedEvent))
+
+      const updatedRun = repositories.runtimeRuns.update(setup.run.id, {
+        status: isSuccess ? 'completed' : 'failed',
+        endedAt: finishTime,
+        exitCode: processResult.exitCode ?? undefined,
+        errorSummary
+      })
+
+      let assistantMessage: MessageSummary | undefined
+      if (processResult.stdout.trim()) {
+        assistantMessage = this.toMessageSummary(
+          repositories.messages.create({
+            workSessionId: setup.session.id,
+            role: 'assistant',
+            eventType: 'message',
+            aiTeamMemberId: setup.session.aiTeamMemberId ?? undefined,
+            content: processResult.stdout.trim(),
+            runtimeSnapshotJson: JSON.stringify({
+              runId: updatedRun.id,
+              provider: updatedRun.provider,
+              status: updatedRun.status
+            }),
+            createdAt: finishTime
+          })
+        )
+      } else if (!isSuccess) {
+        assistantMessage = this.toMessageSummary(
+          repositories.messages.create({
+            workSessionId: setup.session.id,
+            role: 'assistant',
+            eventType: 'message',
+            aiTeamMemberId: setup.session.aiTeamMemberId ?? undefined,
+            content: errorSummary ?? 'Run failed.',
+            errorJson: JSON.stringify({
+              runId: updatedRun.id,
+              status: updatedRun.status
+            }),
+            createdAt: finishTime
+          })
+        )
+      }
+
+      repositories.workSessions.update(setup.session.id, {
+        status: isSuccess ? 'completed' : 'error',
+        lastMessageAt: finishTime
+      })
+      repositories.projects.update(setup.session.projectId, { lastActiveAt: finishTime })
+      this.refreshProjectMetrics(setup.session.projectId, repositories)
+
+      return {
+        userMessage: this.toMessageSummary(
+          repositories.messages
+            .listBySession(setup.session.id, 1, 0)
+            .find((message) => message.id === setup.userMessage.id) ?? setup.userMessage
+        ),
+        assistantMessage,
+        run: this.toRuntimeRunSummary(updatedRun),
+        events
+      }
+    })
+  }
+
+  listRuns(workSessionId: string): RuntimeRunSummary[] {
+    const repositories = createRepositories(this.db)
+    if (!repositories.workSessions.getById(workSessionId)) {
+      throw new ValidationError('Work Session not found.')
+    }
+
+    return repositories.runtimeRuns
+      .listBySession(workSessionId)
+      .map((run) => this.toRuntimeRunSummary(run))
+  }
+
+  listEvents(runId: string): RuntimeEventSummary[] {
+    const repositories = createRepositories(this.db)
+    return repositories.runtimeEvents
+      .listByRun(runId)
+      .map((event) => this.toRuntimeEventSummary(event))
+  }
+
   private resolveAssignee(input: WorkSessionCreateInput, repositories: Repositories) {
     const project = repositories.projects.getById(input.projectId)
     if (!project) {
@@ -298,6 +512,18 @@ export class SessionService {
     })
   }
 
+  private parseArgs(value: string | null): string[] {
+    if (!value) {
+      return []
+    }
+    try {
+      const parsed = JSON.parse(value) as unknown
+      return Array.isArray(parsed) && parsed.every((item) => typeof item === 'string') ? parsed : []
+    } catch {
+      return []
+    }
+  }
+
   private toSummary(session: WorkSession, repositories: Repositories): WorkSessionSummary {
     const project = repositories.projects.getById(session.projectId)
     return {
@@ -349,6 +575,40 @@ export class SessionService {
       tokenUsage: parseJsonObject(message.tokenUsageJson),
       error: parseJsonObject(message.errorJson),
       createdAt: message.createdAt
+    }
+  }
+
+  private toRuntimeRunSummary(run: RuntimeRun): RuntimeRunSummary {
+    return {
+      id: run.id,
+      workSessionId: run.workSessionId,
+      runtimeConfigId: run.runtimeConfigId,
+      provider: run.provider as RuntimeRunSummary['provider'],
+      status: run.status as RuntimeRunSummary['status'],
+      command: optional(run.command),
+      args: this.parseArgs(run.argsJson),
+      cwd: optional(run.cwd),
+      envSummary: parseJsonObject(run.envSummaryJson),
+      startedAt: run.startedAt,
+      endedAt: optional(run.endedAt),
+      exitCode: run.exitCode ?? undefined,
+      exitSignal: optional(run.exitSignal),
+      errorSummary: optional(run.errorSummary)
+    }
+  }
+
+  private toRuntimeEventSummary(event: RuntimeEvent): RuntimeEventSummary {
+    return {
+      id: event.id,
+      runId: event.runId,
+      workSessionId: event.workSessionId,
+      runtimeConfigId: event.runtimeConfigId,
+      type: event.type,
+      content: optional(event.content),
+      metadata: parseJsonObject(event.metadataJson),
+      displayCategory: event.displayCategory as RuntimeEventSummary['displayCategory'],
+      sequenceNo: event.sequenceNo,
+      createdAt: event.createdAt
     }
   }
 }

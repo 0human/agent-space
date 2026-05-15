@@ -3,6 +3,7 @@ import type {
   MessageEventType,
   MessageListInput,
   MessageRole,
+  SessionSendMessageInput,
   WorkSessionAssignmentMode,
   WorkSessionCreateInput,
   WorkSessionListInput,
@@ -138,5 +139,14 @@ export function validateMessageCreateInput(input: MessageCreateInput): MessageCr
     aiTeamMemberId: text(input.aiTeamMemberId, 'aiTeamMemberId'),
     inputSummary: input.inputSummary,
     inputEnvelopeSnapshot: input.inputEnvelopeSnapshot
+  }
+}
+
+export function validateSessionSendMessageInput(
+  input: SessionSendMessageInput
+): SessionSendMessageInput {
+  return {
+    workSessionId: text(input.workSessionId, 'workSessionId', true)!,
+    content: text(input.content, 'content', true)!
   }
 }

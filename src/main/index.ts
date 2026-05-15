@@ -58,12 +58,13 @@ app.whenReady().then(() => {
   permissionService.ensureRecommendedPolicySets()
   const agentProfileService = new AgentProfileService(database.db, permissionService)
   const teamService = new TeamService(database.db)
-  const sessionService = new SessionService(database.db)
+  const processRunner = new NodeProcessRunner()
+  const sessionService = new SessionService(database.db, processRunner)
   const projectService = new ProjectService(database.db)
   const runtimeService = new RuntimeService(
     database.db,
     new FileSecretService(join(app.getPath('userData'), 'secrets')),
-    new RuntimeTester(new NodeProcessRunner())
+    new RuntimeTester(processRunner)
   )
   registerAppIpc()
   registerPermissionIpc(permissionService)

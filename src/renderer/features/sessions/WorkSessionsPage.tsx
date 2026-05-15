@@ -26,6 +26,7 @@ import type {
   MessageSummary,
   ProjectSummary,
   RuntimeSummary,
+  RuntimeRunSummary,
   WorkSessionSummary
 } from '../../../shared/api'
 
@@ -35,6 +36,7 @@ export function WorkSessionsPage(): ReactElement {
   const [runtimes, setRuntimes] = useState<RuntimeSummary[]>([])
   const [selectedSession, setSelectedSession] = useState<WorkSessionSummary | null>(null)
   const [messages, setMessages] = useState<MessageSummary[]>([])
+  const [runs, setRuns] = useState<RuntimeRunSummary[]>([])
   const [createOpen, setCreateOpen] = useState(false)
   const [projectId, setProjectId] = useState('')
   const [runtimeId, setRuntimeId] = useState('project-default')
@@ -72,11 +74,21 @@ export function WorkSessionsPage(): ReactElement {
   }
 
   async function loadMessages(workSessionId: string): Promise<void> {
-    const result = await window.agentSpace.sessions.listMessages({ workSessionId })
-    if (result.ok) {
-      setMessages(result.data)
+    const [messageResult, runResult] = await Promise.all([
+      window.agentSpace.sessions.listMessages({ workSessionId }),
+      window.agentSpace.sessions.listRuns(workSessionId)
+    ])
+
+    if (messageResult.ok) {
+      setMessages(messageResult.data)
     } else {
-      setError(result.error.message)
+      setError(messageResult.error.message)
+    }
+
+    if (runResult.ok) {
+      setRuns(runResult.data)
+    } else {
+      setError(runResult.error.message)
     }
   }
 
@@ -125,13 +137,14 @@ export function WorkSessionsPage(): ReactElement {
     setError(null)
     setMessage(null)
 
-    const result = await window.agentSpace.sessions.addMessage({
+    const result = await window.agentSpace.sessions.sendMessage({
       workSessionId: selectedSession.id,
       content: draft
     })
 
     if (result.ok) {
       setDraft('')
+      setMessage(`Run ${result.data.run.status}: ${result.data.run.provider}`)
       await loadMessages(selectedSession.id)
       await load()
     } else {
@@ -235,6 +248,23 @@ export function WorkSessionsPage(): ReactElement {
             </div>
           </CardHeader>
           <CardContent className="grid gap-4">
+            {runs[0] ? (
+              <div className="grid gap-2 rounded-md border border-border p-3 text-sm">
+                <div className="flex flex-wrap gap-2">
+                  <Badge variant="secondary">{runs[0].status}</Badge>
+                  <Badge variant="outline">{runs[0].provider}</Badge>
+                  {runs[0].exitCode !== undefined ? (
+                    <Badge variant="outline">exit {runs[0].exitCode}</Badge>
+                  ) : null}
+                </div>
+                <p className="break-all text-muted-foreground">
+                  {[runs[0].command, ...runs[0].args].filter(Boolean).join(' ')}
+                </p>
+                {runs[0].errorSummary ? (
+                  <p className="text-destructive">{runs[0].errorSummary}</p>
+                ) : null}
+              </div>
+            ) : null}
             <div className="grid max-h-[440px] min-h-64 gap-3 overflow-y-auto rounded-md border border-border p-3">
               {messages.length === 0 ? (
                 <p className="text-sm text-muted-foreground">No messages saved yet.</p>

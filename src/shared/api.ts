@@ -75,6 +75,16 @@ export type WorkSessionAssignmentMode = 'team_member' | 'runtime' | 'manual'
 export type WorkSessionAssigneeType = 'team_member' | 'runtime' | 'user'
 export type MessageRole = 'user' | 'assistant' | 'system' | 'tool'
 export type MessageEventType = 'message' | 'member_switch' | 'handoff'
+export type RuntimeRunStatus =
+  | 'starting'
+  | 'running'
+  | 'waiting_input'
+  | 'waiting_permission'
+  | 'completed'
+  | 'failed'
+  | 'stopped'
+  | 'interrupted'
+export type RuntimeEventDisplayCategory = 'status' | 'stdout' | 'stderr' | 'tool' | 'message'
 export type TeamDefaultLaunchMode = 'analysis' | 'development' | 'custom'
 export type TeamMemberRole =
   | 'analyst'
@@ -544,6 +554,48 @@ export interface MessageCreateInput {
   inputEnvelopeSnapshot?: Record<string, unknown>
 }
 
+export interface RuntimeRunSummary {
+  id: string
+  workSessionId: string
+  runtimeConfigId: string
+  provider: RuntimeProvider
+  status: RuntimeRunStatus
+  command?: string
+  args: string[]
+  cwd?: string
+  envSummary?: Record<string, unknown>
+  startedAt: string
+  endedAt?: string
+  exitCode?: number
+  exitSignal?: string
+  errorSummary?: string
+}
+
+export interface RuntimeEventSummary {
+  id: string
+  runId: string
+  workSessionId: string
+  runtimeConfigId: string
+  type: string
+  content?: string
+  metadata?: Record<string, unknown>
+  displayCategory: RuntimeEventDisplayCategory
+  sequenceNo: number
+  createdAt: string
+}
+
+export interface SessionSendMessageInput {
+  workSessionId: string
+  content: string
+}
+
+export interface SessionSendMessageResult {
+  userMessage: MessageSummary
+  assistantMessage?: MessageSummary
+  run: RuntimeRunSummary
+  events: RuntimeEventSummary[]
+}
+
 export interface AppAPI {
   getInfo: () => Promise<ApiResult<AppInfo>>
 }
@@ -608,6 +660,9 @@ export interface SessionAPI {
   archive: (input: WorkSessionArchiveInput) => Promise<ApiResult<WorkSessionDetail>>
   listMessages: (input: MessageListInput) => Promise<ApiResult<MessageSummary[]>>
   addMessage: (input: MessageCreateInput) => Promise<ApiResult<MessageSummary>>
+  sendMessage: (input: SessionSendMessageInput) => Promise<ApiResult<SessionSendMessageResult>>
+  listRuns: (workSessionId: string) => Promise<ApiResult<RuntimeRunSummary[]>>
+  listEvents: (runId: string) => Promise<ApiResult<RuntimeEventSummary[]>>
 }
 
 export interface AgentSpaceAPI {

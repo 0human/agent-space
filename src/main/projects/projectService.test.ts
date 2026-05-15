@@ -101,7 +101,7 @@ describe('ProjectService', () => {
     ).toThrow('defaultAiTeamId and defaultAiRuntimeConfigId are mutually exclusive.')
   })
 
-  it('returns a warning for first-session action without creating a session yet', () => {
+  it('creates the first work session when requested', () => {
     const { repositories, projectService } = createServices()
 
     const result = projectService.create({
@@ -110,10 +110,16 @@ describe('ProjectService', () => {
       postCreateAction: 'open_first_session'
     })
 
-    expect(result.createdSessionId).toBeUndefined()
-    expect(result.postCreateWarning).toContain('Phase 5')
+    expect(result.createdSessionId).toBeTruthy()
     expect(repositories.projects.getById(result.project.id)).toBeTruthy()
-    expect(repositories.workSessions.listByProject(result.project.id)).toEqual([])
+    expect(repositories.workSessions.listByProject(result.project.id)).toEqual([
+      expect.objectContaining({
+        id: result.createdSessionId,
+        title: 'Session Later Session',
+        assignmentMode: 'manual',
+        activeAssigneeType: 'user'
+      })
+    ])
   })
 
   it('archives a project and its sessions when requested', () => {

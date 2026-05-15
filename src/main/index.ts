@@ -6,6 +6,7 @@ import { registerAppIpc } from './ipc/app'
 import { registerPermissionIpc } from './ipc/permissions'
 import { registerProjectIpc } from './ipc/projects'
 import { registerRuntimeIpc } from './ipc/runtime'
+import { registerSessionIpc } from './ipc/sessions'
 import { registerTeamIpc } from './ipc/teams'
 import { PermissionService } from './permissions/permissionService'
 import { AgentProfileService } from './profiles/agentProfileService'
@@ -18,6 +19,7 @@ import {
   RuntimeTester
 } from './runtime'
 import { recoverInterruptedRuns } from './services/startupRecovery'
+import { SessionService } from './sessions/sessionService'
 import { TeamService } from './teams/teamService'
 
 const isDev = Boolean(process.env.ELECTRON_RENDERER_URL)
@@ -56,6 +58,7 @@ app.whenReady().then(() => {
   permissionService.ensureRecommendedPolicySets()
   const agentProfileService = new AgentProfileService(database.db, permissionService)
   const teamService = new TeamService(database.db)
+  const sessionService = new SessionService(database.db)
   const projectService = new ProjectService(database.db)
   const runtimeService = new RuntimeService(
     database.db,
@@ -66,6 +69,7 @@ app.whenReady().then(() => {
   registerPermissionIpc(permissionService)
   registerAgentProfileIpc(agentProfileService)
   registerTeamIpc(teamService)
+  registerSessionIpc(sessionService)
   registerProjectIpc(projectService)
   registerRuntimeIpc(runtimeService, new RuntimeImportService(database.db, runtimeService))
   createMainWindow()

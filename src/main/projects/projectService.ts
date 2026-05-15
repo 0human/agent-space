@@ -88,12 +88,51 @@ export class ProjectService {
         })
       }
 
+      const session =
+        validated.postCreateAction === 'open_first_session'
+          ? repositories.workSessions.create({
+              projectId: project.id,
+              title: `${project.name} Session`,
+              goal: project.description,
+              status: 'idle',
+              aiTeamId: project.defaultAiTeamId,
+              aiRuntimeConfigId: project.defaultAiRuntimeConfigId,
+              agentProfileId: project.defaultAgentProfileId,
+              assignmentMode: project.defaultAiTeamId
+                ? 'team_member'
+                : project.defaultAiRuntimeConfigId
+                  ? 'runtime'
+                  : 'manual',
+              activeAssigneeType: project.defaultAiTeamId
+                ? 'team_member'
+                : project.defaultAiRuntimeConfigId
+                  ? 'runtime'
+                  : 'user',
+              lastMessageAt: createdAt,
+              resolvedConfigSnapshotJson: JSON.stringify({
+                projectId: project.id,
+                projectMode: project.mode,
+                createdFrom: 'project_create'
+              })
+            })
+          : undefined
+
+      if (session) {
+        repositories.projectMetricSnapshots.create({
+          projectId: project.id,
+          activeSessionCount: 1,
+          runningAgentCount: 0,
+          waitingInputCount: 0,
+          waitingPermissionCount: 0,
+          errorSessionCount: 0,
+          fileChangeCount: 0,
+          snapshotAt: createdAt
+        })
+      }
+
       return {
         project: this.toDetail(project, metrics),
-        postCreateWarning:
-          validated.postCreateAction === 'open_first_session'
-            ? 'First session creation is available in Phase 5. Project was saved.'
-            : undefined
+        createdSessionId: session?.id
       }
     })
   }

@@ -26,6 +26,15 @@ import {
   RUNTIME_UPDATE_CHANNEL
 } from '../main/ipc/runtime'
 import {
+  SESSION_ADD_MESSAGE_CHANNEL,
+  SESSION_ARCHIVE_CHANNEL,
+  SESSION_CREATE_CHANNEL,
+  SESSION_GET_CHANNEL,
+  SESSION_LIST_CHANNEL,
+  SESSION_LIST_MESSAGES_CHANNEL,
+  SESSION_UPDATE_CHANNEL
+} from '../main/ipc/sessions'
+import {
   PROJECT_ARCHIVE_CHANNEL,
   PROJECT_CREATE_CHANNEL,
   PROJECT_GET_CHANNEL,
@@ -79,6 +88,15 @@ const agentSpace: AgentSpaceAPI = {
     create: (input) => ipcRenderer.invoke(PROJECT_CREATE_CHANNEL, input),
     update: (input) => ipcRenderer.invoke(PROJECT_UPDATE_CHANNEL, input),
     archive: (input) => ipcRenderer.invoke(PROJECT_ARCHIVE_CHANNEL, input)
+  },
+  sessions: {
+    list: (input) => ipcRenderer.invoke(SESSION_LIST_CHANNEL, input),
+    get: (id) => ipcRenderer.invoke(SESSION_GET_CHANNEL, id),
+    create: (input) => ipcRenderer.invoke(SESSION_CREATE_CHANNEL, input),
+    update: (input) => ipcRenderer.invoke(SESSION_UPDATE_CHANNEL, input),
+    archive: (input) => ipcRenderer.invoke(SESSION_ARCHIVE_CHANNEL, input),
+    listMessages: (input) => ipcRenderer.invoke(SESSION_LIST_MESSAGES_CHANNEL, input),
+    addMessage: (input) => ipcRenderer.invoke(SESSION_ADD_MESSAGE_CHANNEL, input)
   }
 }
 

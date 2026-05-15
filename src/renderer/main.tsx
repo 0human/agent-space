@@ -7,6 +7,7 @@ import { PermissionsPage } from './features/permissions/PermissionsPage'
 import { ProjectsPage } from './features/projects/ProjectsPage'
 import { AgentProfilesPage } from './features/profiles/AgentProfilesPage'
 import { RuntimesPage } from './features/runtimes/RuntimesPage'
+import { WorkSessionsPage } from './features/sessions/WorkSessionsPage'
 import { PlaceholderPage } from './features/shared/PlaceholderPage'
 import { TeamsPage } from './features/teams/TeamsPage'
 import './styles.css'
@@ -18,7 +19,7 @@ const router = createHashRouter([
     children: [
       { index: true, element: <DashboardPage /> },
       { path: 'projects', element: <ProjectsPage /> },
-      { path: 'sessions', element: <PlaceholderPage title="Work Sessions" /> },
+      { path: 'sessions', element: <WorkSessionsPage /> },
       { path: 'runtimes', element: <RuntimesPage /> },
       { path: 'profiles', element: <AgentProfilesPage /> },
       { path: 'permissions', element: <PermissionsPage /> },

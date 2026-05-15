@@ -63,6 +63,18 @@ export type ProjectPhase =
   | 'delivery'
   | 'archived'
 export type RiskStatus = 'normal' | 'attention' | 'risk'
+export type WorkSessionStatus =
+  | 'idle'
+  | 'running'
+  | 'waiting_input'
+  | 'waiting_permission'
+  | 'completed'
+  | 'error'
+  | 'archived'
+export type WorkSessionAssignmentMode = 'team_member' | 'runtime' | 'manual'
+export type WorkSessionAssigneeType = 'team_member' | 'runtime' | 'user'
+export type MessageRole = 'user' | 'assistant' | 'system' | 'tool'
+export type MessageEventType = 'message' | 'member_switch' | 'handoff'
 export type TeamDefaultLaunchMode = 'analysis' | 'development' | 'custom'
 export type TeamMemberRole =
   | 'analyst'
@@ -439,6 +451,99 @@ export interface ProjectArchiveInput {
   archiveSessions?: boolean
 }
 
+export interface WorkSessionListInput {
+  projectId?: string
+  archived?: boolean
+  status?: WorkSessionStatus
+}
+
+export interface WorkSessionSummary {
+  id: string
+  projectId: string
+  projectName: string
+  title: string
+  goal?: string
+  status: WorkSessionStatus
+  assignmentMode: WorkSessionAssignmentMode
+  activeAssigneeType: WorkSessionAssigneeType
+  aiTeamId?: string
+  aiTeamMemberId?: string
+  aiRuntimeConfigId?: string
+  agentProfileId?: string
+  parentWorkSessionId?: string
+  latestRunId?: string
+  summary?: string
+  lastMessageAt?: string
+  createdAt: string
+  updatedAt: string
+  archivedAt?: string
+  messageCount: number
+}
+
+export interface WorkSessionDetail extends WorkSessionSummary {
+  externalSessionId?: string
+  resolvedConfigSnapshot?: Record<string, unknown>
+}
+
+export interface WorkSessionCreateInput {
+  projectId: string
+  title: string
+  goal?: string
+  aiTeamId?: string
+  aiTeamMemberId?: string
+  aiRuntimeConfigId?: string
+  agentProfileId?: string
+  assignmentMode?: WorkSessionAssignmentMode
+  parentWorkSessionId?: string
+  permissionPolicySetIds?: string[]
+}
+
+export interface WorkSessionUpdateInput {
+  id: string
+  title?: string
+  goal?: string
+  status?: WorkSessionStatus
+  summary?: string
+}
+
+export interface WorkSessionArchiveInput {
+  id: string
+}
+
+export interface MessageSummary {
+  id: string
+  workSessionId: string
+  role: MessageRole
+  eventType: MessageEventType
+  aiTeamMemberId?: string
+  fromAiTeamMemberId?: string
+  toAiTeamMemberId?: string
+  content: string
+  inputSummary?: Record<string, unknown>
+  inputEnvelopeSnapshot?: Record<string, unknown>
+  displayState?: Record<string, unknown>
+  runtimeSnapshot?: Record<string, unknown>
+  tokenUsage?: Record<string, unknown>
+  error?: Record<string, unknown>
+  createdAt: string
+}
+
+export interface MessageListInput {
+  workSessionId: string
+  limit?: number
+  offset?: number
+}
+
+export interface MessageCreateInput {
+  workSessionId: string
+  role?: MessageRole
+  eventType?: MessageEventType
+  content: string
+  aiTeamMemberId?: string
+  inputSummary?: Record<string, unknown>
+  inputEnvelopeSnapshot?: Record<string, unknown>
+}
+
 export interface AppAPI {
   getInfo: () => Promise<ApiResult<AppInfo>>
 }
@@ -495,6 +600,16 @@ export interface ProjectAPI {
   archive: (input: ProjectArchiveInput) => Promise<ApiResult<ProjectDetail>>
 }
 
+export interface SessionAPI {
+  list: (input?: WorkSessionListInput) => Promise<ApiResult<WorkSessionSummary[]>>
+  get: (id: string) => Promise<ApiResult<WorkSessionDetail>>
+  create: (input: WorkSessionCreateInput) => Promise<ApiResult<WorkSessionDetail>>
+  update: (input: WorkSessionUpdateInput) => Promise<ApiResult<WorkSessionDetail>>
+  archive: (input: WorkSessionArchiveInput) => Promise<ApiResult<WorkSessionDetail>>
+  listMessages: (input: MessageListInput) => Promise<ApiResult<MessageSummary[]>>
+  addMessage: (input: MessageCreateInput) => Promise<ApiResult<MessageSummary>>
+}
+
 export interface AgentSpaceAPI {
   app: AppAPI
   runtimes: RuntimeAPI
@@ -502,4 +617,5 @@ export interface AgentSpaceAPI {
   agentProfiles: AgentProfileAPI
   teams: TeamAPI
   projects: ProjectAPI
+  sessions: SessionAPI
 }

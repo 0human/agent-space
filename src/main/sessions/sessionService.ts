@@ -243,6 +243,10 @@ export class SessionService {
       if (!session || session.archivedAt) {
         throw new ValidationError('Work Session not found.')
       }
+      const project = repositories.projects.getById(session.projectId)
+      if (!project || project.archivedAt) {
+        throw new ValidationError('Project not found.')
+      }
 
       const runtime = session.aiRuntimeConfigId
         ? repositories.runtimes.getById(session.aiRuntimeConfigId)
@@ -258,7 +262,9 @@ export class SessionService {
 
       const args = this.parseArgs(runtime.defaultArgsJson)
       const cwd =
-        runtime.defaultCwdMode === 'custom_path' ? (runtime.customCwd ?? undefined) : undefined
+        runtime.defaultCwdMode === 'custom_path'
+          ? (runtime.customCwd ?? undefined)
+          : project.localPath
       const stdin = this.buildRuntimeInput(session, runtime.provider, validated.content)
       const userMessage = repositories.messages.create({
         workSessionId: session.id,
@@ -293,6 +299,7 @@ export class SessionService {
 
     const runningProcess = this.processRunner.start(setup.command, setup.args, {
       timeoutMs: 15000,
+      cwd: setup.cwd,
       stdin: setup.stdin,
       onStdoutChunk: (chunk) => {
         this.appendRuntimeEvent(
@@ -320,15 +327,7 @@ export class SessionService {
       workSessionId: setup.session.id,
       runtimeConfigId: setup.runtime.id
     })
-    this.appendRuntimeEvent(
-      setup.run.id,
-      setup.session.id,
-      setup.runtime.id,
-      'run_started',
-      `Started ${setup.command}`,
-      'status',
-      startTime
-    )
+    const startedRun = this.markRunStarted(setup.run.id, setup.session.id, setup.runtime.id)
     this.emitChanged({
       workSessionId: setup.session.id,
       runId: setup.run.id,
@@ -339,7 +338,7 @@ export class SessionService {
 
     return {
       userMessage: this.toMessageSummary(setup.userMessage),
-      run: this.toRuntimeRunSummary(setup.run),
+      run: this.toRuntimeRunSummary(startedRun),
       events: this.listEvents(setup.run.id)
     }
   }
@@ -664,6 +663,29 @@ export class SessionService {
       })
     })
     this.emitChanged({ workSessionId, runId, reason: 'run_event_created' })
+  }
+
+  private markRunStarted(
+    runId: string,
+    workSessionId: string,
+    runtimeConfigId: string
+  ): RuntimeRun {
+    return this.db.transaction((tx) => {
+      const repositories = createRepositories(tx)
+      const run = repositories.runtimeRuns.update(runId, { status: 'running' })
+      const sequenceNo = repositories.runtimeEvents.listByRun(runId).length + 1
+      repositories.runtimeEvents.create({
+        runId,
+        workSessionId,
+        runtimeConfigId,
+        type: 'run_started',
+        content: `Started ${run.command ?? 'runtime process'}`,
+        displayCategory: 'status',
+        sequenceNo,
+        createdAt: now()
+      })
+      return run
+    })
   }
 
   private emitChanged(event: SessionChangedEvent): void {

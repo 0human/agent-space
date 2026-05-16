@@ -11,6 +11,7 @@ export interface ProcessRunResult {
 export interface ProcessRunOptions {
   timeoutMs?: number
   stdin?: string
+  cwd?: string
   onStdoutChunk?: (chunk: string) => void
   onStderrChunk?: (chunk: string) => void
 }
@@ -28,6 +29,7 @@ export interface ProcessRunner {
 export class NodeProcessRunner implements ProcessRunner {
   start(command: string, args: string[], options: ProcessRunOptions = {}): RunningProcess {
     const child = spawn(command, args, {
+      cwd: options.cwd,
       shell: false,
       windowsHide: true
     })

@@ -11,9 +11,12 @@ import { SessionService } from './sessionService'
 const handles: DatabaseHandle[] = []
 
 class FakeProcessRunner implements ProcessRunner {
+  lastStartOptions?: ProcessRunOptions
+
   constructor(private readonly result: ProcessRunResult) {}
 
   start(_command: string, _args: string[], options?: ProcessRunOptions): RunningProcess {
+    this.lastStartOptions = options
     if (this.result.stdout) {
       options?.onStdoutChunk?.(this.result.stdout)
     }
@@ -65,13 +68,17 @@ function createServices() {
   const repositories = createRepositories(handle.db)
   handles.push(handle)
 
+  const processRunner = new FakeProcessRunner({
+    exitCode: 0,
+    stdout: 'assistant reply\n',
+    stderr: ''
+  })
+
   return {
     repositories,
     projectService: new ProjectService(handle.db),
-    sessionService: new SessionService(
-      handle.db,
-      new FakeProcessRunner({ exitCode: 0, stdout: 'assistant reply\n', stderr: '' })
-    )
+    processRunner,
+    sessionService: new SessionService(handle.db, processRunner)
   }
 }
 
@@ -183,7 +190,7 @@ describe('SessionService', () => {
   })
 
   it('creates run, events, and assistant output when sending a message succeeds', async () => {
-    const { repositories, projectService, sessionService } = createServices()
+    const { repositories, projectService, processRunner, sessionService } = createServices()
     const runtime = repositories.runtimes.create({
       name: 'Echo Runtime',
       provider: 'custom_cli',
@@ -207,7 +214,9 @@ describe('SessionService', () => {
 
     await new Promise((resolve) => setTimeout(resolve, 0))
 
-    expect(result.run.status).toBe('starting')
+    expect(result.run.status).toBe('running')
+    expect(result.run.cwd).toBe('/tmp/run-project')
+    expect(processRunner.lastStartOptions?.cwd).toBe('/tmp/run-project')
     expect(sessionService.listRuns(session.id)).toHaveLength(1)
     expect(sessionService.listEvents(result.run.id)).toEqual(
       expect.arrayContaining([
@@ -250,7 +259,7 @@ describe('SessionService', () => {
 
     await new Promise((resolve) => setTimeout(resolve, 0))
 
-    expect(result.run.status).toBe('starting')
+    expect(result.run.status).toBe('running')
     expect(sessionService.listEvents(result.run.id)).toEqual(
       expect.arrayContaining([expect.objectContaining({ type: 'stderr_chunk', content: 'boom' })])
     )
@@ -284,7 +293,7 @@ describe('SessionService', () => {
     })
 
     const runBeforeStop = sessionService.listRuns(session.id)[0]
-    expect(runBeforeStop.status).toBe('starting')
+    expect(runBeforeStop.status).toBe('running')
 
     sessionService.stopRun({ workSessionId: session.id })
     await sendPromise

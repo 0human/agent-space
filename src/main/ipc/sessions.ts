@@ -27,9 +27,9 @@ export const SESSION_LIST_RUNS_CHANNEL = 'session:listRuns'
 export const SESSION_LIST_EVENTS_CHANNEL = 'session:listEvents'
 export const SESSION_CHANGED_CHANNEL = 'session:changed'
 
-function toSessionResult<T>(callback: () => T) {
+export async function toSessionResult<T>(callback: () => T | Promise<T>) {
   try {
-    return ok(callback())
+    return ok(await callback())
   } catch (error) {
     if (error instanceof ValidationError) {
       return fail('validation_error', error.message)

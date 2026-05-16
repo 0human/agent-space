@@ -265,14 +265,24 @@ export class SessionService {
         runtime.defaultCwdMode === 'custom_path'
           ? (runtime.customCwd ?? undefined)
           : project.localPath
-      const stdin = this.buildRuntimeInput(session, runtime.provider, validated.content)
+      const runtimeInputEnvelope = this.buildRuntimeInputEnvelope(
+        session,
+        runtime.provider,
+        validated.content
+      )
+      const stdin = this.stringifyRuntimeInput(runtime.provider, runtimeInputEnvelope)
       const userMessage = repositories.messages.create({
         workSessionId: session.id,
         role: 'user',
         eventType: 'message',
         aiTeamMemberId: session.aiTeamMemberId ?? undefined,
         content: validated.content,
-        inputSummaryJson: JSON.stringify({ source: 'session_send_message' }),
+        inputSummaryJson: JSON.stringify({
+          source: 'session_send_message',
+          provider: runtime.provider,
+          runtimeConfigId: runtime.id
+        }),
+        inputEnvelopeSnapshotJson: JSON.stringify(runtimeInputEnvelope),
         createdAt: startTime
       })
       const run = repositories.runtimeRuns.create({
@@ -489,25 +499,30 @@ export class SessionService {
     }
   }
 
-  private buildRuntimeInput(
+  private buildRuntimeInputEnvelope(
     session: WorkSession,
     provider: string,
     content: string
+  ): Record<string, unknown> {
+    return {
+      version: 1,
+      provider,
+      workSessionId: session.id,
+      title: session.title,
+      goal: session.goal ?? undefined,
+      prompt: content
+    }
+  }
+
+  private stringifyRuntimeInput(
+    provider: string,
+    runtimeInputEnvelope: Record<string, unknown>
   ): string | undefined {
     if (provider !== 'custom_cli') {
       return undefined
     }
 
-    return JSON.stringify(
-      {
-        workSessionId: session.id,
-        title: session.title,
-        goal: session.goal ?? undefined,
-        prompt: content
-      },
-      null,
-      2
-    )
+    return JSON.stringify(runtimeInputEnvelope, null, 2)
   }
 
   private async finalizeRun(

@@ -217,6 +217,7 @@ describe('SessionService', () => {
     expect(result.run.status).toBe('running')
     expect(result.run.cwd).toBe('/tmp/run-project')
     expect(processRunner.lastStartOptions?.cwd).toBe('/tmp/run-project')
+    expect(processRunner.lastStartOptions?.stdin).toContain('"prompt": "Say something"')
     expect(sessionService.listRuns(session.id)).toHaveLength(1)
     expect(sessionService.listEvents(result.run.id)).toEqual(
       expect.arrayContaining([
@@ -227,6 +228,21 @@ describe('SessionService', () => {
     )
     expect(sessionService.listMessages({ workSessionId: session.id }).at(-1)?.content).toBe(
       'assistant reply'
+    )
+    expect(sessionService.listMessages({ workSessionId: session.id })[0]).toEqual(
+      expect.objectContaining({
+        inputSummary: expect.objectContaining({
+          source: 'session_send_message',
+          provider: 'custom_cli',
+          runtimeConfigId: runtime.id
+        }),
+        inputEnvelopeSnapshot: expect.objectContaining({
+          version: 1,
+          provider: 'custom_cli',
+          workSessionId: session.id,
+          prompt: 'Say something'
+        })
+      })
     )
     expect(sessionService.get(session.id).status).toBe('completed')
   })

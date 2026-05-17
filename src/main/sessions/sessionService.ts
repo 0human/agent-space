@@ -4,6 +4,7 @@ import type {
   MessageSummary,
   ProjectMetrics,
   RuntimeEventSummary,
+  RuntimeProvider,
   RuntimeRunSummary,
   SessionChangedEvent,
   SessionHandoffInput,
@@ -23,8 +24,16 @@ import type {
 import { createRepositories, type Repositories } from '../db'
 import type { AppDatabase } from '../db/client'
 import type { Message, RuntimeEvent, RuntimeRun, WorkSession } from '../db/schema'
-import type { ProcessRunner, RunningProcess } from '../runtime'
-import { ValidationError } from '../runtime'
+import type {
+  ProcessRunner,
+  RuntimeAdapter,
+  RunningProcess,
+  RuntimeRegistryService
+} from '../runtime'
+import {
+  RuntimeRegistryService as DefaultRuntimeRegistryService,
+  ValidationError
+} from '../runtime'
 import {
   validateMessageCreateInput,
   validateMessageListInput,
@@ -72,7 +81,8 @@ export class SessionService {
 
   constructor(
     private readonly db: AppDatabase,
-    private readonly processRunner: ProcessRunner
+    private readonly processRunner: ProcessRunner,
+    private readonly runtimeRegistry: RuntimeRegistryService = new DefaultRuntimeRegistryService()
   ) {}
 
   onChanged(listener: (event: SessionChangedEvent) => void): () => void {
@@ -260,22 +270,18 @@ export class SessionService {
         throw new ValidationError('Runtime not configured for this Work Session.')
       }
 
-      const command = runtime.executablePath?.trim()
-      if (!command) {
-        throw new ValidationError('Runtime executablePath is required before sending a message.')
+      if (session.latestRunId && this.activeRuns.has(session.latestRunId)) {
+        throw new ValidationError('This Work Session already has an active Runtime Run.')
       }
 
-      const args = this.parseArgs(runtime.defaultArgsJson)
-      const cwd =
-        runtime.defaultCwdMode === 'custom_path'
-          ? (runtime.customCwd ?? undefined)
-          : project.localPath
-      const runtimeInputEnvelope = this.buildRuntimeInputEnvelope(
+      const adapter = this.runtimeRegistry.get(runtime.provider as RuntimeProvider)
+      const startPlan = adapter.createStartPlan({
+        runtime,
         session,
-        runtime.provider,
-        validated.content
-      )
-      const stdin = this.stringifyRuntimeInput(runtime.provider, runtimeInputEnvelope)
+        projectLocalPath: project.localPath,
+        prompt: validated.content,
+        resumeExternalSessionId: validated.resumeExternalSessionId
+      })
       const userMessage = repositories.messages.create({
         workSessionId: session.id,
         role: 'user',
@@ -285,9 +291,10 @@ export class SessionService {
         inputSummaryJson: JSON.stringify({
           source: 'session_send_message',
           provider: runtime.provider,
-          runtimeConfigId: runtime.id
+          runtimeConfigId: runtime.id,
+          supportsExternalSessionResume: startPlan.supportsExternalSessionResume
         }),
-        inputEnvelopeSnapshotJson: JSON.stringify(runtimeInputEnvelope),
+        inputEnvelopeSnapshotJson: JSON.stringify(startPlan.inputEnvelope),
         createdAt: startTime
       })
       const run = repositories.runtimeRuns.create({
@@ -295,9 +302,9 @@ export class SessionService {
         runtimeConfigId: runtime.id,
         provider: runtime.provider,
         status: 'starting',
-        command,
-        argsJson: JSON.stringify(args),
-        cwd,
+        command: startPlan.command,
+        argsJson: JSON.stringify(startPlan.args),
+        cwd: startPlan.cwd,
         envSummaryJson: JSON.stringify({}),
         startedAt: startTime
       })
@@ -309,13 +316,13 @@ export class SessionService {
       repositories.projects.update(session.projectId, { lastActiveAt: startTime })
       this.refreshProjectMetrics(session.projectId, repositories)
 
-      return { session, runtime, userMessage, run, command, args, cwd, stdin }
+      return { session, runtime, userMessage, run, startPlan, adapter }
     })
 
-    const runningProcess = this.processRunner.start(setup.command, setup.args, {
+    const runningProcess = this.processRunner.start(setup.startPlan.command, setup.startPlan.args, {
       timeoutMs: 15000,
-      cwd: setup.cwd,
-      stdin: setup.stdin,
+      cwd: setup.startPlan.cwd,
+      stdin: setup.startPlan.stdin,
       onStdoutChunk: (chunk) => {
         this.appendRuntimeEvent(
           setup.run.id,
@@ -650,42 +657,19 @@ export class SessionService {
     }
   }
 
-  private buildRuntimeInputEnvelope(
-    session: WorkSession,
-    provider: string,
-    content: string
-  ): Record<string, unknown> {
-    return {
-      version: 1,
-      provider,
-      workSessionId: session.id,
-      title: session.title,
-      goal: session.goal ?? undefined,
-      prompt: content
-    }
-  }
-
-  private stringifyRuntimeInput(
-    provider: string,
-    runtimeInputEnvelope: Record<string, unknown>
-  ): string | undefined {
-    if (provider !== 'custom_cli') {
-      return undefined
-    }
-
-    return JSON.stringify(runtimeInputEnvelope, null, 2)
-  }
-
   private async finalizeRun(
     setup: {
       session: WorkSession
       runtime: { id: string; provider: string }
       userMessage: Message
       run: RuntimeRun
-      command: string
-      args: string[]
-      cwd?: string
-      stdin?: string
+      adapter: RuntimeAdapter
+      startPlan: {
+        command: string
+        args: string[]
+        cwd?: string
+        stdin?: string
+      }
     },
     runningProcess: RunningProcess
   ): Promise<void> {
@@ -757,13 +741,15 @@ export class SessionService {
         errorSummary
       })
 
-      if (processResult.stdout.trim()) {
+      const assistantContent = setup.adapter.extractAssistantMessage(processResult.stdout)
+
+      if (assistantContent) {
         repositories.messages.create({
           workSessionId: setup.session.id,
           role: 'assistant',
           eventType: 'message',
           aiTeamMemberId: setup.session.aiTeamMemberId ?? undefined,
-          content: processResult.stdout.trim(),
+          content: assistantContent,
           runtimeSnapshotJson: JSON.stringify({
             runId: updatedRun.id,
             provider: updatedRun.provider,

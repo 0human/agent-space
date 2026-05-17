@@ -12,6 +12,17 @@ export {
   type RuntimeImportCandidate,
   type RuntimeImportRawInput
 } from './importAdapters'
+export {
+  ClaudeCodeCliRuntimeAdapter,
+  CodexCliRuntimeAdapter,
+  CustomCliRuntimeAdapter,
+  GeminiCliRuntimeAdapter,
+  RuntimeRegistryService,
+  type RuntimeAdapter,
+  type RuntimeInputEnvelope,
+  type RuntimeStartPlan,
+  type RuntimeStartPlanInput
+} from './runtimeAdapters'
 export { RuntimeImportService } from './runtimeImportService'
 export { RuntimeService } from './runtimeService'
 export { RuntimeTester } from './runtimeTester'

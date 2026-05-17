@@ -5,7 +5,15 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { createDatabaseHandle, type DatabaseHandle } from '../db/client'
 import { createRepositories } from '../db/repositories'
 import { ProjectService } from '../projects/projectService'
-import type { ProcessRunOptions, ProcessRunner, ProcessRunResult, RunningProcess } from '../runtime'
+import type {
+  ProcessRunOptions,
+  ProcessRunner,
+  ProcessRunResult,
+  RuntimeAdapter,
+  RuntimeStartPlanInput,
+  RunningProcess
+} from '../runtime'
+import { RuntimeRegistryService } from '../runtime'
 import { SessionService } from './sessionService'
 
 const handles: DatabaseHandle[] = []
@@ -62,6 +70,35 @@ class ControllableProcessRunner implements ProcessRunner {
   }
 }
 
+class ResumeAwareCustomAdapter implements RuntimeAdapter {
+  readonly provider = 'custom_cli'
+  readonly supportsExternalSessionResume = true
+
+  createStartPlan(input: RuntimeStartPlanInput) {
+    return {
+      command: input.runtime.executablePath ?? '/bin/echo',
+      args: input.resumeExternalSessionId ? ['--resume', input.resumeExternalSessionId] : [],
+      cwd: input.projectLocalPath,
+      stdin: input.prompt,
+      inputEnvelope: {
+        version: 1 as const,
+        provider: 'custom_cli' as const,
+        workSessionId: input.session.id,
+        title: input.session.title,
+        goal: input.session.goal ?? undefined,
+        prompt: input.prompt,
+        resumeExternalSessionId: input.resumeExternalSessionId
+      },
+      resumeExternalSessionId: input.resumeExternalSessionId,
+      supportsExternalSessionResume: this.supportsExternalSessionResume
+    }
+  }
+
+  extractAssistantMessage(stdout: string): string | undefined {
+    return stdout.trim() || undefined
+  }
+}
+
 function createServices() {
   const dir = mkdtempSync(join(tmpdir(), 'agent-space-sessions-'))
   const handle = createDatabaseHandle(join(dir, 'test.sqlite'))
@@ -105,6 +142,22 @@ function createServicesWithProcessRunner(processRunner: ProcessRunner) {
     repositories,
     projectService: new ProjectService(handle.db),
     sessionService: new SessionService(handle.db, processRunner)
+  }
+}
+
+function createServicesWithRegistry(
+  processRunner: ProcessRunner,
+  registry: RuntimeRegistryService
+) {
+  const dir = mkdtempSync(join(tmpdir(), 'agent-space-sessions-'))
+  const handle = createDatabaseHandle(join(dir, 'test.sqlite'))
+  const repositories = createRepositories(handle.db)
+  handles.push(handle)
+
+  return {
+    repositories,
+    projectService: new ProjectService(handle.db),
+    sessionService: new SessionService(handle.db, processRunner, registry)
   }
 }
 
@@ -468,6 +521,88 @@ describe('SessionService', () => {
     expect(sessionService.get(session.id).status).toBe('idle')
     expect(sessionService.listEvents(stoppedRun.id)).toEqual(
       expect.arrayContaining([expect.objectContaining({ type: 'run_stopped' })])
+    )
+  })
+
+  it('blocks a second send while a run is active', async () => {
+    const runner = new ControllableProcessRunner()
+    const { repositories, projectService, sessionService } = createServicesWithProcessRunner(runner)
+    const runtime = repositories.runtimes.create({
+      name: 'Busy Runtime',
+      provider: 'custom_cli',
+      executablePath: '/bin/sleep'
+    })
+    const project = projectService.create({
+      name: 'Busy Project',
+      localPath: '/tmp/busy-project',
+      defaultAiRuntimeConfigId: runtime.id
+    }).project
+    const session = sessionService.create({
+      projectId: project.id,
+      title: 'Busy'
+    })
+
+    const sendPromise = sessionService.sendMessage({
+      workSessionId: session.id,
+      content: 'First run'
+    })
+
+    await expect(
+      sessionService.sendMessage({
+        workSessionId: session.id,
+        content: 'Second run'
+      })
+    ).rejects.toThrow('already has an active Runtime Run')
+
+    sessionService.stopRun({ workSessionId: session.id })
+    await sendPromise
+  })
+
+  it('lets runtime adapters decide whether to pass resume session ids', async () => {
+    const processRunner = new FakeProcessRunner({
+      exitCode: 0,
+      stdout: 'resumed\n',
+      stderr: ''
+    })
+    const registry = new RuntimeRegistryService([new ResumeAwareCustomAdapter()])
+    const { repositories, projectService, sessionService } = createServicesWithRegistry(
+      processRunner,
+      registry
+    )
+    const runtime = repositories.runtimes.create({
+      name: 'Resume Runtime',
+      provider: 'custom_cli',
+      executablePath: '/bin/echo'
+    })
+    const project = projectService.create({
+      name: 'Resume Project',
+      localPath: '/tmp/resume-project',
+      defaultAiRuntimeConfigId: runtime.id
+    }).project
+    const session = sessionService.create({
+      projectId: project.id,
+      title: 'Resume'
+    })
+
+    const result = await sessionService.sendMessage({
+      workSessionId: session.id,
+      content: 'Continue',
+      resumeExternalSessionId: 'external-123'
+    })
+
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(result.run.args).toEqual(['--resume', 'external-123'])
+    expect(processRunner.lastStartOptions?.stdin).toBe('Continue')
+    expect(sessionService.listMessages({ workSessionId: session.id })[0]).toEqual(
+      expect.objectContaining({
+        inputSummary: expect.objectContaining({
+          supportsExternalSessionResume: true
+        }),
+        inputEnvelopeSnapshot: expect.objectContaining({
+          resumeExternalSessionId: 'external-123'
+        })
+      })
     )
   })
 })

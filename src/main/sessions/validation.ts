@@ -149,7 +149,8 @@ export function validateSessionSendMessageInput(
 ): SessionSendMessageInput {
   return {
     workSessionId: text(input.workSessionId, 'workSessionId', true)!,
-    content: text(input.content, 'content', true)!
+    content: text(input.content, 'content', true)!,
+    resumeExternalSessionId: text(input.resumeExternalSessionId, 'resumeExternalSessionId')
   }
 }
 

@@ -587,6 +587,7 @@ export interface RuntimeEventSummary {
 export interface SessionSendMessageInput {
   workSessionId: string
   content: string
+  resumeExternalSessionId?: string
 }
 
 export interface SessionSendMessageResult {

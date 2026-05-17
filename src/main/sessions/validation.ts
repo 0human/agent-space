@@ -3,7 +3,9 @@ import type {
   MessageEventType,
   MessageListInput,
   MessageRole,
+  SessionHandoffInput,
   SessionSendMessageInput,
+  SessionSwitchMemberInput,
   WorkSessionAssignmentMode,
   WorkSessionCreateInput,
   WorkSessionListInput,
@@ -148,5 +150,30 @@ export function validateSessionSendMessageInput(
   return {
     workSessionId: text(input.workSessionId, 'workSessionId', true)!,
     content: text(input.content, 'content', true)!
+  }
+}
+
+export function validateSessionSwitchMemberInput(
+  input: SessionSwitchMemberInput
+): SessionSwitchMemberInput {
+  return {
+    workSessionId: text(input.workSessionId, 'workSessionId', true)!,
+    toAiTeamMemberId: text(input.toAiTeamMemberId, 'toAiTeamMemberId', true)!,
+    content: text(input.content, 'content')
+  }
+}
+
+export function validateSessionHandoffInput(input: SessionHandoffInput): SessionHandoffInput {
+  const mode = enumValue<'current_session' | 'new_linked_session'>(
+    input.mode,
+    ['current_session', 'new_linked_session'],
+    'mode'
+  )
+  return {
+    workSessionId: text(input.workSessionId, 'workSessionId', true)!,
+    toAiTeamMemberId: text(input.toAiTeamMemberId, 'toAiTeamMemberId', true)!,
+    content: text(input.content, 'content', true)!,
+    mode: mode ?? 'current_session',
+    newSessionTitle: text(input.newSessionTitle, 'newSessionTitle')
   }
 }

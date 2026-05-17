@@ -6,9 +6,12 @@ import type {
   RuntimeEventSummary,
   RuntimeRunSummary,
   SessionChangedEvent,
+  SessionHandoffInput,
+  SessionHandoffResult,
   SessionSendMessageInput,
   SessionSendMessageResult,
   SessionStopRunInput,
+  SessionSwitchMemberInput,
   WorkSessionArchiveInput,
   WorkSessionAssigneeType,
   WorkSessionCreateInput,
@@ -25,7 +28,9 @@ import { ValidationError } from '../runtime'
 import {
   validateMessageCreateInput,
   validateMessageListInput,
+  validateSessionHandoffInput,
   validateSessionSendMessageInput,
+  validateSessionSwitchMemberInput,
   validateWorkSessionCreateInput,
   validateWorkSessionListInput,
   validateWorkSessionUpdateInput
@@ -370,6 +375,152 @@ export class SessionService {
 
     activeRun.runningProcess.stop()
     return this.toRuntimeRunSummary(repositories.runtimeRuns.getById(session.latestRunId)!)
+  }
+
+  switchMember(input: SessionSwitchMemberInput): WorkSessionDetail {
+    const validated = validateSessionSwitchMemberInput(input)
+
+    return this.db.transaction((tx) => {
+      const repositories = createRepositories(tx)
+      const session = repositories.workSessions.getById(validated.workSessionId)
+      if (!session || session.archivedAt) {
+        throw new ValidationError('Work Session not found.')
+      }
+      const targetMember = repositories.teamMembers.getById(validated.toAiTeamMemberId)
+      if (!targetMember || targetMember.enabled !== 1) {
+        throw new ValidationError('Target Team member not found.')
+      }
+      if (session.aiTeamId && targetMember.teamId !== session.aiTeamId) {
+        throw new ValidationError('Target Team member does not belong to this Work Session Team.')
+      }
+
+      const createdAt = now()
+      const content =
+        validated.content ??
+        `Switched active member${session.aiTeamMemberId ? '' : ' from manual/runtime mode'}.`
+      repositories.messages.create({
+        workSessionId: session.id,
+        role: 'system',
+        eventType: 'member_switch',
+        aiTeamMemberId: targetMember.id,
+        fromAiTeamMemberId: session.aiTeamMemberId ?? undefined,
+        toAiTeamMemberId: targetMember.id,
+        content,
+        displayStateJson: JSON.stringify({
+          fromAiTeamMemberId: session.aiTeamMemberId,
+          toAiTeamMemberId: targetMember.id
+        }),
+        createdAt
+      })
+
+      const updated = repositories.workSessions.update(session.id, {
+        aiTeamId: targetMember.teamId,
+        aiTeamMemberId: targetMember.id,
+        aiRuntimeConfigId: targetMember.runtimeConfigId,
+        agentProfileId: targetMember.agentProfileId ?? session.agentProfileId ?? undefined,
+        assignmentMode: 'team_member',
+        activeAssigneeType: 'team_member',
+        lastMessageAt: createdAt
+      })
+      repositories.projects.update(session.projectId, { lastActiveAt: createdAt })
+      this.refreshProjectMetrics(session.projectId, repositories)
+
+      const detail = this.toDetail(updated, repositories)
+      this.emitChanged({ workSessionId: session.id, reason: 'message_created' })
+      return detail
+    })
+  }
+
+  handoff(input: SessionHandoffInput): SessionHandoffResult {
+    const validated = validateSessionHandoffInput(input)
+
+    return this.db.transaction((tx) => {
+      const repositories = createRepositories(tx)
+      const sourceSession = repositories.workSessions.getById(validated.workSessionId)
+      if (!sourceSession || sourceSession.archivedAt) {
+        throw new ValidationError('Work Session not found.')
+      }
+      const project = repositories.projects.getById(sourceSession.projectId)
+      if (!project || project.archivedAt) {
+        throw new ValidationError('Project not found.')
+      }
+      const targetMember = repositories.teamMembers.getById(validated.toAiTeamMemberId)
+      if (!targetMember || targetMember.enabled !== 1) {
+        throw new ValidationError('Target Team member not found.')
+      }
+      if (sourceSession.aiTeamId && targetMember.teamId !== sourceSession.aiTeamId) {
+        throw new ValidationError('Target Team member does not belong to this Work Session Team.')
+      }
+
+      const createdAt = now()
+      const targetSession =
+        validated.mode === 'new_linked_session'
+          ? repositories.workSessions.create({
+              projectId: sourceSession.projectId,
+              title: validated.newSessionTitle ?? `Handoff from ${sourceSession.title}`,
+              goal: sourceSession.goal,
+              status: 'idle',
+              aiTeamId: targetMember.teamId,
+              aiTeamMemberId: targetMember.id,
+              aiRuntimeConfigId: targetMember.runtimeConfigId,
+              agentProfileId: targetMember.agentProfileId ?? sourceSession.agentProfileId,
+              assignmentMode: 'team_member',
+              activeAssigneeType: 'team_member',
+              parentWorkSessionId: sourceSession.id,
+              resolvedConfigSnapshotJson: JSON.stringify({
+                projectId: project.id,
+                projectMode: project.mode,
+                handoffFromWorkSessionId: sourceSession.id,
+                assignmentMode: 'team_member',
+                activeAssigneeType: 'team_member'
+              }),
+              lastMessageAt: createdAt
+            })
+          : repositories.workSessions.update(sourceSession.id, {
+              aiTeamId: targetMember.teamId,
+              aiTeamMemberId: targetMember.id,
+              aiRuntimeConfigId: targetMember.runtimeConfigId,
+              agentProfileId:
+                targetMember.agentProfileId ?? sourceSession.agentProfileId ?? undefined,
+              assignmentMode: 'team_member',
+              activeAssigneeType: 'team_member',
+              lastMessageAt: createdAt
+            })
+
+      const handoffMessage = repositories.messages.create({
+        workSessionId: targetSession.id,
+        role: 'system',
+        eventType: 'handoff',
+        aiTeamMemberId: targetMember.id,
+        fromAiTeamMemberId: sourceSession.aiTeamMemberId ?? undefined,
+        toAiTeamMemberId: targetMember.id,
+        content: validated.content,
+        displayStateJson: JSON.stringify({
+          mode: validated.mode,
+          sourceWorkSessionId: sourceSession.id,
+          targetWorkSessionId: targetSession.id
+        }),
+        createdAt
+      })
+
+      repositories.projects.update(project.id, { lastActiveAt: createdAt })
+      this.refreshProjectMetrics(project.id, repositories)
+
+      const sourceDetail = this.toDetail(
+        repositories.workSessions.getById(sourceSession.id)!,
+        repositories
+      )
+      const targetDetail = this.toDetail(targetSession, repositories)
+      this.emitChanged({ workSessionId: sourceSession.id, reason: 'message_created' })
+      if (targetSession.id !== sourceSession.id) {
+        this.emitChanged({ workSessionId: targetSession.id, reason: 'session_created' })
+      }
+      return {
+        sourceSession: sourceDetail,
+        targetSession: targetDetail,
+        handoffMessage: this.toMessageSummary(handoffMessage)
+      }
+    })
   }
 
   listRuns(workSessionId: string): RuntimeRunSummary[] {

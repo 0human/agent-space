@@ -171,6 +171,154 @@ describe('SessionService', () => {
     expect(sessionService.get(session.id).messageCount).toBe(2)
   })
 
+  it('switches the active member without rewriting existing messages', () => {
+    const { repositories, projectService, sessionService } = createServices()
+    const runtimeA = repositories.runtimes.create({
+      name: 'Runtime A',
+      provider: 'custom_cli',
+      executablePath: '/bin/echo'
+    })
+    const runtimeB = repositories.runtimes.create({
+      name: 'Runtime B',
+      provider: 'custom_cli',
+      executablePath: '/bin/echo'
+    })
+    const team = repositories.teams.create({ name: 'Delivery Team' })
+    const firstMember = repositories.teamMembers.create({
+      teamId: team.id,
+      name: 'Developer',
+      role: 'developer',
+      runtimeConfigId: runtimeA.id,
+      enabled: 1,
+      sortOrder: 0
+    })
+    const secondMember = repositories.teamMembers.create({
+      teamId: team.id,
+      name: 'Reviewer',
+      role: 'reviewer',
+      runtimeConfigId: runtimeB.id,
+      enabled: 1,
+      sortOrder: 1
+    })
+    const project = projectService.create({
+      name: 'Switch Project',
+      localPath: '/tmp/switch-project',
+      defaultAiTeamId: team.id
+    }).project
+    const session = sessionService.create({
+      projectId: project.id,
+      title: 'Review handover'
+    })
+    const originalMessage = sessionService.addMessage({
+      workSessionId: session.id,
+      content: 'Implement the feature first.'
+    })
+
+    const switched = sessionService.switchMember({
+      workSessionId: session.id,
+      toAiTeamMemberId: secondMember.id,
+      content: 'Reviewer takes over from here.'
+    })
+    const nextMessage = sessionService.addMessage({
+      workSessionId: session.id,
+      content: 'Please review the implementation.'
+    })
+    const messages = sessionService.listMessages({ workSessionId: session.id })
+
+    expect(session.aiTeamMemberId).toBe(firstMember.id)
+    expect(switched.aiTeamMemberId).toBe(secondMember.id)
+    expect(switched.aiRuntimeConfigId).toBe(runtimeB.id)
+    expect(messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: originalMessage.id,
+          eventType: 'message',
+          aiTeamMemberId: firstMember.id
+        }),
+        expect.objectContaining({
+          eventType: 'member_switch',
+          fromAiTeamMemberId: firstMember.id,
+          toAiTeamMemberId: secondMember.id,
+          content: 'Reviewer takes over from here.'
+        }),
+        expect.objectContaining({
+          id: nextMessage.id,
+          eventType: 'message',
+          aiTeamMemberId: secondMember.id
+        })
+      ])
+    )
+  })
+
+  it('creates a linked child session when handing off to another member', () => {
+    const { repositories, projectService, sessionService } = createServices()
+    const runtimeA = repositories.runtimes.create({
+      name: 'Runtime A',
+      provider: 'custom_cli',
+      executablePath: '/bin/echo'
+    })
+    const runtimeB = repositories.runtimes.create({
+      name: 'Runtime B',
+      provider: 'custom_cli',
+      executablePath: '/bin/echo'
+    })
+    const team = repositories.teams.create({ name: 'Build Team' })
+    repositories.teamMembers.create({
+      teamId: team.id,
+      name: 'Implementer',
+      role: 'developer',
+      runtimeConfigId: runtimeA.id,
+      enabled: 1,
+      sortOrder: 0
+    })
+    const reviewer = repositories.teamMembers.create({
+      teamId: team.id,
+      name: 'Reviewer',
+      role: 'reviewer',
+      runtimeConfigId: runtimeB.id,
+      enabled: 1,
+      sortOrder: 1
+    })
+    const project = projectService.create({
+      name: 'Handoff Project',
+      localPath: '/tmp/handoff-project',
+      defaultAiTeamId: team.id
+    }).project
+    const sourceSession = sessionService.create({
+      projectId: project.id,
+      title: 'Implementation'
+    })
+    sessionService.update({ id: sourceSession.id, status: 'completed' })
+
+    const result = sessionService.handoff({
+      workSessionId: sourceSession.id,
+      toAiTeamMemberId: reviewer.id,
+      content: 'Review this implementation in a separate window.',
+      mode: 'new_linked_session',
+      newSessionTitle: 'Review'
+    })
+
+    expect(result.sourceSession.id).toBe(sourceSession.id)
+    expect(result.sourceSession.status).toBe('completed')
+    expect(result.targetSession).toEqual(
+      expect.objectContaining({
+        title: 'Review',
+        parentWorkSessionId: sourceSession.id,
+        aiTeamMemberId: reviewer.id,
+        aiRuntimeConfigId: runtimeB.id,
+        status: 'idle'
+      })
+    )
+    expect(result.handoffMessage).toEqual(
+      expect.objectContaining({
+        workSessionId: result.targetSession.id,
+        eventType: 'handoff',
+        toAiTeamMemberId: reviewer.id
+      })
+    )
+    expect(sessionService.list({ projectId: project.id })).toHaveLength(2)
+  })
+
   it('archives a session and removes it from the default list', () => {
     const { projectService, sessionService } = createServices()
     const project = projectService.create({

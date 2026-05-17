@@ -3,8 +3,10 @@ import type {
   MessageCreateInput,
   MessageListInput,
   SessionChangedEvent,
+  SessionHandoffInput,
   SessionSendMessageInput,
   SessionStopRunInput,
+  SessionSwitchMemberInput,
   WorkSessionArchiveInput,
   WorkSessionCreateInput,
   WorkSessionListInput,
@@ -23,6 +25,8 @@ export const SESSION_LIST_MESSAGES_CHANNEL = 'session:listMessages'
 export const SESSION_ADD_MESSAGE_CHANNEL = 'session:addMessage'
 export const SESSION_SEND_MESSAGE_CHANNEL = 'session:sendMessage'
 export const SESSION_STOP_RUN_CHANNEL = 'session:stopRun'
+export const SESSION_SWITCH_MEMBER_CHANNEL = 'session:switchMember'
+export const SESSION_HANDOFF_CHANNEL = 'session:handoff'
 export const SESSION_LIST_RUNS_CHANNEL = 'session:listRuns'
 export const SESSION_LIST_EVENTS_CHANNEL = 'session:listEvents'
 export const SESSION_CHANGED_CHANNEL = 'session:changed'
@@ -74,6 +78,12 @@ export function registerSessionIpc(sessionService: SessionService): void {
   )
   ipcMain.handle(SESSION_STOP_RUN_CHANNEL, (_event, input: SessionStopRunInput) =>
     toSessionResult(() => sessionService.stopRun(input))
+  )
+  ipcMain.handle(SESSION_SWITCH_MEMBER_CHANNEL, (_event, input: SessionSwitchMemberInput) =>
+    toSessionResult(() => sessionService.switchMember(input))
+  )
+  ipcMain.handle(SESSION_HANDOFF_CHANNEL, (_event, input: SessionHandoffInput) =>
+    toSessionResult(() => sessionService.handoff(input))
   )
   ipcMain.handle(SESSION_LIST_RUNS_CHANNEL, (_event, workSessionId: string) =>
     toSessionResult(() => sessionService.listRuns(workSessionId))

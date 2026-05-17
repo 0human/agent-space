@@ -600,6 +600,26 @@ export interface SessionStopRunInput {
   workSessionId: string
 }
 
+export interface SessionSwitchMemberInput {
+  workSessionId: string
+  toAiTeamMemberId: string
+  content?: string
+}
+
+export interface SessionHandoffInput {
+  workSessionId: string
+  toAiTeamMemberId: string
+  content: string
+  mode?: 'current_session' | 'new_linked_session'
+  newSessionTitle?: string
+}
+
+export interface SessionHandoffResult {
+  sourceSession: WorkSessionDetail
+  targetSession: WorkSessionDetail
+  handoffMessage: MessageSummary
+}
+
 export interface SessionChangedEvent {
   workSessionId: string
   runId?: string
@@ -679,6 +699,8 @@ export interface SessionAPI {
   addMessage: (input: MessageCreateInput) => Promise<ApiResult<MessageSummary>>
   sendMessage: (input: SessionSendMessageInput) => Promise<ApiResult<SessionSendMessageResult>>
   stopRun: (input: SessionStopRunInput) => Promise<ApiResult<RuntimeRunSummary>>
+  switchMember: (input: SessionSwitchMemberInput) => Promise<ApiResult<WorkSessionDetail>>
+  handoff: (input: SessionHandoffInput) => Promise<ApiResult<SessionHandoffResult>>
   listRuns: (workSessionId: string) => Promise<ApiResult<RuntimeRunSummary[]>>
   listEvents: (runId: string) => Promise<ApiResult<RuntimeEventSummary[]>>
   onChanged: (callback: (event: SessionChangedEvent) => void) => () => void

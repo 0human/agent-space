@@ -6,6 +6,10 @@
   "packageManager": "pnpm@10.20.0",
   "scripts": {
     "dev": "ELECTRON_RUN_AS_NODE= electron-vite dev",
+    "dev:debug": "ELECTRON_RUN_AS_NODE= electron-vite dev --inspect=9229 --sourcemap --remoteDebuggingPort=9222",
+    "dev:debug:main": "ELECTRON_RUN_AS_NODE= electron-vite dev --inspect=9229 --sourcemap",
+    "dev:debug:main:break": "ELECTRON_RUN_AS_NODE= electron-vite dev --inspectBrk=9229 --sourcemap",
+    "dev:debug:renderer": "ELECTRON_RUN_AS_NODE= electron-vite dev --sourcemap --remoteDebuggingPort=9222",
     "build": "tsc --noEmit && electron-vite build",
     "rebuild:electron": "electron-rebuild -f -w better-sqlite3",
     "postinstall": "pnpm run rebuild:electron",

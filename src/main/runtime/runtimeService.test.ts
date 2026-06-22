@@ -16,18 +16,26 @@ import { RuntimeService } from './runtimeService'
 import { RuntimeTester } from './runtimeTester'
 
 class FakeProcessRunner implements ProcessRunner {
-  constructor(private readonly result: ProcessRunResult) {}
+  private readonly results: ProcessRunResult[]
+  readonly calls: { command: string; args: string[]; options?: ProcessRunOptions }[] = []
 
-  start(_command: string, _args: string[], options?: ProcessRunOptions): RunningProcess {
-    if (this.result.stdout) {
-      options?.onStdoutChunk?.(this.result.stdout)
+  constructor(result: ProcessRunResult | ProcessRunResult[]) {
+    this.results = Array.isArray(result) ? result : [result]
+  }
+
+  start(command: string, args: string[], options?: ProcessRunOptions): RunningProcess {
+    const result = this.results[Math.min(this.calls.length, this.results.length - 1)]
+    this.calls.push({ command, args, options })
+
+    if (result.stdout) {
+      options?.onStdoutChunk?.(result.stdout)
     }
-    if (this.result.stderr) {
-      options?.onStderrChunk?.(this.result.stderr)
+    if (result.stderr) {
+      options?.onStderrChunk?.(result.stderr)
     }
 
     return {
-      result: Promise.resolve(this.result),
+      result: Promise.resolve(result),
       stop: () => undefined
     }
   }
@@ -40,21 +48,22 @@ class FakeProcessRunner implements ProcessRunner {
 const handles: DatabaseHandle[] = []
 
 function createService(
-  result: ProcessRunResult = { exitCode: 0, stdout: 'codex 1.0.0\n', stderr: '' }
+  result: ProcessRunResult | ProcessRunResult[] = {
+    exitCode: 0,
+    stdout: 'codex 1.0.0\n',
+    stderr: ''
+  }
 ) {
   const dir = mkdtempSync(join(tmpdir(), 'agent-space-runtime-'))
   const handle = createDatabaseHandle(join(dir, 'test.sqlite'))
   const secretService = new MemorySecretService()
-  const service = new RuntimeService(
-    handle.db,
-    secretService,
-    new RuntimeTester(new FakeProcessRunner(result))
-  )
+  const processRunner = new FakeProcessRunner(result)
+  const service = new RuntimeService(handle.db, secretService, new RuntimeTester(processRunner))
   handles.push(handle)
 
   const importService = new RuntimeImportService(handle.db, service)
 
-  return { handle, service, importService, secretService }
+  return { handle, service, importService, secretService, processRunner }
 }
 
 afterEach(() => {
@@ -108,7 +117,10 @@ describe('RuntimeService', () => {
   })
 
   it('tests a runtime and stores the latest test result', async () => {
-    const { service } = createService({ exitCode: 0, stdout: 'codex 2.0.0\n', stderr: '' })
+    const { service, processRunner } = createService([
+      { exitCode: 0, stdout: 'codex 2.0.0\n', stderr: '' },
+      { exitCode: 0, stdout: '{"type":"message","content":"OK"}\n', stderr: '' }
+    ])
     const runtime = service.create({
       name: 'Codex',
       provider: 'codex_cli',
@@ -119,7 +131,36 @@ describe('RuntimeService', () => {
 
     expect(result.status).toBe('success')
     expect(result.version).toBe('codex 2.0.0')
+    expect(result.installed).toBe(true)
+    expect(result.connected).toBe(true)
+    expect(result.message).toContain('connectivity')
+    expect(processRunner.calls).toEqual([
+      expect.objectContaining({ args: ['--version'] }),
+      expect.objectContaining({ args: ['exec'] })
+    ])
+    expect(processRunner.calls[1].options?.stdin).toBe('Reply with exactly: OK')
     expect(service.get(runtime.id).lastTestStatus).toBe('success')
+  })
+
+  it('reports auth_unavailable when connectivity test cannot reach the provider', async () => {
+    const { service } = createService([
+      { exitCode: 0, stdout: 'codex 2.0.0\n', stderr: '' },
+      { exitCode: 1, stdout: '', stderr: 'Authentication failed: login required' }
+    ])
+    const runtime = service.create({
+      name: 'Codex',
+      provider: 'codex_cli',
+      executablePath: 'codex'
+    })
+
+    const result = await service.test({ runtimeConfigId: runtime.id })
+
+    expect(result.status).toBe('auth_unavailable')
+    expect(result.installed).toBe(true)
+    expect(result.connected).toBe(false)
+    expect(result.authenticated).toBe(false)
+    expect(result.version).toBe('codex 2.0.0')
+    expect(service.get(runtime.id).lastTestStatus).toBe('auth_unavailable')
   })
 
   it('reports command_not_found when the executable is missing', async () => {
@@ -136,6 +177,8 @@ describe('RuntimeService', () => {
     })
 
     expect(result.status).toBe('command_not_found')
+    expect(result.installed).toBe(false)
+    expect(result.connected).toBe(false)
   })
 
   it('disables a default runtime so it cannot remain default', () => {

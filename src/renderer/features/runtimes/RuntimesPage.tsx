@@ -1,6 +1,6 @@
-import { Bot, FileJson, FlaskConical, Plus, PowerOff } from 'lucide-react'
+import { Bot, FileJson, FlaskConical, Plus, Power, PowerOff } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
-import type { FormEvent, ReactElement } from 'react'
+import type { FormEvent, KeyboardEvent, MouseEvent, ReactElement } from 'react'
 import { Badge } from '@components/ui/badge'
 import { Button } from '@components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@components/ui/card'
@@ -62,6 +62,14 @@ function splitArgs(value: string): string[] {
     .filter(Boolean)
 }
 
+function booleanStatusLabel(value: boolean | undefined, unknownText: string): string {
+  if (value === undefined) {
+    return unknownText
+  }
+
+  return value ? 'Yes' : 'No'
+}
+
 export function RuntimesPage(): ReactElement {
   const [runtimes, setRuntimes] = useState<RuntimeSummary[]>([])
   const [selectedRuntime, setSelectedRuntime] = useState<RuntimeDetail | null>(null)
@@ -71,6 +79,7 @@ export function RuntimesPage(): ReactElement {
   const [secretValue, setSecretValue] = useState('')
   const [createOpen, setCreateOpen] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
+  const [detailOpen, setDetailOpen] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [testResult, setTestResult] = useState<RuntimeTestResult | null>(null)
@@ -88,19 +97,19 @@ export function RuntimesPage(): ReactElement {
 
     if (result.ok) {
       setRuntimes(result.data)
-      if (!selectedRuntime && result.data[0]) {
-        void loadRuntime(result.data[0].id)
-      }
     } else {
       setError(result.error.message)
     }
   }
 
-  async function loadRuntime(id: string): Promise<void> {
+  async function loadRuntime(id: string, openDetail = false): Promise<void> {
     const result = await window.agentSpace.runtimes.get(id)
 
     if (result.ok) {
       setSelectedRuntime(result.data)
+      if (openDetail) {
+        setDetailOpen(true)
+      }
     } else {
       setError(result.error.message)
     }
@@ -179,6 +188,32 @@ export function RuntimesPage(): ReactElement {
     } else {
       setError(result.error.message)
     }
+  }
+
+  async function handleEnable(runtime: RuntimeSummary): Promise<void> {
+    const result = await window.agentSpace.runtimes.update({ id: runtime.id, enabled: true })
+
+    if (result.ok) {
+      setMessage(`Runtime enabled: ${result.data.name}`)
+      setSelectedRuntime(result.data)
+      await loadRuntimes()
+    } else {
+      setError(result.error.message)
+    }
+  }
+
+  function handleRuntimeCardKeyDown(
+    event: KeyboardEvent<HTMLElement>,
+    runtime: RuntimeSummary
+  ): void {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault()
+      void loadRuntime(runtime.id, true)
+    }
+  }
+
+  function stopCardClick(event: MouseEvent<HTMLElement>): void {
+    event.stopPropagation()
   }
 
   async function handleImportPreview(): Promise<void> {
@@ -263,125 +298,171 @@ export function RuntimesPage(): ReactElement {
         </div>
       </header>
 
-      <section className="grid items-start gap-4 xl:grid-cols-[minmax(260px,0.9fr)_minmax(320px,1fr)_minmax(280px,0.8fr)]">
-        <div className="grid gap-3">
-          {runtimes.length === 0 ? (
-            <Card>
-              <CardHeader>
-                <Bot aria-hidden="true" size={22} />
-                <CardTitle>No Runtime yet</CardTitle>
-                <CardDescription>
-                  Create a CLI Runtime to make it available for future projects and sessions.
-                </CardDescription>
-              </CardHeader>
-            </Card>
-          ) : (
-            runtimes.map((runtime) => (
-              <Card
-                key={runtime.id}
-                className={cn(selectedRuntime?.id === runtime.id && 'border-primary')}
-              >
-                <CardContent className="grid gap-3 p-3">
-                  <button
-                    type="button"
-                    className="flex items-center justify-between gap-3 text-left"
-                    onClick={() => void loadRuntime(runtime.id)}
-                  >
-                    <span className="grid gap-0.5">
-                      <strong className="font-semibold">{runtime.name}</strong>
-                      <small className="text-sm text-muted-foreground">
-                        {providerLabel(runtime.provider)}
-                      </small>
-                    </span>
-                    <Badge variant={runtime.enabled ? 'success' : 'secondary'}>
-                      {runtime.enabled ? 'Enabled' : 'Disabled'}
-                    </Badge>
-                  </button>
-                  <div className="flex gap-2">
-                    <Button type="button" size="icon" onClick={() => void handleTest(runtime)}>
-                      <FlaskConical aria-hidden="true" />
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      size="icon"
-                      disabled={!runtime.enabled}
-                      onClick={() => void handleDisable(runtime)}
-                    >
-                      <PowerOff aria-hidden="true" />
-                    </Button>
-                  </div>
-                </CardContent>
-              </Card>
-            ))
-          )}
-        </div>
-
-        <Card>
-          <CardHeader>
-            <span className="text-xs font-bold uppercase text-muted-foreground">Detail</span>
-            {selectedRuntime ? <CardTitle>{selectedRuntime.name}</CardTitle> : null}
-          </CardHeader>
-          <CardContent className="grid gap-4">
-            {selectedRuntime ? (
-              <dl className="grid gap-3 text-sm">
-                <div className="flex items-center justify-between gap-4">
-                  <dt className="text-muted-foreground">Provider</dt>
-                  <dd className="text-right font-semibold">
-                    {providerLabel(selectedRuntime.provider)}
-                  </dd>
-                </div>
-                <div className="flex items-center justify-between gap-4">
-                  <dt className="text-muted-foreground">Executable</dt>
-                  <dd className="break-all text-right font-semibold">
-                    {selectedRuntime.executablePath ?? 'Unset'}
-                  </dd>
-                </div>
-                <div className="flex items-center justify-between gap-4">
-                  <dt className="text-muted-foreground">Default args</dt>
-                  <dd className="break-all text-right font-semibold">
-                    {selectedRuntime.defaultArgs.length
-                      ? selectedRuntime.defaultArgs.join(' ')
-                      : '[]'}
-                  </dd>
-                </div>
-                <div className="flex items-center justify-between gap-4">
-                  <dt className="text-muted-foreground">Test</dt>
-                  <dd className="text-right font-semibold">
-                    {selectedRuntime.lastTestStatus ?? 'Not tested'}
-                  </dd>
-                </div>
-                <div className="flex items-center justify-between gap-4">
-                  <dt className="text-muted-foreground">Secrets</dt>
-                  <dd className="break-all text-right font-semibold">
-                    {selectedRuntime.secrets.length
-                      ? selectedRuntime.secrets
-                          .map((secret) => `${secret.secretKind}: ${secret.maskedValue ?? 'set'}`)
-                          .join(', ')
-                      : 'None'}
-                  </dd>
-                </div>
-              </dl>
-            ) : (
-              <CardDescription>Select or create a Runtime.</CardDescription>
-            )}
-
-            {testResult ? (
-              <div
-                className={cn(
-                  'grid gap-1 rounded-lg border border-border p-3 text-sm',
-                  testResult.status === 'success' && 'border-emerald-300'
-                )}
-              >
-                <strong>{testResult.status}</strong>
-                <span className="text-muted-foreground">{testResult.message}</span>
+      {(message || error || testResult) && (
+        <div className="mb-4 grid gap-2 rounded-md border border-border p-3 text-sm">
+          {testResult ? (
+            <div className="grid gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge
+                  variant={testResult.installed ? 'success' : 'secondary'}
+                  className={cn(!testResult.installed && 'text-destructive')}
+                >
+                  Installed: {booleanStatusLabel(testResult.installed, 'Unknown')}
+                </Badge>
+                <Badge
+                  variant={
+                    testResult.connected === undefined
+                      ? 'secondary'
+                      : testResult.connected
+                        ? 'success'
+                        : 'secondary'
+                  }
+                  className={cn(testResult.connected === false && 'text-destructive')}
+                >
+                  Connected: {booleanStatusLabel(testResult.connected, 'Not checked')}
+                </Badge>
+                <Badge variant="outline">{testResult.status}</Badge>
               </div>
-            ) : null}
-            {message ? <p className="text-sm font-medium text-emerald-700">{message}</p> : null}
-            {error ? <p className="text-sm font-medium text-destructive">{error}</p> : null}
-          </CardContent>
-        </Card>
+              <span className="text-muted-foreground">{testResult.message}</span>
+            </div>
+          ) : null}
+          {message ? <p className="font-medium text-emerald-700">{message}</p> : null}
+          {error ? <p className="font-medium text-destructive">{error}</p> : null}
+        </div>
+      )}
+
+      <section className="grid items-start gap-4 sm:grid-cols-2 xl:grid-cols-3">
+        {runtimes.length === 0 ? (
+          <Card>
+            <CardHeader>
+              <Bot aria-hidden="true" size={22} />
+              <CardTitle>No Runtime yet</CardTitle>
+              <CardDescription>
+                Create a CLI Runtime to make it available for future projects and sessions.
+              </CardDescription>
+            </CardHeader>
+          </Card>
+        ) : (
+          runtimes.map((runtime) => (
+            <Card
+              key={runtime.id}
+              role="button"
+              tabIndex={0}
+              className={cn(
+                'cursor-pointer transition-colors hover:border-primary',
+                selectedRuntime?.id === runtime.id && 'border-primary'
+              )}
+              onClick={() => void loadRuntime(runtime.id, true)}
+              onKeyDown={(event) => handleRuntimeCardKeyDown(event, runtime)}
+            >
+              <CardContent className="grid gap-3 p-3">
+                <div className="flex items-center justify-between gap-3 text-left">
+                  <span className="grid gap-0.5">
+                    <strong className="font-semibold">{runtime.name}</strong>
+                    <small className="text-sm text-muted-foreground">
+                      {providerLabel(runtime.provider)}
+                    </small>
+                  </span>
+                  <Badge variant={runtime.enabled ? 'success' : 'secondary'}>
+                    {runtime.enabled ? 'Enabled' : 'Disabled'}
+                  </Badge>
+                </div>
+                <div className="flex gap-2">
+                  <Button
+                    type="button"
+                    size="icon"
+                    onClick={(event) => {
+                      stopCardClick(event)
+                      void handleTest(runtime)
+                    }}
+                  >
+                    <FlaskConical aria-hidden="true" />
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="icon"
+                    onClick={(event) => {
+                      stopCardClick(event)
+                      void (runtime.enabled ? handleDisable(runtime) : handleEnable(runtime))
+                    }}
+                  >
+                    {runtime.enabled ? (
+                      <PowerOff aria-hidden="true" />
+                    ) : (
+                      <Power aria-hidden="true" />
+                    )}
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          ))
+        )}
       </section>
+      <Dialog open={detailOpen} onOpenChange={setDetailOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{selectedRuntime?.name ?? 'Runtime Detail'}</DialogTitle>
+            <DialogDescription>
+              {selectedRuntime ? providerLabel(selectedRuntime.provider) : 'Loading Runtime'}
+            </DialogDescription>
+          </DialogHeader>
+          {selectedRuntime ? (
+            <dl className="grid gap-3 text-sm">
+              <div className="flex items-center justify-between gap-4">
+                <dt className="text-muted-foreground">Status</dt>
+                <dd>
+                  <Badge variant={selectedRuntime.enabled ? 'success' : 'secondary'}>
+                    {selectedRuntime.enabled ? 'Enabled' : 'Disabled'}
+                  </Badge>
+                </dd>
+              </div>
+              <div className="flex items-center justify-between gap-4">
+                <dt className="text-muted-foreground">Provider</dt>
+                <dd className="text-right font-semibold">
+                  {providerLabel(selectedRuntime.provider)}
+                </dd>
+              </div>
+              <div className="flex items-center justify-between gap-4">
+                <dt className="text-muted-foreground">Executable</dt>
+                <dd className="break-all text-right font-semibold">
+                  {selectedRuntime.executablePath ?? 'Unset'}
+                </dd>
+              </div>
+              <div className="flex items-center justify-between gap-4">
+                <dt className="text-muted-foreground">Default args</dt>
+                <dd className="break-all text-right font-semibold">
+                  {selectedRuntime.defaultArgs.length
+                    ? selectedRuntime.defaultArgs.join(' ')
+                    : '[]'}
+                </dd>
+              </div>
+              <div className="flex items-center justify-between gap-4">
+                <dt className="text-muted-foreground">Model</dt>
+                <dd className="break-all text-right font-semibold">
+                  {selectedRuntime.model ?? 'Unset'}
+                </dd>
+              </div>
+              <div className="flex items-center justify-between gap-4">
+                <dt className="text-muted-foreground">Test</dt>
+                <dd className="text-right font-semibold">
+                  {selectedRuntime.lastTestStatus ?? 'Not tested'}
+                </dd>
+              </div>
+              <div className="flex items-center justify-between gap-4">
+                <dt className="text-muted-foreground">Secrets</dt>
+                <dd className="break-all text-right font-semibold">
+                  {selectedRuntime.secrets.length
+                    ? selectedRuntime.secrets
+                        .map((secret) => `${secret.secretKind}: ${secret.maskedValue ?? 'set'}`)
+                        .join(', ')
+                    : 'None'}
+                </dd>
+              </div>
+            </dl>
+          ) : null}
+        </DialogContent>
+      </Dialog>
       <Dialog open={importOpen} onOpenChange={setImportOpen}>
         <DialogContent>
           <DialogHeader>

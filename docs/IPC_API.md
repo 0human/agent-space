@@ -281,6 +281,8 @@ interface RuntimeTestResult {
   status: RuntimeTestStatus;
   message: string;
   version?: string;
+  installed: boolean;
+  connected?: boolean;
   authenticated?: boolean;
   testedAt: ISODateTime;
 }

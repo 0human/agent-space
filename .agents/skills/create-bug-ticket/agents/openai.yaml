@@ -1,0 +1,7 @@
+interface:
+  display_name: "Create Bug Ticket"
+  short_description: "Turn verified failures into actionable GitHub bug tickets"
+  default_prompt: "Use $create-bug-ticket to investigate this CI failure and draft a bug ticket."
+
+policy:
+  allow_implicit_invocation: false

@@ -1,0 +1,7 @@
+interface:
+  display_name: "Complete Ticket"
+  short_description: "Verify acceptance criteria and close a completed ticket"
+  default_prompt: "Use $complete-ticket to verify and complete the specified ticket."
+
+policy:
+  allow_implicit_invocation: false

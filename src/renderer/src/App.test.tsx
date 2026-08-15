@@ -7,7 +7,10 @@ import App from './App'
 describe('Desktop Shell navigation', () => {
   beforeEach(() => {
     window.appShell = {
-      getRuntimeInfo: vi.fn().mockResolvedValue({ platform: 'darwin', version: '0.1.0' })
+      getRuntimeInfo: vi.fn().mockResolvedValue({ platform: 'darwin', version: '0.1.0' }),
+      listProjects: vi.fn().mockResolvedValue([]),
+      importProject: vi.fn().mockResolvedValue(null),
+      openProjectInIde: vi.fn().mockResolvedValue({ ok: true, error: null })
     }
   })
 
@@ -44,5 +47,109 @@ describe('Desktop Shell navigation', () => {
     await user.click(screen.getByRole('button', { name: 'Project 概览' }))
 
     expect(screen.getByRole('heading', { name: '还没有 Project' })).toBeVisible()
+  })
+
+  it('shows imported Project version control state and opens its Workspace in an IDE', async () => {
+    const user = userEvent.setup()
+    const project = {
+      id: 'project-1',
+      name: 'demo',
+      workspacePath: '/work/demo',
+      remote: 'git@github.com:example/demo.git',
+      currentBranch: 'feature/import',
+      head: '0123456789abcdef0123456789abcdef01234567',
+      defaultBranch: 'main',
+      isGreenfield: false,
+      dirty: true,
+      dirtySummary: { staged: 1, unstaged: 1, untracked: 1, files: ['a.ts', 'b.ts', 'notes.md'] },
+      updatedAt: '2026-08-14T00:00:00.000Z'
+    }
+    window.appShell.importProject = vi.fn().mockResolvedValue({
+      project,
+      warning: '该 Workspace 有未提交修改。继续导入不会 stash、reset 或丢弃这些修改。'
+    })
+
+    render(<App />)
+    await user.click(screen.getByRole('button', { name: '创建 Project' }))
+    await user.click(screen.getByRole('button', { name: '选择 Workspace 目录' }))
+
+    expect(screen.getByRole('heading', { name: 'demo' })).toBeVisible()
+    expect(screen.getByText('feature/import')).toBeVisible()
+    expect(screen.getByRole('status')).toHaveTextContent('Dirty Workspace')
+    expect(screen.getByText('staged 1')).toBeVisible()
+    expect(screen.getByText('unstaged 1')).toBeVisible()
+    expect(screen.getByText('untracked 1')).toBeVisible()
+    expect(screen.getByRole('status')).toHaveTextContent('继续导入不会 stash、reset 或丢弃这些修改。')
+    expect(screen.getByText('a.ts, b.ts, notes.md')).toBeVisible()
+
+    await user.click(screen.getByRole('button', { name: '在外部 IDE 中打开' }))
+    expect(window.appShell.openProjectInIde).toHaveBeenCalledWith('project-1')
+  })
+
+  it('restores a persisted Project in Project Overview after restart', async () => {
+    const user = userEvent.setup()
+    window.appShell.listProjects = vi.fn().mockResolvedValue([{
+      id: 'project-1',
+      name: 'demo',
+      workspacePath: '/work/demo',
+      remote: 'git@github.com:example/demo.git',
+      currentBranch: 'main',
+      head: '0123456789abcdef0123456789abcdef01234567',
+      defaultBranch: 'main',
+      isGreenfield: false,
+      dirty: false,
+      dirtySummary: { staged: 0, unstaged: 0, untracked: 0, files: [] },
+      updatedAt: '2026-08-14T00:00:00.000Z'
+    }])
+
+    render(<App />)
+
+    await user.click(await screen.findByRole('button', { name: /demo/ }))
+    expect(screen.getByRole('heading', { name: 'demo' })).toBeVisible()
+    expect(screen.getByText('git@github.com:example/demo.git')).toBeVisible()
+    expect(screen.getByText('Clean Workspace')).toBeVisible()
+  })
+
+  it('shows an error when the Workspace cannot be opened externally', async () => {
+    const user = userEvent.setup()
+    window.appShell.listProjects = vi.fn().mockResolvedValue([{
+      id: 'project-1',
+      name: 'demo',
+      workspacePath: '/work/demo',
+      remote: null,
+      currentBranch: null,
+      head: null,
+      defaultBranch: null,
+      isGreenfield: true,
+      dirty: false,
+      dirtySummary: { staged: 0, unstaged: 0, untracked: 0, files: [] },
+      updatedAt: '2026-08-14T00:00:00.000Z'
+    }])
+    window.appShell.openProjectInIde = vi.fn().mockRejectedValue(new Error('没有可用的外部应用'))
+
+    render(<App />)
+
+    await user.click(await screen.findByRole('button', { name: /demo/ }))
+    await user.click(screen.getByRole('button', { name: '在外部 IDE 中打开' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('打开外部 IDE 失败。')
+  })
+
+  it('shows an error when persisted Projects cannot be loaded', async () => {
+    window.appShell.listProjects = vi.fn().mockRejectedValue(new Error('Project 注册表格式无效'))
+
+    render(<App />)
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('读取 Project 失败。')
+  })
+
+  it('shows a localized error when a Project cannot be imported', async () => {
+    const user = userEvent.setup()
+    window.appShell.importProject = vi.fn().mockRejectedValue(new Error('EACCES'))
+
+    render(<App />)
+
+    await user.click(screen.getByRole('button', { name: '创建 Project' }))
+    await user.click(screen.getByRole('button', { name: '选择 Workspace 目录' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('导入 Project 失败。')
   })
 })

@@ -23,12 +23,22 @@ describe('App Shell preload contract', () => {
     await import('./index')
 
     expect(exposeInMainWorld).toHaveBeenCalledOnce()
-    expect(exposeInMainWorld).toHaveBeenCalledWith('appShell', {
-      getRuntimeInfo: expect.any(Function)
-    })
+    expect(exposeInMainWorld).toHaveBeenCalledWith('appShell', expect.objectContaining({
+      getRuntimeInfo: expect.any(Function),
+      listProjects: expect.any(Function),
+      importProject: expect.any(Function),
+      openProjectInIde: expect.any(Function)
+    }))
 
     const api = exposeInMainWorld.mock.calls[0][1]
     await expect(api.getRuntimeInfo()).resolves.toEqual({ platform: 'darwin', version: '0.1.0' })
     expect(invoke).toHaveBeenCalledWith('app-shell:get-runtime-info')
+
+    await api.listProjects()
+    await api.importProject()
+    await api.openProjectInIde('project-1')
+    expect(invoke).toHaveBeenCalledWith('project:list')
+    expect(invoke).toHaveBeenCalledWith('project:import')
+    expect(invoke).toHaveBeenCalledWith('project:open-in-ide', 'project-1')
   })
 })

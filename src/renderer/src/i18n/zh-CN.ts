@@ -11,18 +11,56 @@ export const zhCN = {
   },
   projectOverview: {
     eyebrow: 'Project 概览',
-    count: '0 个 Project',
+    count: (count: number) => `${count} 个 Project`,
     title: '还没有 Project',
     description: '创建一个新的 Project，或恢复之前未完成的工作。',
     createAction: '创建 Project',
-    resumeAction: '恢复工作'
+    resumeAction: '恢复工作',
+    importAction: '导入 Project',
+    listLabel: 'Project 列表',
+    listTitle: '你的 Project',
+    listDescription: '选择一个 Project 查看版本控制状态。',
+    dirty: '有修改',
+    clean: '工作区干净',
+    loadError: '读取 Project 失败。'
   },
   projectEntry: {
     createEyebrow: '新建 Project',
     createTitle: '创建 Project',
     resumeEyebrow: '恢复工作',
     resumeTitle: '恢复工作',
-    backAction: '返回 Project 概览'
+    backAction: '返回 Project 概览',
+    description: '选择已有 Git 目录，或选择空目录创建 Greenfield Project。',
+    chooseAction: '选择 Workspace 目录',
+    importError: '导入 Project 失败。'
+  },
+  projectDetail: {
+    eyebrow: 'Project 详情',
+    backAction: '返回 Project 概览',
+    openInIde: '在外部 IDE 中打开',
+    type: 'Project 类型',
+    gitProject: 'Git Project',
+    greenfieldProject: 'Greenfield Project',
+    dirtyTitle: 'Dirty Workspace',
+    dirtyDescription: '此 Workspace 有未提交修改。Agent Space 不会 stash、reset 或丢弃这些修改。',
+    remote: 'Remote',
+    currentBranch: '当前 branch',
+    head: 'HEAD',
+    defaultBranch: '默认分支',
+    workspaceStatus: 'Workspace 状态',
+    changedFiles: '变更文件',
+    dirtySummary: {
+      staged: (count: number) => `staged ${count}`,
+      unstaged: (count: number) => `unstaged ${count}`,
+      untracked: (count: number) => `untracked ${count}`,
+      files: '文件'
+    },
+    notConfigured: '未配置',
+    detached: 'Detached HEAD',
+    noCommit: '暂无 commit',
+    dirty: 'Dirty Workspace',
+    clean: 'Clean Workspace',
+    openError: '打开外部 IDE 失败。'
   },
   settings: {
     eyebrow: '设置',

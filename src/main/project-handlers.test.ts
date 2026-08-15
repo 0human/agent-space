@@ -11,6 +11,7 @@ const project: Project = {
   id: 'project-1',
   name: 'demo',
   workspacePath: '/work/demo',
+  workspaceAvailable: true,
   remote: null,
   currentBranch: 'main',
   head: 'abc123',
@@ -38,7 +39,7 @@ describe('Project IPC handlers', () => {
     registerProjectHandlers({
       handle: (channel, listener) => handlers.set(channel, listener),
       dialog,
-      openPath: vi.fn().mockResolvedValue(''),
+      openInIde: vi.fn().mockResolvedValue(undefined),
       userDataPath: '/data',
       service
     })
@@ -64,7 +65,7 @@ describe('Project IPC handlers', () => {
         showOpenDialog: vi.fn().mockResolvedValue({ canceled: false, filePaths: ['/work/demo'] }),
         showMessageBox: vi.fn().mockResolvedValue({ response: 1 })
       },
-      openPath: vi.fn(),
+      openInIde: vi.fn(),
       userDataPath: '/data',
       service: {
         list: vi.fn(),
@@ -78,9 +79,9 @@ describe('Project IPC handlers', () => {
     expect(importDirectory).not.toHaveBeenCalled()
   })
 
-  it('opens a known Project through the system-associated application', async () => {
+  it('opens a known Project through an external IDE launcher', async () => {
     const handlers = new Map<string, (...args: unknown[]) => unknown>()
-    const openPath = vi.fn().mockResolvedValue('')
+    const openInIde = vi.fn().mockResolvedValue('')
     const openProject = vi.fn().mockImplementation(async (_filePath: string, projectId: string) => (
       projectId === 'project-1' ? project : null
     ))
@@ -88,7 +89,7 @@ describe('Project IPC handlers', () => {
     registerProjectHandlers({
       handle: (channel, listener) => handlers.set(channel, listener),
       dialog: { showOpenDialog: vi.fn(), showMessageBox: vi.fn() },
-      openPath,
+      openInIde,
       userDataPath: '/data',
       service: {
         list: vi.fn(),
@@ -103,6 +104,28 @@ describe('Project IPC handlers', () => {
       error: null
     })
     expect(openProject).toHaveBeenCalledWith(join('/data', 'projects.json'), 'project-1')
-    expect(openPath).toHaveBeenCalledWith('/work/demo')
+    expect(openInIde).toHaveBeenCalledWith('/work/demo')
+  })
+
+  it('returns a localized error when no external IDE can be launched', async () => {
+    const handlers = new Map<string, (...args: unknown[]) => unknown>()
+
+    registerProjectHandlers({
+      handle: (channel, listener) => handlers.set(channel, listener),
+      dialog: { showOpenDialog: vi.fn(), showMessageBox: vi.fn() },
+      openInIde: vi.fn().mockRejectedValue(new Error('ENOENT: code not found')),
+      userDataPath: '/data',
+      service: {
+        list: vi.fn(),
+        inspectDirectory: vi.fn(),
+        importDirectory: vi.fn(),
+        findById: vi.fn().mockResolvedValue(project)
+      }
+    })
+
+    await expect(handlers.get(APP_SHELL_CHANNELS.openProjectInIde)?.({}, 'project-1')).resolves.toEqual({
+      ok: false,
+      error: '没有找到可用的外部 IDE。请安装并启用 IDE 的命令行启动器。'
+    })
   })
 })

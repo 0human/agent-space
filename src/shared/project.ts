@@ -6,6 +6,7 @@ export interface DirtyWorkspaceSummary {
 }
 
 export interface WorkspaceState {
+  workspaceAvailable: boolean
   remote: string | null
   currentBranch: string | null
   head: string | null

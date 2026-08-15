@@ -70,6 +70,7 @@ export async function inspectWorkspace(
     }
 
     return {
+      workspaceAvailable: true,
       remote: null,
       currentBranch: null,
       head: null,
@@ -107,6 +108,7 @@ export async function inspectWorkspace(
   ]))
 
   return {
+    workspaceAvailable: true,
     remote,
     currentBranch,
     head,
@@ -139,7 +141,10 @@ export function createProjectService(dependencies: ProjectServiceDependencies) {
 
     const value = JSON.parse(contents) as unknown
     if (!Array.isArray(value)) throw new Error('Project 注册表格式无效')
-    return value as Project[]
+    return value.map((project) => ({
+      ...project,
+      workspaceAvailable: project.workspaceAvailable !== false
+    })) as Project[]
   }
 
   async function save(filePath: string, projects: Project[]): Promise<void> {
@@ -164,7 +169,7 @@ export function createProjectService(dependencies: ProjectServiceDependencies) {
           return await refresh(project)
         } catch {
           // Keep the durable registration available when the workspace is offline or moved.
-          return project
+          return { ...project, workspaceAvailable: false }
         }
       }))
       await save(filePath, refreshed)

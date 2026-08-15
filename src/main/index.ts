@@ -1,11 +1,12 @@
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain } from 'electron'
 
 import { createMainWindow, registerAppShellHandlers } from './app-shell'
 import { registerProjectHandlers } from './project-handlers'
 import { createDefaultGitExecutor, createProjectService } from './project-service'
+import { createDefaultIdeLauncher } from './ide-launcher'
 
 const currentDirectory = fileURLToPath(new URL('.', import.meta.url))
 
@@ -65,7 +66,7 @@ registerProjectHandlers({
     showOpenDialog: (options) => dialog.showOpenDialog(options),
     showMessageBox: (options) => dialog.showMessageBox(options)
   },
-  openPath: (path) => shell.openPath(path),
+  openInIde: createDefaultIdeLauncher(),
   userDataPath: app.getPath('userData'),
   service: createProjectService({
     readFile,

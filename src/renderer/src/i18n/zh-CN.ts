@@ -22,6 +22,7 @@ export const zhCN = {
     listDescription: '选择一个 Project 查看版本控制状态。',
     dirty: '有修改',
     clean: '工作区干净',
+    unavailable: 'Workspace 已删除或不可访问',
     loadError: '读取 Project 失败。'
   },
   projectEntry: {
@@ -60,6 +61,8 @@ export const zhCN = {
     noCommit: '暂无 commit',
     dirty: 'Dirty Workspace',
     clean: 'Clean Workspace',
+    unavailable: 'Workspace 已删除或不可访问',
+    unavailableDescription: '找不到这个 Workspace，路径可能已被移动或删除。',
     openError: '打开外部 IDE 失败。'
   },
   settings: {

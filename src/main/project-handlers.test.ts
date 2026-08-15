@@ -1,5 +1,6 @@
 // @vitest-environment node
 
+import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 
 import { APP_SHELL_CHANNELS } from '../shared/app-shell'
@@ -50,7 +51,7 @@ describe('Project IPC handlers', () => {
       type: 'warning',
       cancelId: 1
     }))
-    expect(service.importDirectory).toHaveBeenCalledWith('/data/projects.json', '/work/demo')
+    expect(service.importDirectory).toHaveBeenCalledWith(join('/data', 'projects.json'), '/work/demo')
   })
 
   it('does not register a Dirty Workspace when the user cancels the warning', async () => {
@@ -101,7 +102,7 @@ describe('Project IPC handlers', () => {
       ok: true,
       error: null
     })
-    expect(openProject).toHaveBeenCalledWith('/data/projects.json', 'project-1')
+    expect(openProject).toHaveBeenCalledWith(join('/data', 'projects.json'), 'project-1')
     expect(openPath).toHaveBeenCalledWith('/work/demo')
   })
 })

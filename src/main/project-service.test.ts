@@ -1,5 +1,6 @@
 // @vitest-environment node
 
+import { resolve } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 
 import { createProjectService, inspectWorkspace } from './project-service'
@@ -120,7 +121,7 @@ describe('Workspace inspection', () => {
     expect(listed[0]).toMatchObject({
       id: 'project-1',
       name: 'demo',
-      workspacePath: '/work/demo',
+      workspacePath: resolve('/work/demo'),
       dirty: true,
       dirtySummary: { staged: 0, unstaged: 0, untracked: 1, files: ['draft.md'] }
     })
@@ -189,7 +190,7 @@ describe('Workspace inspection', () => {
     const second = await service.importDirectory('/data/projects.json', '/work/demo/')
 
     expect(second.id).toBe(first.id)
-    expect(second.workspacePath).toBe('/work/demo')
+    expect(second.workspacePath).toBe(resolve('/work/demo'))
     expect(JSON.parse(stored)).toHaveLength(1)
   })
 })

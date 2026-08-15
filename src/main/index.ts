@@ -1,8 +1,11 @@
+import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { app, BrowserWindow, ipcMain } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 
 import { createMainWindow, registerAppShellHandlers } from './app-shell'
+import { registerProjectHandlers } from './project-handlers'
+import { createDefaultGitExecutor, createProjectService } from './project-service'
 
 const currentDirectory = fileURLToPath(new URL('.', import.meta.url))
 
@@ -54,6 +57,25 @@ registerAppShellHandlers({
   handle: (channel, listener) => ipcMain.handle(channel, listener),
   getVersion: () => app.getVersion(),
   platform: process.platform
+})
+
+registerProjectHandlers({
+  handle: (channel, listener) => ipcMain.handle(channel, listener),
+  dialog: {
+    showOpenDialog: (options) => dialog.showOpenDialog(options),
+    showMessageBox: (options) => dialog.showMessageBox(options)
+  },
+  openPath: (path) => shell.openPath(path),
+  userDataPath: app.getPath('userData'),
+  service: createProjectService({
+    readFile,
+    writeFile,
+    mkdir: async (path, options) => {
+      await mkdir(path, options)
+    },
+    readDirectory: async (path) => readdir(path),
+    execGit: createDefaultGitExecutor()
+  })
 })
 
 app.whenReady().then(() => {

@@ -59,8 +59,10 @@ function ProjectOverview({ onCreateProject, onResumeWork, projects, onOpenProjec
                   <strong>{project.name}</strong>
                   <span>{project.workspacePath}</span>
                 </span>
-                <span className={project.dirty ? 'project-status is-dirty' : 'project-status'}>
-                  {project.dirty ? copy.projectOverview.dirty : copy.projectOverview.clean}
+                <span className={project.workspaceAvailable !== false ? (project.dirty ? 'project-status is-dirty' : 'project-status') : 'project-status is-unavailable'}>
+                  {project.workspaceAvailable !== false
+                    ? (project.dirty ? copy.projectOverview.dirty : copy.projectOverview.clean)
+                    : copy.projectOverview.unavailable}
                 </span>
                 <ArrowRight aria-hidden="true" />
               </button>
@@ -136,6 +138,8 @@ interface ProjectDetailProps {
 }
 
 function ProjectDetail({ project, onBack, onOpenInIde, openError, importWarning }: ProjectDetailProps): React.JSX.Element {
+  const workspaceAvailable = project.workspaceAvailable !== false
+
   return (
     <main className="content" aria-labelledby="project-detail-title">
       <div className="content-header">
@@ -151,12 +155,17 @@ function ProjectDetail({ project, onBack, onOpenInIde, openError, importWarning 
             <h1 id="project-detail-title">{project.name}</h1>
             <p>{project.workspacePath}</p>
           </div>
-          <button className="secondary-action" type="button" onClick={onOpenInIde}>
+          <button className="secondary-action" type="button" onClick={onOpenInIde} disabled={!workspaceAvailable}>
             <FolderKanban aria-hidden="true" />
             {copy.projectDetail.openInIde}
           </button>
         </div>
-        {project.dirty ? (
+        {!workspaceAvailable ? (
+          <div className="workspace-unavailable-notice" role="alert">
+            <strong>{copy.projectDetail.unavailable}</strong>
+            <span>{copy.projectDetail.unavailableDescription}</span>
+          </div>
+        ) : project.dirty ? (
           <div className="dirty-notice" role="status">
             <strong>{copy.projectDetail.dirtyTitle}</strong>
             <span>{importWarning ?? copy.projectDetail.dirtyDescription}</span>

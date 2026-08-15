@@ -28,7 +28,7 @@ interface ProjectHandlerDependencies {
       detail: string
     }) => Promise<{ response: number }>
   }
-  openPath: (path: string) => Promise<string>
+  openInIde: (path: string) => Promise<void>
   userDataPath: string
   service: ProjectService
 }
@@ -36,7 +36,7 @@ interface ProjectHandlerDependencies {
 export function registerProjectHandlers({
   handle,
   dialog,
-  openPath,
+  openInIde,
   userDataPath,
   service
 }: ProjectHandlerDependencies): void {
@@ -80,7 +80,11 @@ export function registerProjectHandlers({
     const project = await service.findById(filePath, projectId)
     if (!project) return { ok: false, error: '找不到这个 Project。' }
 
-    const error = await openPath(project.workspacePath)
-    return error ? { ok: false, error } : { ok: true, error: null }
+    try {
+      await openInIde(project.workspacePath)
+      return { ok: true, error: null }
+    } catch {
+      return { ok: false, error: copy.projectOpen.error }
+    }
   })
 }

@@ -381,6 +381,10 @@ button:focus-visible {
   color: #9a5b27;
 }
 
+.project-status.is-unavailable {
+  color: #a23f34;
+}
+
 .project-detail {
   padding: 42px 0;
 }
@@ -401,6 +405,25 @@ button:focus-visible {
   background: #fff5e9;
   border: 1px solid #e9cda9;
   border-radius: 7px;
+}
+
+.workspace-unavailable-notice {
+  display: grid;
+  gap: 5px;
+  padding: 15px 17px;
+  color: #7e3028;
+  background: #fff0ee;
+  border: 1px solid #e5b8b2;
+  border-radius: 7px;
+}
+
+.workspace-unavailable-notice strong {
+  font-size: 13px;
+}
+
+.workspace-unavailable-notice span {
+  font-size: 13px;
+  line-height: 1.6;
 }
 
 .dirty-notice strong {

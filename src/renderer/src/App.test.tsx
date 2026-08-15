@@ -55,6 +55,7 @@ describe('Desktop Shell navigation', () => {
       id: 'project-1',
       name: 'demo',
       workspacePath: '/work/demo',
+      workspaceAvailable: true,
       remote: 'git@github.com:example/demo.git',
       currentBranch: 'feature/import',
       head: '0123456789abcdef0123456789abcdef01234567',
@@ -92,6 +93,7 @@ describe('Desktop Shell navigation', () => {
       id: 'project-1',
       name: 'demo',
       workspacePath: '/work/demo',
+      workspaceAvailable: true,
       remote: 'git@github.com:example/demo.git',
       currentBranch: 'main',
       head: '0123456789abcdef0123456789abcdef01234567',
@@ -116,6 +118,7 @@ describe('Desktop Shell navigation', () => {
       id: 'project-1',
       name: 'demo',
       workspacePath: '/work/demo',
+      workspaceAvailable: true,
       remote: null,
       currentBranch: null,
       head: null,
@@ -140,6 +143,31 @@ describe('Desktop Shell navigation', () => {
     render(<App />)
 
     expect(await screen.findByRole('alert')).toHaveTextContent('读取 Project 失败。')
+  })
+
+  it('shows when a persisted Workspace has been deleted', async () => {
+    const user = userEvent.setup()
+    window.appShell.listProjects = vi.fn().mockResolvedValue([{
+      id: 'project-1',
+      name: 'demo',
+      workspacePath: '/work/demo',
+      workspaceAvailable: false,
+      remote: null,
+      currentBranch: 'main',
+      head: 'abc123',
+      defaultBranch: 'main',
+      isGreenfield: false,
+      dirty: false,
+      dirtySummary: { staged: 0, unstaged: 0, untracked: 0, files: [] },
+      updatedAt: '2026-08-14T00:00:00.000Z'
+    }])
+
+    render(<App />)
+
+    expect(await screen.findByText('Workspace 已删除或不可访问')).toBeVisible()
+    await user.click(screen.getByRole('button', { name: /demo/ }))
+    expect(screen.getByRole('alert')).toHaveTextContent('找不到这个 Workspace，路径可能已被移动或删除。')
+    expect(screen.getByRole('button', { name: '在外部 IDE 中打开' })).toBeDisabled()
   })
 
   it('shows a localized error when a Project cannot be imported', async () => {

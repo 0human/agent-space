@@ -23,6 +23,7 @@ describe('Workspace inspection', () => {
     })
 
     expect(state).toEqual({
+      workspaceAvailable: true,
       remote: 'git@github.com:example/demo.git',
       currentBranch: 'feature/import',
       head: '0123456789abcdef0123456789abcdef01234567',
@@ -66,6 +67,7 @@ describe('Workspace inspection', () => {
     })
 
     expect(state).toEqual({
+      workspaceAvailable: true,
       remote: null,
       currentBranch: null,
       head: null,
@@ -132,6 +134,7 @@ describe('Workspace inspection', () => {
       id: 'project-1',
       name: 'demo',
       workspacePath: '/work/demo',
+      workspaceAvailable: true,
       remote: 'https://github.com/example/demo.git',
       currentBranch: 'main',
       head: 'abc123',
@@ -148,7 +151,10 @@ describe('Workspace inspection', () => {
       execGit: async () => { throw new Error('workspace is unavailable') }
     })
 
-    await expect(service.list('/data/projects.json')).resolves.toEqual([storedProject])
+    await expect(service.list('/data/projects.json')).resolves.toMatchObject([{
+      ...storedProject,
+      workspaceAvailable: false
+    }])
   })
 
   it('does not overwrite durable Project metadata when the registry is malformed', async () => {

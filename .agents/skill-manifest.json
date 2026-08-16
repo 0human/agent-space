@@ -1,0 +1,60 @@
+{
+  "name": "agent-space-development-skills",
+  "version": "1.0.0",
+  "skills": [
+    {
+      "name": "grill-with-docs",
+      "version": "1.0.0",
+      "entry": "skills/grill-with-docs/SKILL.md",
+      "dependencies": [],
+      "supportedRuntimes": ["codex"],
+      "capabilities": ["question", "artifact"],
+      "requiredPermissions": ["workspace.read", "workspace.write"]
+    },
+    {
+      "name": "implement",
+      "version": "1.0.0",
+      "entry": "skills/implement/SKILL.md",
+      "dependencies": ["tdd", "code-review"],
+      "supportedRuntimes": ["codex"],
+      "capabilities": ["code-change", "artifact"],
+      "requiredPermissions": ["workspace.read", "workspace.write", "git.commit"]
+    },
+    {
+      "name": "tdd",
+      "version": "1.0.0",
+      "entry": "skills/tdd/SKILL.md",
+      "dependencies": [],
+      "supportedRuntimes": ["codex"],
+      "capabilities": ["test"],
+      "requiredPermissions": ["workspace.read", "workspace.write"]
+    },
+    {
+      "name": "to-spec",
+      "version": "1.0.0",
+      "entry": "skills/to-spec/SKILL.md",
+      "dependencies": [],
+      "supportedRuntimes": ["codex"],
+      "capabilities": ["artifact"],
+      "requiredPermissions": ["workspace.read", "workspace.write"]
+    },
+    {
+      "name": "to-tickets",
+      "version": "1.0.0",
+      "entry": "skills/to-tickets/SKILL.md",
+      "dependencies": [],
+      "supportedRuntimes": ["codex"],
+      "capabilities": ["artifact"],
+      "requiredPermissions": ["workspace.read", "network.github"]
+    },
+    {
+      "name": "code-review",
+      "version": "1.0.0",
+      "entry": "skills/code-review/SKILL.md",
+      "dependencies": [],
+      "supportedRuntimes": ["codex"],
+      "capabilities": ["review"],
+      "requiredPermissions": ["workspace.read"]
+    }
+  ]
+}

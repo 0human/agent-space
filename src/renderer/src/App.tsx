@@ -2,18 +2,23 @@ import { useEffect, useState } from 'react'
 import {
   ArrowLeft,
   ArrowRight,
+  CheckCircle2,
+  Copy,
   FolderClock,
   FolderKanban,
   Plus,
+  RefreshCw,
   Settings,
+  ShieldAlert,
   Workflow
 } from 'lucide-react'
 
 import type { RuntimeInfo } from '../../shared/app-shell'
 import type { Project } from '../../shared/project'
+import type { WorkflowView as WorkflowViewModel } from '../../shared/workflow'
 import { zhCN as copy } from './i18n/zh-CN'
 
-type View = 'projectOverview' | 'createProject' | 'resumeWork' | 'settings' | 'projectDetail'
+type View = 'projectOverview' | 'createProject' | 'resumeWork' | 'settings' | 'projectDetail' | 'workflow'
 
 const platformNames: Partial<Record<NodeJS.Platform, string>> = {
   darwin: copy.platform.darwin,
@@ -135,9 +140,10 @@ interface ProjectDetailProps {
   onOpenInIde: () => void
   openError: string | null
   importWarning: string | null
+  onViewWorkflow: () => void
 }
 
-function ProjectDetail({ project, onBack, onOpenInIde, openError, importWarning }: ProjectDetailProps): React.JSX.Element {
+function ProjectDetail({ project, onBack, onOpenInIde, openError, importWarning, onViewWorkflow }: ProjectDetailProps): React.JSX.Element {
   const workspaceAvailable = project.workspaceAvailable !== false
 
   return (
@@ -155,10 +161,16 @@ function ProjectDetail({ project, onBack, onOpenInIde, openError, importWarning 
             <h1 id="project-detail-title">{project.name}</h1>
             <p>{project.workspacePath}</p>
           </div>
-          <button className="secondary-action" type="button" onClick={onOpenInIde} disabled={!workspaceAvailable}>
-            <FolderKanban aria-hidden="true" />
-            {copy.projectDetail.openInIde}
-          </button>
+          <div className="project-heading-actions">
+            <button className="secondary-action" type="button" onClick={onViewWorkflow} disabled={!workspaceAvailable}>
+              <Workflow aria-hidden="true" />
+              {copy.workflow.viewAction}
+            </button>
+            <button className="secondary-action" type="button" onClick={onOpenInIde} disabled={!workspaceAvailable}>
+              <FolderKanban aria-hidden="true" />
+              {copy.projectDetail.openInIde}
+            </button>
+          </div>
         </div>
         {!workspaceAvailable ? (
           <div className="workspace-unavailable-notice" role="alert">
@@ -194,6 +206,105 @@ function ProjectDetail({ project, onBack, onOpenInIde, openError, importWarning 
             </div>
           </div>
         ) : null}
+      </section>
+    </main>
+  )
+}
+
+interface WorkflowViewProps {
+  project: Project
+  workflow: WorkflowViewModel | null
+  loading: boolean
+  error: string | null
+  onBack: () => void
+  onCopy: () => void
+  onReload: () => void
+  onStart: () => void
+}
+
+function WorkflowView({ project, workflow, loading, error, onBack, onCopy, onReload, onStart }: WorkflowViewProps): React.JSX.Element {
+  if (loading || !workflow) {
+    return (
+      <main className="content" aria-busy="true">
+        <div className="content-header"><p className="eyebrow">{copy.workflow.eyebrow}</p></div>
+        <p className="workflow-loading">{error ?? copy.workflow.loading}</p>
+      </main>
+    )
+  }
+
+  const { definition, validation } = workflow
+  const originVersion = definition.derivedFrom?.version ?? '1.0.0'
+  return (
+    <main className="content workflow-content" aria-labelledby="workflow-title">
+      <div className="content-header">
+        <p className="eyebrow">{copy.workflow.eyebrow}</p>
+        <p className="content-context">{project.name}</p>
+      </div>
+      <section className="workflow-view">
+        <button className="back-action" type="button" onClick={onBack}>
+          <ArrowLeft aria-hidden="true" />
+          {copy.workflow.backAction}
+        </button>
+        <div className="workflow-heading">
+          <div>
+            <div className="workflow-source-line">
+              <span className={workflow.source === 'built-in' ? 'source-badge' : 'source-badge is-project'}>
+                {workflow.source === 'built-in' ? copy.workflow.readOnly : copy.workflow.projectSource}
+              </span>
+              <span>{copy.workflow.version(definition.version)}</span>
+            </div>
+            <h1 id="workflow-title">{definition.name}</h1>
+            {workflow.path ? <p className="workflow-path">{workflow.path}</p> : null}
+            {workflow.source === 'project' ? <p className="workflow-origin">{copy.workflow.origin(originVersion)}</p> : null}
+          </div>
+          <div className="workflow-actions">
+            {workflow.source === 'built-in' ? (
+              <button className="primary-action" type="button" onClick={onCopy}>
+                <Copy aria-hidden="true" />{copy.workflow.copyAction}
+              </button>
+            ) : (
+              <button className="secondary-action" type="button" onClick={onReload}>
+                <RefreshCw aria-hidden="true" />{copy.workflow.reloadAction}
+              </button>
+            )}
+            <button className="primary-action" type="button" onClick={onStart} disabled={!workflow.canStart}>
+              <ArrowRight aria-hidden="true" />{copy.workflow.startAction}
+            </button>
+          </div>
+        </div>
+
+        <div className={validation.valid ? 'validation-banner is-valid' : 'validation-banner is-invalid'} role={validation.valid ? 'status' : 'alert'}>
+          {validation.valid ? <CheckCircle2 aria-hidden="true" /> : <ShieldAlert aria-hidden="true" />}
+          <div>
+            <strong>{validation.valid ? copy.workflow.validationPassed : copy.workflow.validationFailed}</strong>
+            {validation.errors.map((message) => <span key={message}>{message}</span>)}
+          </div>
+        </div>
+        {error ? <p className="error-message" role="alert">{error}</p> : null}
+
+        <div className="workflow-phases" aria-label={copy.workflow.phaseList}>
+          {definition.phases.map((phase, phaseIndex) => (
+            <section className="workflow-phase" key={phase.id} aria-labelledby={'phase-' + phase.id}>
+              <div className="phase-heading">
+                <span>{String(phaseIndex + 1).padStart(2, '0')}</span>
+                <div><h2 id={'phase-' + phase.id}>{phase.name}</h2><p>{phase.goal}</p></div>
+              </div>
+              <div className="workflow-steps">
+                {phase.steps.map((step) => (
+                  <div className="workflow-step" key={step.id}>
+                    <div className="step-title"><strong>{step.name}</strong><span>{copy.workflow.kind[step.kind]}</span></div>
+                    <div className="step-details">
+                      {step.skill ? <span><b>Skill</b>{step.skill.name}@{step.skill.version}</span> : null}
+                      {step.artifacts?.length ? <span><b>Artifact</b>{step.artifacts.join(', ')}</span> : null}
+                      {step.condition ? <span><b>Condition</b>{step.condition}</span> : null}
+                      {step.approvalGate ? <span className="gate-detail"><b>Approval Gate</b>{step.approvalGate}</span> : null}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          ))}
+        </div>
       </section>
     </main>
   )
@@ -244,6 +355,9 @@ export default function App(): React.JSX.Element {
   const [error, setError] = useState<string | null>(null)
   const [openError, setOpenError] = useState<string | null>(null)
   const [importWarning, setImportWarning] = useState<string | null>(null)
+  const [workflow, setWorkflow] = useState<WorkflowViewModel | null>(null)
+  const [workflowLoading, setWorkflowLoading] = useState(false)
+  const [workflowError, setWorkflowError] = useState<string | null>(null)
 
   useEffect(() => {
     document.title = copy.app.name
@@ -280,6 +394,48 @@ export default function App(): React.JSX.Element {
     }
   }
 
+  const openWorkflow = async (): Promise<void> => {
+    setWorkflowLoading(true)
+    setWorkflowError(null)
+    setView('workflow')
+    try {
+      if (!selectedProject) throw new Error('Project is required')
+      setWorkflow(await window.appShell.getWorkflow(selectedProject.id))
+    } catch {
+      setWorkflowError(copy.workflow.loadError)
+    } finally {
+      setWorkflowLoading(false)
+    }
+  }
+
+  const copyWorkflow = async (): Promise<void> => {
+    if (!selectedProject) return
+    setWorkflowError(null)
+    try {
+      const result = await window.appShell.copyWorkflow(selectedProject.id)
+      if (result) setWorkflow(result)
+    } catch {
+      setWorkflowError(copy.workflow.copyError)
+    }
+  }
+
+  const reloadWorkflow = async (): Promise<void> => {
+    if (!selectedProject) return
+    setWorkflowError(null)
+    try {
+      const result = await window.appShell.reloadWorkflow(selectedProject.id)
+      if (result) setWorkflow(result)
+    } catch {
+      setWorkflowError(copy.workflow.reloadError)
+    }
+  }
+
+  const startWorkflowRun = async (): Promise<void> => {
+    if (!selectedProject || !workflow?.canStart) return
+    const result = await window.appShell.startWorkflowRun(selectedProject.id)
+    setWorkflowError(result.ok ? copy.workflow.startReady : (result.error ?? copy.workflow.startError))
+  }
+
   const content = view === 'projectOverview'
     ? (
         <ProjectOverview
@@ -292,9 +448,11 @@ export default function App(): React.JSX.Element {
       )
     : view === 'settings'
       ? <SettingsView />
-      : view === 'projectDetail' && selectedProject
-        ? <ProjectDetail project={selectedProject} onBack={() => setView('projectOverview')} onOpenInIde={openProjectInIde} openError={openError} importWarning={importWarning} />
-        : <ProjectEntry mode={view === 'resumeWork' ? 'resumeWork' : 'createProject'} onBack={() => setView('projectOverview')} onImport={importProject} error={error} />
+      : view === 'workflow' && selectedProject
+        ? <WorkflowView project={selectedProject} workflow={workflow} loading={workflowLoading} error={workflowError} onBack={() => setView('projectDetail')} onCopy={copyWorkflow} onReload={reloadWorkflow} onStart={startWorkflowRun} />
+        : view === 'projectDetail' && selectedProject
+          ? <ProjectDetail project={selectedProject} onBack={() => setView('projectOverview')} onOpenInIde={openProjectInIde} openError={openError} importWarning={importWarning} onViewWorkflow={openWorkflow} />
+          : <ProjectEntry mode={view === 'resumeWork' ? 'resumeWork' : 'createProject'} onBack={() => setView('projectOverview')} onImport={importProject} error={error} />
 
   return (
     <div className="app-shell">

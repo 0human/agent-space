@@ -65,6 +65,32 @@ export const zhCN = {
     unavailableDescription: '找不到这个 Workspace，路径可能已被移动或删除。',
     openError: '打开外部 IDE 失败。'
   },
+  workflow: {
+    eyebrow: 'Project Workflow',
+    viewAction: '查看 Workflow',
+    backAction: '返回 Project 详情',
+    loading: '正在读取 Workflow...',
+    loadError: '读取 Workflow 失败。',
+    readOnly: '内置 Workflow 只读',
+    projectSource: 'Project Workflow',
+    version: (version: string) => '版本 ' + version,
+    origin: (version: string) => '来源：Development Workflow@' + version,
+    copyAction: '复制为 Project Workflow',
+    copyError: '复制 Workflow 失败。',
+    reloadAction: '重新加载并校验',
+    reloadError: '重新加载 Workflow 失败。',
+    startAction: '启动新 Run',
+    startReady: 'Workflow 已通过启动校验。',
+    startError: '无法启动新 Run。',
+    validationPassed: 'Workflow Validation 通过',
+    validationFailed: 'Workflow Validation 失败',
+    phaseList: 'Workflow Phase 列表',
+    kind: {
+      skill: 'Skill Step',
+      tool: 'Tool Step',
+      human: 'Human Step'
+    }
+  },
   settings: {
     eyebrow: '设置',
     title: '设置',

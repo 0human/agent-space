@@ -397,6 +397,222 @@ button:focus-visible {
   padding: 36px 0 28px;
 }
 
+.project-heading-actions,
+.workflow-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+}
+
+.primary-action:disabled,
+.secondary-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.workflow-content {
+  overflow: auto;
+}
+
+.workflow-view {
+  padding: 36px 0 64px;
+}
+
+.workflow-loading {
+  margin-top: 48px;
+  color: #667068;
+  font-size: 14px;
+}
+
+.workflow-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 28px;
+  padding: 34px 0 26px;
+  border-bottom: 1px solid #dfe2dd;
+}
+
+.workflow-heading h1 {
+  margin: 12px 0 0;
+  color: #171b18;
+  font-size: 28px;
+  font-weight: 650;
+  line-height: 1.25;
+  letter-spacing: 0;
+}
+
+.workflow-source-line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #717972;
+  font-size: 12px;
+}
+
+.source-badge {
+  padding: 4px 7px;
+  color: #4c554f;
+  background: #e8ebe8;
+  border: 1px solid #d2d7d2;
+  border-radius: 4px;
+  font-weight: 650;
+}
+
+.source-badge.is-project {
+  color: #276544;
+  background: #e0eee5;
+  border-color: #c8ddcf;
+}
+
+.workflow-path,
+.workflow-origin {
+  max-width: 680px;
+  margin: 8px 0 0;
+  color: #68726b;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.workflow-origin {
+  color: #3d6650;
+  font-weight: 600;
+}
+
+.validation-banner {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  gap: 10px;
+  margin: 18px 0 0;
+  padding: 13px 15px;
+  border: 1px solid;
+  border-radius: 6px;
+}
+
+.validation-banner svg {
+  width: 18px;
+  height: 18px;
+}
+
+.validation-banner div {
+  display: grid;
+  gap: 4px;
+}
+
+.validation-banner strong,
+.validation-banner span {
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.validation-banner.is-valid {
+  color: #276544;
+  background: #eaf4ed;
+  border-color: #c5ddcc;
+}
+
+.validation-banner.is-invalid {
+  color: #8c382f;
+  background: #fff0ee;
+  border-color: #e5b8b2;
+}
+
+.workflow-phases {
+  margin-top: 26px;
+  border-top: 1px solid #d8ddd8;
+}
+
+.workflow-phase {
+  display: grid;
+  grid-template-columns: minmax(210px, 0.7fr) minmax(300px, 1.3fr);
+  gap: 28px;
+  padding: 24px 0;
+  border-bottom: 1px solid #d8ddd8;
+}
+
+.phase-heading {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  gap: 10px;
+}
+
+.phase-heading > span {
+  color: #8a938c;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.phase-heading h2 {
+  margin: 0;
+  color: #252b27;
+  font-size: 14px;
+  font-weight: 650;
+  letter-spacing: 0;
+}
+
+.phase-heading p {
+  margin: 7px 0 0;
+  color: #6e7770;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.workflow-steps {
+  display: grid;
+  gap: 8px;
+}
+
+.workflow-step {
+  min-width: 0;
+  padding: 13px 15px;
+  background: #fff;
+  border: 1px solid #d8ddd8;
+  border-radius: 6px;
+}
+
+.step-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.step-title strong {
+  color: #29302b;
+  font-size: 13px;
+}
+
+.step-title > span {
+  color: #758078;
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.step-details {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 15px;
+  margin-top: 10px;
+}
+
+.step-details > span {
+  display: flex;
+  min-width: 0;
+  gap: 5px;
+  color: #626c65;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.step-details b {
+  color: #89918b;
+  font-weight: 600;
+}
+
+.step-details .gate-detail {
+  color: #8b5426;
+}
+
 .dirty-notice {
   display: grid;
   gap: 5px;
@@ -630,7 +846,9 @@ button:focus-visible {
   }
 
   .project-list-header,
-  .project-detail-heading {
+  .project-detail-heading,
+  .workflow-heading,
+  .workflow-phase {
     display: grid;
   }
 

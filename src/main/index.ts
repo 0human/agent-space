@@ -7,6 +7,9 @@ import { createMainWindow, registerAppShellHandlers } from './app-shell'
 import { registerProjectHandlers } from './project-handlers'
 import { createDefaultGitExecutor, createProjectService } from './project-service'
 import { createDefaultIdeLauncher } from './ide-launcher'
+import { registerWorkflowHandlers } from './workflow-handlers'
+import { createWorkflowService } from './workflow-service'
+import { BUILT_IN_SKILL_MANIFESTS } from '../shared/workflow'
 
 const currentDirectory = fileURLToPath(new URL('.', import.meta.url))
 
@@ -60,6 +63,16 @@ registerAppShellHandlers({
   platform: process.platform
 })
 
+const projectService = createProjectService({
+  readFile,
+  writeFile,
+  mkdir: async (path, options) => {
+    await mkdir(path, options)
+  },
+  readDirectory: async (path) => readdir(path),
+  execGit: createDefaultGitExecutor()
+})
+
 registerProjectHandlers({
   handle: (channel, listener) => ipcMain.handle(channel, listener),
   dialog: {
@@ -68,14 +81,20 @@ registerProjectHandlers({
   },
   openInIde: createDefaultIdeLauncher(),
   userDataPath: app.getPath('userData'),
-  service: createProjectService({
+  service: projectService
+})
+
+registerWorkflowHandlers({
+  handle: (channel, listener) => ipcMain.handle(channel, listener),
+  userDataPath: app.getPath('userData'),
+  projectService,
+  workflowService: createWorkflowService({
     readFile,
     writeFile,
     mkdir: async (path, options) => {
       await mkdir(path, options)
     },
-    readDirectory: async (path) => readdir(path),
-    execGit: createDefaultGitExecutor()
+    manifests: BUILT_IN_SKILL_MANIFESTS
   })
 })
 

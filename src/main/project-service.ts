@@ -4,7 +4,7 @@ import { basename, dirname, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import { randomUUID } from 'node:crypto'
 
-import type { DirtyWorkspaceSummary, Project, WorkspaceState } from '../shared/project'
+import { DEFAULT_PROJECT_PERMISSIONS, type DirtyWorkspaceSummary, type Project, type WorkspaceState } from '../shared/project'
 
 const execFile = promisify(execFileCallback)
 
@@ -143,7 +143,8 @@ export function createProjectService(dependencies: ProjectServiceDependencies) {
     if (!Array.isArray(value)) throw new Error('Project 注册表格式无效')
     return value.map((project) => ({
       ...project,
-      workspaceAvailable: project.workspaceAvailable !== false
+      workspaceAvailable: project.workspaceAvailable !== false,
+      permissionPolicy: project.permissionPolicy ?? { grantedPermissions: [...DEFAULT_PROJECT_PERMISSIONS] }
     })) as Project[]
   }
 
@@ -186,6 +187,7 @@ export function createProjectService(dependencies: ProjectServiceDependencies) {
         name: existing?.name ?? (basename(normalizedWorkspacePath) || normalizedWorkspacePath),
         workspacePath: normalizedWorkspacePath,
         ...state,
+        permissionPolicy: existing?.permissionPolicy ?? { grantedPermissions: [...DEFAULT_PROJECT_PERMISSIONS] },
         updatedAt: now()
       }
       const next = existing

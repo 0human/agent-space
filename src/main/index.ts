@@ -72,6 +72,7 @@ const projectService = createProjectService({
   readDirectory: async (path) => readdir(path),
   execGit: createDefaultGitExecutor()
 })
+const openInIde = createDefaultIdeLauncher()
 
 registerProjectHandlers({
   handle: (channel, listener) => ipcMain.handle(channel, listener),
@@ -79,7 +80,7 @@ registerProjectHandlers({
     showOpenDialog: (options) => dialog.showOpenDialog(options),
     showMessageBox: (options) => dialog.showMessageBox(options)
   },
-  openInIde: createDefaultIdeLauncher(),
+  openInIde,
   userDataPath: app.getPath('userData'),
   service: projectService
 })
@@ -88,6 +89,7 @@ registerWorkflowHandlers({
   handle: (channel, listener) => ipcMain.handle(channel, listener),
   userDataPath: app.getPath('userData'),
   projectService,
+  openInIde,
   workflowService: createWorkflowService({
     readFile,
     writeFile,

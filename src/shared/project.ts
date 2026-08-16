@@ -16,11 +16,23 @@ export interface WorkspaceState {
   dirtySummary: DirtyWorkspaceSummary
 }
 
+export interface PermissionPolicy {
+  grantedPermissions: string[]
+}
+
+export const DEFAULT_PROJECT_PERMISSIONS = [
+  'workspace.read',
+  'workspace.write',
+  'git.commit',
+  'network.github'
+] as const
+
 export interface Project extends WorkspaceState {
   id: string
   name: string
   workspacePath: string
   updatedAt: string
+  permissionPolicy?: PermissionPolicy
 }
 
 export interface ProjectImportResult {

@@ -220,9 +220,10 @@ interface WorkflowViewProps {
   onCopy: () => void
   onReload: () => void
   onStart: () => void
+  onEdit: () => void
 }
 
-function WorkflowView({ project, workflow, loading, error, onBack, onCopy, onReload, onStart }: WorkflowViewProps): React.JSX.Element {
+function WorkflowView({ project, workflow, loading, error, onBack, onCopy, onReload, onStart, onEdit }: WorkflowViewProps): React.JSX.Element {
   if (loading || !workflow) {
     return (
       <main className="content" aria-busy="true">
@@ -233,7 +234,7 @@ function WorkflowView({ project, workflow, loading, error, onBack, onCopy, onRel
   }
 
   const { definition, validation } = workflow
-  const originVersion = definition.derivedFrom?.version ?? '1.0.0'
+  const originVersion = definition.derivedFrom?.version
   return (
     <main className="content workflow-content" aria-labelledby="workflow-title">
       <div className="content-header">
@@ -255,7 +256,7 @@ function WorkflowView({ project, workflow, loading, error, onBack, onCopy, onRel
             </div>
             <h1 id="workflow-title">{definition.name}</h1>
             {workflow.path ? <p className="workflow-path">{workflow.path}</p> : null}
-            {workflow.source === 'project' ? <p className="workflow-origin">{copy.workflow.origin(originVersion)}</p> : null}
+            {workflow.source === 'project' && originVersion ? <p className="workflow-origin">{copy.workflow.origin(originVersion)}</p> : null}
           </div>
           <div className="workflow-actions">
             {workflow.source === 'built-in' ? (
@@ -263,9 +264,14 @@ function WorkflowView({ project, workflow, loading, error, onBack, onCopy, onRel
                 <Copy aria-hidden="true" />{copy.workflow.copyAction}
               </button>
             ) : (
-              <button className="secondary-action" type="button" onClick={onReload}>
-                <RefreshCw aria-hidden="true" />{copy.workflow.reloadAction}
-              </button>
+              <>
+                <button className="secondary-action" type="button" onClick={onEdit}>
+                  <FolderKanban aria-hidden="true" />{copy.workflow.editAction}
+                </button>
+                <button className="secondary-action" type="button" onClick={onReload}>
+                  <RefreshCw aria-hidden="true" />{copy.workflow.reloadAction}
+                </button>
+              </>
             )}
             <button className="primary-action" type="button" onClick={onStart} disabled={!workflow.canStart}>
               <ArrowRight aria-hidden="true" />{copy.workflow.startAction}
@@ -305,6 +311,25 @@ function WorkflowView({ project, workflow, loading, error, onBack, onCopy, onRel
             </section>
           ))}
         </div>
+
+        <section className="skill-package" aria-labelledby="skill-package-title">
+          <div className="skill-package-heading">
+            <p className="eyebrow">{copy.workflow.skillPackageEyebrow}</p>
+            <h2 id="skill-package-title">{copy.workflow.skillPackageTitle}</h2>
+          </div>
+          <div className="skill-manifests">
+            {workflow.skillManifests.map((manifest) => (
+              <article className="skill-manifest" key={manifest.name}>
+                <div><strong>{manifest.name}@{manifest.version}</strong><span>{manifest.entry}</span></div>
+                <dl>
+                  <div><dt>Runtime</dt><dd>{manifest.supportedRuntimes.join(', ')}</dd></div>
+                  <div><dt>{copy.workflow.dependencies}</dt><dd>{manifest.dependencies.join(', ') || copy.workflow.none}</dd></div>
+                  <div><dt>{copy.workflow.permissions}</dt><dd>{manifest.requiredPermissions.join(', ')}</dd></div>
+                </dl>
+              </article>
+            ))}
+          </div>
+        </section>
       </section>
     </main>
   )
@@ -436,6 +461,12 @@ export default function App(): React.JSX.Element {
     setWorkflowError(result.ok ? copy.workflow.startReady : (result.error ?? copy.workflow.startError))
   }
 
+  const editWorkflow = async (): Promise<void> => {
+    if (!selectedProject) return
+    const result = await window.appShell.openWorkflowFile(selectedProject.id)
+    if (!result.ok) setWorkflowError(result.error ?? copy.workflow.editError)
+  }
+
   const content = view === 'projectOverview'
     ? (
         <ProjectOverview
@@ -449,7 +480,7 @@ export default function App(): React.JSX.Element {
     : view === 'settings'
       ? <SettingsView />
       : view === 'workflow' && selectedProject
-        ? <WorkflowView project={selectedProject} workflow={workflow} loading={workflowLoading} error={workflowError} onBack={() => setView('projectDetail')} onCopy={copyWorkflow} onReload={reloadWorkflow} onStart={startWorkflowRun} />
+        ? <WorkflowView project={selectedProject} workflow={workflow} loading={workflowLoading} error={workflowError} onBack={() => setView('projectDetail')} onCopy={copyWorkflow} onReload={reloadWorkflow} onStart={startWorkflowRun} onEdit={editWorkflow} />
         : view === 'projectDetail' && selectedProject
           ? <ProjectDetail project={selectedProject} onBack={() => setView('projectOverview')} onOpenInIde={openProjectInIde} openError={openError} importWarning={importWarning} onViewWorkflow={openWorkflow} />
           : <ProjectEntry mode={view === 'resumeWork' ? 'resumeWork' : 'createProject'} onBack={() => setView('projectOverview')} onImport={importProject} error={error} />

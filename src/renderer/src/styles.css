@@ -613,6 +613,67 @@ button:focus-visible {
   color: #8b5426;
 }
 
+.skill-package {
+  margin-top: 34px;
+  padding-top: 28px;
+  border-top: 1px solid #d8ddd8;
+}
+
+.skill-package-heading h2 {
+  margin: 8px 0 0;
+  font-size: 16px;
+  letter-spacing: 0;
+}
+
+.skill-manifests {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+  margin-top: 18px;
+}
+
+.skill-manifest {
+  min-width: 0;
+  padding: 14px 15px;
+  background: #fff;
+  border: 1px solid #d8ddd8;
+  border-radius: 6px;
+}
+
+.skill-manifest > div {
+  display: grid;
+  gap: 5px;
+}
+
+.skill-manifest strong {
+  font-size: 12px;
+}
+
+.skill-manifest span,
+.skill-manifest dt,
+.skill-manifest dd {
+  margin: 0;
+  color: #68726b;
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+
+.skill-manifest dl {
+  display: grid;
+  gap: 5px;
+  margin: 12px 0 0;
+}
+
+.skill-manifest dl > div {
+  display: grid;
+  grid-template-columns: 62px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.skill-manifest dt {
+  color: #89918b;
+}
+
 .dirty-notice {
   display: grid;
   gap: 5px;
@@ -853,6 +914,10 @@ button:focus-visible {
   }
 
   .project-metadata {
+    grid-template-columns: 1fr;
+  }
+
+  .skill-manifests {
     grid-template-columns: 1fr;
   }
 }

@@ -10,7 +10,8 @@ const appShellApi: AppShellApi = Object.freeze({
   getWorkflow: (projectId) => ipcRenderer.invoke(APP_SHELL_CHANNELS.getWorkflow, projectId),
   copyWorkflow: (projectId) => ipcRenderer.invoke(APP_SHELL_CHANNELS.copyWorkflow, projectId),
   reloadWorkflow: (projectId) => ipcRenderer.invoke(APP_SHELL_CHANNELS.reloadWorkflow, projectId),
-  startWorkflowRun: (projectId) => ipcRenderer.invoke(APP_SHELL_CHANNELS.startWorkflowRun, projectId)
+  startWorkflowRun: (projectId) => ipcRenderer.invoke(APP_SHELL_CHANNELS.startWorkflowRun, projectId),
+  openWorkflowFile: (projectId) => ipcRenderer.invoke(APP_SHELL_CHANNELS.openWorkflowFile, projectId)
 })
 
 contextBridge.exposeInMainWorld('appShell', appShellApi)

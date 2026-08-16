@@ -21,6 +21,7 @@ export interface WorkflowStep {
   artifacts?: string[]
   condition?: string
   approvalGate?: string
+  adapter?: string
 }
 
 export interface WorkflowPhase {
@@ -51,6 +52,7 @@ export interface WorkflowView {
   path: string | null
   validation: WorkflowValidationResult
   canStart: boolean
+  skillManifests: SkillManifest[]
 }
 
 export interface WorkflowStartResult {

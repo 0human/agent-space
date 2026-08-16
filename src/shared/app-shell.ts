@@ -14,7 +14,8 @@ export const APP_SHELL_CHANNELS = {
   getWorkflow: 'workflow:get',
   copyWorkflow: 'workflow:copy',
   reloadWorkflow: 'workflow:reload',
-  startWorkflowRun: 'workflow:start-run'
+  startWorkflowRun: 'workflow:start-run',
+  openWorkflowFile: 'workflow:open-file'
 } as const
 
 export interface AppShellApi {
@@ -26,4 +27,5 @@ export interface AppShellApi {
   copyWorkflow: (projectId: string) => Promise<WorkflowView | null>
   reloadWorkflow: (projectId: string) => Promise<WorkflowView | null>
   startWorkflowRun: (projectId: string) => Promise<WorkflowStartResult>
+  openWorkflowFile: (projectId: string) => Promise<OpenProjectResult>
 }

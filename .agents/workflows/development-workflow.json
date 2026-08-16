@@ -1,54 +1,54 @@
 {
   "schemaVersion": 1,
   "id": "development-workflow",
-  "name": "Development Workflow",
+  "name": "软件交付 Workflow",
   "version": "1.0.0",
   "phases": [
     {
       "id": "discovery",
-      "name": "Idea / Discovery",
+      "name": "想法与探索",
       "goal": "澄清目标并形成共享理解。",
       "steps": [{ "id": "discover", "name": "澄清 Idea", "kind": "skill", "skill": { "name": "grill-with-docs", "version": "1.0.0" }, "artifacts": ["domain-docs"] }]
     },
     {
       "id": "requirements",
-      "name": "Requirements / Domain Docs",
+      "name": "需求与领域文档",
       "goal": "将已确认的上下文形成可审阅规格。",
       "steps": [{ "id": "spec", "name": "形成规格", "kind": "skill", "skill": { "name": "to-spec", "version": "1.0.0" }, "artifacts": ["specification"] }]
     },
     {
       "id": "planning",
-      "name": "Planning",
+      "name": "规划",
       "goal": "将规格拆分为有依赖关系的交付切片。",
       "steps": [{ "id": "tickets", "name": "拆分 tickets", "kind": "skill", "skill": { "name": "to-tickets", "version": "1.0.0" }, "artifacts": ["tickets"], "condition": "specification.ready" }]
     },
     {
       "id": "implementation",
-      "name": "Implementation",
+      "name": "实现",
       "goal": "以垂直切片实现并验证变更。",
-      "steps": [{ "id": "implement", "name": "实现与测试", "kind": "skill", "skill": { "name": "implement", "version": "1.0.0" }, "artifacts": ["commit"], "approvalGate": "高风险写操作" }]
+      "steps": [{ "id": "implement", "name": "实现与测试", "kind": "skill", "skill": { "name": "implement", "version": "1.0.0" }, "artifacts": ["commit"], "approvalGate": "高风险写操作确认" }]
     },
     {
       "id": "verification",
-      "name": "Verification / Review",
+      "name": "验证与 Review",
       "goal": "检查结果并等待外部验证。",
       "steps": [{ "id": "review", "name": "自动 Review", "kind": "skill", "skill": { "name": "code-review", "version": "1.0.0" }, "artifacts": ["review-report"] }]
     },
     {
       "id": "delivery",
-      "name": "Commit / Push / PR",
+      "name": "提交、推送与 PR",
       "goal": "将变更交付到远程仓库。",
-      "steps": [{ "id": "delivery", "name": "创建 PR", "kind": "tool", "artifacts": ["pull-request"], "approvalGate": "Merge Gate" }]
+      "steps": [{ "id": "delivery", "name": "创建 PR", "kind": "tool", "adapter": "github.pull-request", "artifacts": ["pull-request"], "approvalGate": "PR 合并确认" }]
     },
     {
       "id": "release",
-      "name": "Release",
+      "name": "发布",
       "goal": "按 Project 配置完成发布。",
-      "steps": [{ "id": "release", "name": "发布", "kind": "human", "condition": "project.release.enabled", "approvalGate": "Release Approval" }]
+      "steps": [{ "id": "release", "name": "发布", "kind": "human", "condition": "project.release.enabled", "approvalGate": "发布确认" }]
     },
     {
       "id": "post-release",
-      "name": "Post-release Validation",
+      "name": "发布后验证",
       "goal": "确认交付结果在目标环境可用。",
       "steps": [{ "id": "validate", "name": "上线验证", "kind": "human", "artifacts": ["validation-report"] }]
     }

@@ -3,7 +3,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { BUILT_IN_DEVELOPMENT_WORKFLOW, BUILT_IN_SKILL_MANIFESTS } from '../shared/workflow'
-import { createWorkflowService } from './workflow-service'
+import { createWorkflowService, validateWorkflow } from './workflow-service'
 
 describe('Workflow service', () => {
   it('returns a read-only built-in workflow with machine-readable skill manifests', async () => {
@@ -24,15 +24,7 @@ describe('Workflow service', () => {
   })
 
   it('rejects missing skills, unsupported versions, permissions, and embedded prompts', () => {
-    const service = createWorkflowService({
-      readFile: async () => '',
-      writeFile: async () => undefined,
-      mkdir: async () => undefined,
-      manifests: BUILT_IN_SKILL_MANIFESTS,
-      grantedPermissions: []
-    })
-
-    const result = service.validate({
+    const result = validateWorkflow({
       schemaVersion: 2,
       id: 'broken',
       name: 'Broken',
@@ -48,7 +40,7 @@ describe('Workflow service', () => {
           skill: { name: 'implement', version: '1.0.0' }
         }]
       }]
-    } as never)
+    } as never, BUILT_IN_SKILL_MANIFESTS, [])
 
     expect(result.valid).toBe(false)
     expect(result.errors).toEqual(expect.arrayContaining([
@@ -68,7 +60,7 @@ describe('Workflow service', () => {
       manifests: BUILT_IN_SKILL_MANIFESTS
     })
 
-    const copied = await service.copyToProject('/work/demo')
+    const copied = await service.copyToProject('/work/demo', ['workspace.read', 'workspace.write', 'git.commit', 'network.github'])
     expect(copied.source).toBe('project')
     expect(copied.path).toBe('/work/demo/.agent-space/workflow.json')
     expect(JSON.parse(stored)).toEqual({
@@ -76,9 +68,9 @@ describe('Workflow service', () => {
       derivedFrom: { id: 'development-workflow', version: '1.0.0' }
     })
 
-    const edited = { ...BUILT_IN_DEVELOPMENT_WORKFLOW, name: 'Edited Workflow' }
+    const edited = { ...JSON.parse(stored), name: 'Edited Workflow' }
     stored = JSON.stringify(edited)
-    const reloaded = await service.loadProject('/work/demo')
+    const reloaded = await service.loadProject('/work/demo', ['workspace.read', 'workspace.write', 'git.commit', 'network.github'])
     expect(reloaded.definition.name).toBe('Edited Workflow')
     expect(reloaded.validation.valid).toBe(true)
   })
@@ -91,10 +83,39 @@ describe('Workflow service', () => {
       manifests: BUILT_IN_SKILL_MANIFESTS
     })
 
-    await expect(service.startProjectRun('/work/demo')).resolves.toEqual({
+    await expect(service.startProjectRun('/work/demo', [])).resolves.toEqual({
       ok: false,
       error: expect.stringContaining('校验失败')
     })
+  })
+
+  it('rejects a Project Workflow that loses its source version', async () => {
+    const service = createWorkflowService({
+      readFile: async () => JSON.stringify(BUILT_IN_DEVELOPMENT_WORKFLOW),
+      writeFile: async () => undefined,
+      mkdir: async () => undefined,
+      manifests: BUILT_IN_SKILL_MANIFESTS
+    })
+
+    const workflow = await service.loadProject('/work/demo', ['workspace.read', 'workspace.write', 'git.commit', 'network.github'])
+    expect(workflow.canStart).toBe(false)
+    expect(workflow.validation.errors).toContain('Project Workflow 必须保留有效的 derivedFrom 来源版本。')
+  })
+
+  it('rejects a Project Workflow with a mismatched source version', async () => {
+    const service = createWorkflowService({
+      readFile: async () => JSON.stringify({
+        ...BUILT_IN_DEVELOPMENT_WORKFLOW,
+        derivedFrom: { id: BUILT_IN_DEVELOPMENT_WORKFLOW.id, version: '9.9.9' }
+      }),
+      writeFile: async () => undefined,
+      mkdir: async () => undefined,
+      manifests: BUILT_IN_SKILL_MANIFESTS
+    })
+
+    const workflow = await service.loadProject('/work/demo', ['workspace.read', 'workspace.write', 'git.commit', 'network.github'])
+    expect(workflow.canStart).toBe(false)
+    expect(workflow.validation.errors).toContain('Project Workflow 必须保留有效的 derivedFrom 来源版本。')
   })
 
   it('returns actionable validation for malformed externally edited files', async () => {
@@ -105,7 +126,7 @@ describe('Workflow service', () => {
       manifests: BUILT_IN_SKILL_MANIFESTS
     })
 
-    const reloaded = await service.loadProject('/work/demo')
+    const reloaded = await service.loadProject('/work/demo', [])
     expect(reloaded.canStart).toBe(false)
     expect(reloaded.definition.phases).toEqual([])
     expect(reloaded.validation.errors).toEqual([expect.stringContaining('JSON')])

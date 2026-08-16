@@ -11,7 +11,8 @@ const view: WorkflowView = {
   source: 'built-in',
   path: null,
   validation: { valid: true, errors: [], warnings: [] },
-  canStart: true
+  canStart: false,
+  skillManifests: []
 }
 
 describe('Workflow IPC handlers', () => {
@@ -32,9 +33,9 @@ describe('Workflow IPC handlers', () => {
     })
 
     await expect(handlers.get(APP_SHELL_CHANNELS.getWorkflow)?.({}, 'project-1')).resolves.toEqual(view)
-    expect(workflow.loadProject).toHaveBeenCalledWith('/work/demo')
+    expect(workflow.loadProject).toHaveBeenCalledWith('/work/demo', expect.any(Array))
     await expect(handlers.get(APP_SHELL_CHANNELS.copyWorkflow)?.({}, 'project-1')).resolves.toMatchObject({ source: 'project' })
-    expect(workflow.copyToProject).toHaveBeenCalledWith('/work/demo')
+    expect(workflow.copyToProject).toHaveBeenCalledWith('/work/demo', expect.any(Array))
   })
 
   it('reloads the Project Workflow and blocks invalid starts', async () => {
@@ -49,7 +50,13 @@ describe('Workflow IPC handlers', () => {
 
     registerWorkflowHandlers({
       handle: (channel, listener) => handlers.set(channel, listener),
-      projectService: { findById: vi.fn().mockResolvedValue({ id: 'project-1', workspacePath: '/work/demo' }) },
+      projectService: {
+        findById: vi.fn().mockResolvedValue({
+          id: 'project-1',
+          workspacePath: '/work/demo',
+          permissionPolicy: { grantedPermissions: [] }
+        })
+      },
       workflowService: workflow
     })
 
@@ -58,6 +65,30 @@ describe('Workflow IPC handlers', () => {
       ok: false,
       error: 'Workflow 校验失败：schemaVersion 无效。'
     })
-    expect(workflow.startProjectRun).toHaveBeenCalledWith('/work/demo')
+    expect(workflow.loadProject).toHaveBeenCalledWith('/work/demo', [])
+    expect(workflow.startProjectRun).toHaveBeenCalledWith('/work/demo', [])
+  })
+
+  it('opens the Project Workflow file in the external IDE', async () => {
+    const handlers = new Map<string, (...args: unknown[]) => unknown>()
+    const openInIde = vi.fn().mockResolvedValue(undefined)
+
+    registerWorkflowHandlers({
+      handle: (channel, listener) => handlers.set(channel, listener),
+      projectService: { findById: vi.fn().mockResolvedValue({ id: 'project-1', workspacePath: '/work/demo' }) },
+      workflowService: {
+        getBuiltIn: vi.fn(),
+        copyToProject: vi.fn(),
+        loadProject: vi.fn(),
+        startProjectRun: vi.fn()
+      },
+      openInIde
+    })
+
+    await expect(handlers.get(APP_SHELL_CHANNELS.openWorkflowFile)?.({}, 'project-1')).resolves.toEqual({
+      ok: true,
+      error: null
+    })
+    expect(openInIde).toHaveBeenCalledWith('/work/demo/.agent-space/workflow.json')
   })
 })

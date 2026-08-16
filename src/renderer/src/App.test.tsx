@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import App from './App'
-import { BUILT_IN_DEVELOPMENT_WORKFLOW } from '../../shared/workflow'
+import { BUILT_IN_DEVELOPMENT_WORKFLOW, BUILT_IN_SKILL_MANIFESTS } from '../../shared/workflow'
 
 describe('Desktop Shell navigation', () => {
   beforeEach(() => {
@@ -17,11 +17,13 @@ describe('Desktop Shell navigation', () => {
         source: 'built-in',
         path: null,
         validation: { valid: true, errors: [], warnings: [] },
-        canStart: true
+        canStart: false,
+        skillManifests: BUILT_IN_SKILL_MANIFESTS
       }),
       copyWorkflow: vi.fn(),
       reloadWorkflow: vi.fn(),
-      startWorkflowRun: vi.fn()
+      startWorkflowRun: vi.fn(),
+      openWorkflowFile: vi.fn().mockResolvedValue({ ok: true, error: null })
     }
   })
 
@@ -206,13 +208,16 @@ describe('Desktop Shell navigation', () => {
     await user.click(await screen.findByRole('button', { name: /demo/ }))
     await user.click(screen.getByRole('button', { name: '查看 Workflow' }))
 
-    expect(await screen.findByRole('heading', { name: 'Development Workflow' })).toBeVisible()
-    expect(screen.getByText('Idea / Discovery')).toBeVisible()
-    expect(screen.getByText('Implementation')).toBeVisible()
-    expect(screen.getByText('Merge Gate')).toBeVisible()
-    expect(screen.getByText('grill-with-docs@1.0.0')).toBeVisible()
+    expect(await screen.findByRole('heading', { name: '软件交付 Workflow' })).toBeVisible()
+    expect(screen.getByText('想法与探索')).toBeVisible()
+    expect(screen.getByText('实现')).toBeVisible()
+    expect(screen.getByText('PR 合并确认')).toBeVisible()
+    expect(screen.getAllByText('grill-with-docs@1.0.0')).toHaveLength(2)
+    expect(screen.getByRole('heading', { name: '机器可读 Skill Manifest' })).toBeVisible()
+    expect(screen.getByText('skills/grill-with-docs/SKILL.md')).toBeVisible()
     expect(screen.getByText('内置 Workflow 只读')).toBeVisible()
     expect(screen.getByRole('button', { name: '复制为 Project Workflow' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: '启动新 Run' })).toBeDisabled()
   })
 
   it('copies, reloads, validates, and blocks an invalid Project Workflow', async () => {
@@ -226,14 +231,18 @@ describe('Desktop Shell navigation', () => {
     }
     window.appShell.listProjects = vi.fn().mockResolvedValue([project])
     window.appShell.copyWorkflow = vi.fn().mockResolvedValue({
-      definition: { ...BUILT_IN_DEVELOPMENT_WORKFLOW, name: 'Project Workflow' },
+      definition: {
+        ...BUILT_IN_DEVELOPMENT_WORKFLOW,
+        name: 'Project Workflow',
+        derivedFrom: { id: 'development-workflow', version: '1.0.0' }
+      },
       source: 'project', path: '/work/demo/.agent-space/workflow.json',
-      validation: { valid: true, errors: [], warnings: [] }, canStart: true
+      validation: { valid: true, errors: [], warnings: [] }, canStart: true, skillManifests: []
     })
     window.appShell.reloadWorkflow = vi.fn().mockResolvedValue({
       definition: { ...BUILT_IN_DEVELOPMENT_WORKFLOW, name: 'Edited Workflow' },
       source: 'project', path: '/work/demo/.agent-space/workflow.json',
-      validation: { valid: false, errors: ['缺少 Skill research。'], warnings: [] }, canStart: false
+      validation: { valid: false, errors: ['缺少 Skill research。'], warnings: [] }, canStart: false, skillManifests: []
     })
 
     render(<App />)

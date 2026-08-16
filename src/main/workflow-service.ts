@@ -7,7 +7,6 @@ interface WorkflowFileDependencies {
   writeFile: (path: string, data: string, encoding: 'utf8') => Promise<void>
   mkdir: (path: string, options: { recursive: true }) => Promise<void>
   manifests: SkillManifest[]
-  grantedPermissions?: string[]
 }
 
 function validationError(errors: string[], message: string): void {
@@ -50,7 +49,7 @@ function normalizeWorkflow(value: unknown): WorkflowDefinition {
   }
 }
 
-export function validateWorkflow(definition: unknown, manifests: SkillManifest[], grantedPermissions?: string[]): WorkflowValidationResult {
+export function validateWorkflow(definition: unknown, manifests: SkillManifest[], grantedPermissions?: string[], requireOrigin = false): WorkflowValidationResult {
   const errors: string[] = []
   const warnings: string[] = []
   if (!definition || typeof definition !== 'object') {
@@ -63,6 +62,12 @@ export function validateWorkflow(definition: unknown, manifests: SkillManifest[]
   if (typeof value.name !== 'string' || !value.name) validationError(errors, 'Workflow 必须包含 name。')
   if (typeof value.version !== 'string' || !/^\d+\.\d+\.\d+$/.test(value.version)) validationError(errors, 'Workflow version 必须使用 x.y.z 格式。')
   if (containsPrompt(value)) validationError(errors, 'Workflow File 不得包含 prompt；行为必须来自 Skill Package。')
+  if (requireOrigin) {
+    const origin = value.derivedFrom
+    if (!origin || typeof origin !== 'object' || (origin as Record<string, unknown>).id !== BUILT_IN_DEVELOPMENT_WORKFLOW.id || (origin as Record<string, unknown>).version !== BUILT_IN_DEVELOPMENT_WORKFLOW.version) {
+      validationError(errors, 'Project Workflow 必须保留有效的 derivedFrom 来源版本。')
+    }
+  }
   if (!Array.isArray(value.phases) || value.phases.length === 0) {
     validationError(errors, 'Workflow 至少需要一个 Phase。')
     return { valid: false, errors, warnings }
@@ -87,7 +92,13 @@ export function validateWorkflow(definition: unknown, manifests: SkillManifest[]
         continue
       }
       const stepValue = step as Record<string, unknown>
+      if (typeof stepValue.id !== 'string' || !stepValue.id || typeof stepValue.name !== 'string' || !stepValue.name) {
+        validationError(errors, `phases[${phaseIndex}].steps[${stepIndex}] 缺少 id 或 name。`)
+      }
       if (!['skill', 'tool', 'human'].includes(String(stepValue.kind))) validationError(errors, `Step ${String(stepValue.id ?? stepIndex)} 的 kind 无效。`)
+      if (stepValue.kind === 'tool' && (typeof stepValue.adapter !== 'string' || !stepValue.adapter)) {
+        validationError(errors, `Tool Step ${String(stepValue.id ?? stepIndex)} 缺少 adapter。`)
+      }
       if (stepValue.kind === 'skill') {
         const skill = stepValue.skill
         if (!skill || typeof skill !== 'object') {
@@ -123,9 +134,16 @@ function projectPath(workspacePath: string): string {
   return join(workspacePath, '.agent-space', 'workflow.json')
 }
 
-function view(value: unknown, source: WorkflowView['source'], path: string | null, manifests: SkillManifest[], grantedPermissions?: string[]): WorkflowView {
-  const validation = validateWorkflow(value, manifests, grantedPermissions)
-  return { definition: normalizeWorkflow(value), source, path, validation, canStart: validation.valid }
+function createWorkflowView(value: unknown, source: WorkflowView['source'], path: string | null, manifests: SkillManifest[], grantedPermissions?: string[]): WorkflowView {
+  const validation = validateWorkflow(value, manifests, grantedPermissions, source === 'project')
+  return {
+    definition: normalizeWorkflow(value),
+    source,
+    path,
+    validation,
+    canStart: source === 'project' && validation.valid,
+    skillManifests: structuredClone(manifests)
+  }
 }
 
 export function createWorkflowService(dependencies: WorkflowFileDependencies) {
@@ -133,14 +151,14 @@ export function createWorkflowService(dependencies: WorkflowFileDependencies) {
     manifests: dependencies.manifests,
 
     async getBuiltIn(): Promise<WorkflowView> {
-      return view(structuredClone(BUILT_IN_DEVELOPMENT_WORKFLOW), 'built-in', null, dependencies.manifests, dependencies.grantedPermissions)
+      return createWorkflowView(structuredClone(BUILT_IN_DEVELOPMENT_WORKFLOW), 'built-in', null, dependencies.manifests)
     },
 
     validate(definition: unknown): WorkflowValidationResult {
-      return validateWorkflow(definition, dependencies.manifests, dependencies.grantedPermissions)
+      return validateWorkflow(definition, dependencies.manifests)
     },
 
-    async copyToProject(workspacePath: string): Promise<WorkflowView> {
+    async copyToProject(workspacePath: string, grantedPermissions: string[]): Promise<WorkflowView> {
       const path = projectPath(workspacePath)
       await dependencies.mkdir(dirname(path), { recursive: true })
       const definition: WorkflowDefinition = {
@@ -148,10 +166,10 @@ export function createWorkflowService(dependencies: WorkflowFileDependencies) {
         derivedFrom: { id: BUILT_IN_DEVELOPMENT_WORKFLOW.id, version: BUILT_IN_DEVELOPMENT_WORKFLOW.version }
       }
       await dependencies.writeFile(path, JSON.stringify(definition, null, 2), 'utf8')
-      return view(definition, 'project', path, dependencies.manifests, dependencies.grantedPermissions)
+      return createWorkflowView(definition, 'project', path, dependencies.manifests, grantedPermissions)
     },
 
-    async loadProject(workspacePath: string): Promise<WorkflowView> {
+    async loadProject(workspacePath: string, grantedPermissions: string[]): Promise<WorkflowView> {
       const path = projectPath(workspacePath)
       const contents = await dependencies.readFile(path, 'utf8')
       let definition: WorkflowDefinition
@@ -164,16 +182,17 @@ export function createWorkflowService(dependencies: WorkflowFileDependencies) {
           source: 'project',
           path,
           validation: { valid: false, errors: ['Workflow File 不是有效的 JSON。'], warnings: [] },
-          canStart: false
+          canStart: false,
+          skillManifests: structuredClone(dependencies.manifests)
         }
       }
-      return view(definition, 'project', path, dependencies.manifests, dependencies.grantedPermissions)
+      return createWorkflowView(definition, 'project', path, dependencies.manifests, grantedPermissions)
     },
 
-    async startProjectRun(workspacePath: string): Promise<WorkflowStartResult> {
+    async startProjectRun(workspacePath: string, grantedPermissions: string[]): Promise<WorkflowStartResult> {
       let workflow: WorkflowView
       try {
-        workflow = await this.loadProject(workspacePath)
+        workflow = await this.loadProject(workspacePath, grantedPermissions)
       } catch {
         return { ok: false, error: 'Project Workflow 不存在或无法读取。' }
       }

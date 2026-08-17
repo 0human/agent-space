@@ -96,6 +96,15 @@ export function validateWorkflow(definition: unknown, manifests: SkillManifest[]
         validationError(errors, `phases[${phaseIndex}].steps[${stepIndex}] 缺少 id 或 name。`)
       }
       if (!['skill', 'tool', 'human'].includes(String(stepValue.kind))) validationError(errors, `Step ${String(stepValue.id ?? stepIndex)} 的 kind 无效。`)
+      if (stepValue.artifacts !== undefined && (!Array.isArray(stepValue.artifacts) || stepValue.artifacts.some((artifact) => typeof artifact !== 'string' || !artifact))) {
+        validationError(errors, `Step ${String(stepValue.id ?? stepIndex)} 的 artifacts 必须是非空字符串数组。`)
+      }
+      if (stepValue.condition !== undefined && (typeof stepValue.condition !== 'string' || !stepValue.condition)) {
+        validationError(errors, `Step ${String(stepValue.id ?? stepIndex)} 的 condition 必须是非空字符串。`)
+      }
+      if (stepValue.approvalGate !== undefined && (typeof stepValue.approvalGate !== 'string' || !stepValue.approvalGate)) {
+        validationError(errors, `Step ${String(stepValue.id ?? stepIndex)} 的 approvalGate 必须是非空字符串。`)
+      }
       if (stepValue.kind === 'tool' && (typeof stepValue.adapter !== 'string' || !stepValue.adapter)) {
         validationError(errors, `Tool Step ${String(stepValue.id ?? stepIndex)} 缺少 adapter。`)
       }

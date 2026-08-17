@@ -1,6 +1,7 @@
 // @vitest-environment node
 
 import { describe, expect, it, vi } from 'vitest'
+import { join } from 'node:path'
 
 import { APP_SHELL_CHANNELS } from '../shared/app-shell'
 import { BUILT_IN_DEVELOPMENT_WORKFLOW, type WorkflowView } from '../shared/workflow'
@@ -89,6 +90,6 @@ describe('Workflow IPC handlers', () => {
       ok: true,
       error: null
     })
-    expect(openInIde).toHaveBeenCalledWith('/work/demo/.agent-space/workflow.json')
+    expect(openInIde).toHaveBeenCalledWith(join('/work/demo', '.agent-space', 'workflow.json'))
   })
 })

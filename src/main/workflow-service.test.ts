@@ -51,6 +51,32 @@ describe('Workflow service', () => {
     ]))
   })
 
+  it('rejects invalid step field types from externally edited workflow files', () => {
+    const result = validateWorkflow({
+      ...BUILT_IN_DEVELOPMENT_WORKFLOW,
+      phases: [{
+        id: 'phase',
+        name: 'Phase',
+        goal: 'Goal',
+        steps: [{
+          id: 'step',
+          name: 'Step',
+          kind: 'human',
+          artifacts: 'not-an-array',
+          condition: 42,
+          approvalGate: false
+        }]
+      }]
+    }, BUILT_IN_SKILL_MANIFESTS)
+
+    expect(result.valid).toBe(false)
+    expect(result.errors).toEqual(expect.arrayContaining([
+      expect.stringContaining('artifacts'),
+      expect.stringContaining('condition'),
+      expect.stringContaining('approvalGate')
+    ]))
+  })
+
   it('copies the built-in workflow and reloads edited project files', async () => {
     let stored = ''
     const service = createWorkflowService({

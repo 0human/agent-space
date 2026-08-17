@@ -1,6 +1,7 @@
 // @vitest-environment node
 
 import { describe, expect, it } from 'vitest'
+import { join } from 'node:path'
 
 import { BUILT_IN_DEVELOPMENT_WORKFLOW, BUILT_IN_SKILL_MANIFESTS } from '../shared/workflow'
 import { createWorkflowService, validateWorkflow } from './workflow-service'
@@ -88,7 +89,7 @@ describe('Workflow service', () => {
 
     const copied = await service.copyToProject('/work/demo', ['workspace.read', 'workspace.write', 'git.commit', 'network.github'])
     expect(copied.source).toBe('project')
-    expect(copied.path).toBe('/work/demo/.agent-space/workflow.json')
+    expect(copied.path).toBe(join('/work/demo', '.agent-space', 'workflow.json'))
     expect(JSON.parse(stored)).toEqual({
       ...BUILT_IN_DEVELOPMENT_WORKFLOW,
       derivedFrom: { id: 'development-workflow', version: '1.0.0' }

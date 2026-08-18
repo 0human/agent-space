@@ -882,6 +882,41 @@ button:focus-visible {
   font: 11px ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
+.run-decision-record,
+.run-detail-logs > div {
+  display: grid;
+  gap: 4px;
+  margin-top: 9px;
+  padding: 9px 10px;
+  background: #f5f7f5;
+  border: 1px solid #dfe4df;
+  border-radius: 4px;
+}
+
+.run-decision-record strong,
+.run-detail-logs p {
+  color: #303731;
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.run-decision-record span,
+.run-detail-logs span {
+  color: #68726b;
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.run-detail-logs p { margin: 0; }
+
+.run-detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .run-decision > p { margin: 10px 0 14px; color: #303731; font-size: 14px; }
 .run-decision label { display: block; margin-bottom: 6px; color: #667068; font-size: 12px; }
 .run-decision textarea { width: 100%; min-height: 86px; resize: vertical; padding: 10px; border: 1px solid #ccd5cd; border-radius: 5px; font: inherit; font-size: 13px; }

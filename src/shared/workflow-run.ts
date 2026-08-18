@@ -12,6 +12,37 @@ export interface WorkflowEvent {
   createdAt: string
 }
 
+export interface WorkflowLog {
+  id: number
+  runId: string
+  executionId: string
+  type: string
+  message: string
+  data: Record<string, unknown>
+  createdAt: string
+}
+
+export interface PhaseContext {
+  id: string
+  runId: string
+  phaseId: string
+  content: string
+  updatedAt: string
+}
+
+export interface DecisionRecord {
+  id: string
+  runId: string
+  phaseId: string
+  stepId: string
+  executionId: string
+  source: 'runtime-question' | 'approval-gate'
+  question: string
+  answer: string
+  continuation: RunContinuation
+  createdAt: string
+}
+
 export interface StepExecution {
   id: string
   runId: string
@@ -47,6 +78,7 @@ export interface RunSnapshot {
   pendingApproval: string | null
   pendingQuestionDetails: PendingQuestion | null
   pendingApprovalDetails: PendingApproval | null
+  blockedBy: RunBlocker | null
   nextAction: string
 }
 
@@ -68,6 +100,13 @@ export interface PendingApproval {
   continuation: RunContinuation
 }
 
+export interface RunBlocker {
+  phaseIndex: number
+  stepIndex: number
+  executionId: string
+  reason: string
+}
+
 export interface WorkflowRun {
   id: string
   projectId: string
@@ -83,6 +122,9 @@ export interface WorkflowRun {
   snapshot: RunSnapshot
   stepExecutions: StepExecution[]
   events: WorkflowEvent[]
+  logs: WorkflowLog[]
+  phaseContexts: PhaseContext[]
+  decisionRecords: DecisionRecord[]
   artifacts: ArtifactIndex[]
   createdAt: string
   updatedAt: string

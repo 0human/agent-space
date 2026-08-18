@@ -1,5 +1,6 @@
 import type { OpenProjectResult, Project, ProjectImportResult } from './project'
-import type { WorkflowStartResult, WorkflowView } from './workflow'
+import type { WorkflowView } from './workflow'
+import type { WorkflowPreflightResult, WorkflowRun, WorkflowRunActionResult } from './workflow-run'
 
 export interface RuntimeInfo {
   platform: NodeJS.Platform
@@ -14,7 +15,14 @@ export const APP_SHELL_CHANNELS = {
   getWorkflow: 'workflow:get',
   copyWorkflow: 'workflow:copy',
   reloadWorkflow: 'workflow:reload',
+  preflightWorkflowRun: 'workflow-run:preflight',
   startWorkflowRun: 'workflow:start-run',
+  listWorkflowRuns: 'workflow-run:list',
+  getWorkflowRun: 'workflow-run:get',
+  pauseWorkflowRun: 'workflow-run:pause',
+  resumeWorkflowRun: 'workflow-run:resume',
+  retryWorkflowStep: 'workflow-run:retry-step',
+  cancelWorkflowRun: 'workflow-run:cancel',
   openWorkflowFile: 'workflow:open-file'
 } as const
 
@@ -26,6 +34,13 @@ export interface AppShellApi {
   getWorkflow: (projectId: string) => Promise<WorkflowView>
   copyWorkflow: (projectId: string) => Promise<WorkflowView | null>
   reloadWorkflow: (projectId: string) => Promise<WorkflowView | null>
-  startWorkflowRun: (projectId: string) => Promise<WorkflowStartResult>
+  preflightWorkflowRun: (projectId: string, idea: string) => Promise<WorkflowPreflightResult>
+  startWorkflowRun: (projectId: string, idea: string) => Promise<WorkflowRunActionResult>
+  listWorkflowRuns: (projectId: string) => Promise<WorkflowRun[]>
+  getWorkflowRun: (runId: string) => Promise<WorkflowRun | null>
+  pauseWorkflowRun: (runId: string) => Promise<WorkflowRun>
+  resumeWorkflowRun: (runId: string) => Promise<WorkflowRun>
+  retryWorkflowStep: (runId: string) => Promise<WorkflowRun>
+  cancelWorkflowRun: (runId: string) => Promise<WorkflowRun>
   openWorkflowFile: (projectId: string) => Promise<OpenProjectResult>
 }

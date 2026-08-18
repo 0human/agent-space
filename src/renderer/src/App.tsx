@@ -6,19 +6,23 @@ import {
   Copy,
   FolderClock,
   FolderKanban,
+  Pause,
   Plus,
   RefreshCw,
+  RotateCcw,
   Settings,
   ShieldAlert,
+  Square,
   Workflow
 } from 'lucide-react'
 
 import type { RuntimeInfo } from '../../shared/app-shell'
 import type { Project } from '../../shared/project'
 import type { WorkflowView as WorkflowViewModel } from '../../shared/workflow'
+import type { WorkflowPreflightResult, WorkflowRun, WorkflowRunStatus } from '../../shared/workflow-run'
 import { zhCN as copy } from './i18n/zh-CN'
 
-type View = 'projectOverview' | 'createProject' | 'resumeWork' | 'settings' | 'projectDetail' | 'workflow'
+type View = 'projectOverview' | 'createProject' | 'resumeWork' | 'settings' | 'projectDetail' | 'workflow' | 'run'
 
 const platformNames: Partial<Record<NodeJS.Platform, string>> = {
   darwin: copy.platform.darwin,
@@ -136,14 +140,16 @@ function ProjectEntry({ mode, onBack, onImport, error }: ProjectEntryProps): Rea
 
 interface ProjectDetailProps {
   project: Project
+  runs: WorkflowRun[]
   onBack: () => void
   onOpenInIde: () => void
   openError: string | null
   importWarning: string | null
   onViewWorkflow: () => void
+  onOpenRun: (run: WorkflowRun) => void
 }
 
-function ProjectDetail({ project, onBack, onOpenInIde, openError, importWarning, onViewWorkflow }: ProjectDetailProps): React.JSX.Element {
+function ProjectDetail({ project, runs, onBack, onOpenInIde, openError, importWarning, onViewWorkflow, onOpenRun }: ProjectDetailProps): React.JSX.Element {
   const workspaceAvailable = project.workspaceAvailable !== false
 
   return (
@@ -206,6 +212,109 @@ function ProjectDetail({ project, onBack, onOpenInIde, openError, importWarning,
             </div>
           </div>
         ) : null}
+        <section className="run-list" aria-labelledby="run-list-title">
+          <div className="run-list-heading">
+            <div>
+              <h2 id="run-list-title">Workflow Runs</h2>
+              <p>从持久状态恢复进行中、等待用户或 blocked 的 Run。</p>
+            </div>
+            <span>{runs.length} 个 Run</span>
+          </div>
+          {runs.length > 0 ? (
+            <div className="run-list-items">
+              {runs.map((run) => (
+                <button className="run-list-item" type="button" key={run.id} onClick={() => onOpenRun(run)}>
+                  <span><strong>{run.idea}</strong><small>{run.workflowId}@{run.workflowVersion}</small></span>
+                  <span className={`run-status is-${run.status}`}>{runStatusLabel[run.status]}</span>
+                  <ArrowRight aria-hidden="true" />
+                </button>
+              ))}
+            </div>
+          ) : <p className="run-list-empty">还没有 Workflow Run。</p>}
+        </section>
+      </section>
+    </main>
+  )
+}
+
+const runStatusLabel: Record<WorkflowRunStatus, string> = {
+  running: '运行中',
+  paused: '已暂停',
+  waiting: '等待用户',
+  blocked: '已 blocked',
+  failed: 'Step 失败',
+  completed: '已完成',
+  cancelled: '已取消'
+}
+
+interface RunBoardProps {
+  run: WorkflowRun
+  onBack: () => void
+  onPause: () => void
+  onResume: () => void
+  onRetry: () => void
+  onCancel: () => void
+  error: string | null
+}
+
+function RunBoard({ run, onBack, onPause, onResume, onRetry, onCancel, error }: RunBoardProps): React.JSX.Element {
+  const latestExecutions = new Map<string, WorkflowRun['stepExecutions'][number]>()
+  for (const execution of run.stepExecutions) latestExecutions.set(execution.stepId, execution)
+  const canPause = run.status === 'running'
+  const canResume = ['paused', 'waiting', 'blocked'].includes(run.status)
+  const canRetry = run.status === 'failed'
+  const canCancel = ['running', 'paused', 'waiting', 'blocked', 'failed'].includes(run.status)
+
+  return (
+    <main className="content workflow-content" aria-labelledby="run-board-title">
+      <div className="content-header">
+        <p className="eyebrow">Workflow Run</p>
+        <p className="content-context">{run.workflowId}@{run.workflowVersion}</p>
+      </div>
+      <section className="run-board-view">
+        <button className="back-action" type="button" onClick={onBack}><ArrowLeft aria-hidden="true" />返回 Project 详情</button>
+        <div className="run-board-heading">
+          <div>
+            <div className="workflow-source-line"><span className={`run-status is-${run.status}`}>{runStatusLabel[run.status]}</span><span>{run.projectId}</span></div>
+            <h1 id="run-board-title">{run.idea}</h1>
+            <p>{run.snapshot.nextAction}</p>
+          </div>
+          <div className="workflow-actions">
+            <button className="secondary-action" type="button" onClick={onPause} disabled={!canPause}><Pause aria-hidden="true" />暂停</button>
+            <button className="secondary-action" type="button" onClick={onResume} disabled={!canResume}><ArrowRight aria-hidden="true" />继续</button>
+            <button className="secondary-action" type="button" onClick={onRetry} disabled={!canRetry}><RotateCcw aria-hidden="true" />重试失败 Step</button>
+            <button className="secondary-action" type="button" onClick={onCancel} disabled={!canCancel}><Square aria-hidden="true" />取消 Run</button>
+          </div>
+        </div>
+        {run.error ? <p className="error-message" role="alert">{run.error}</p> : null}
+        {error ? <p className="error-message" role="alert">{error}</p> : null}
+        <div className="run-phases" aria-label="Run Board">
+          {run.definition.phases.map((phase, phaseIndex) => (
+            <section className={phaseIndex === run.snapshot.phaseIndex ? 'run-phase-column is-current' : 'run-phase-column'} key={phase.id}>
+              <div className="run-phase-heading"><span>{String(phaseIndex + 1).padStart(2, '0')}</span><h2>{phase.name}</h2></div>
+              <div className="run-phase-steps">
+                {phase.steps.map((step, stepIndex) => {
+                  const execution = latestExecutions.get(step.id)
+                  const isCurrent = phaseIndex === run.snapshot.phaseIndex && stepIndex === run.snapshot.stepIndex
+                  return <article className={isCurrent ? 'run-step-card is-current' : 'run-step-card'} key={step.id}>
+                    <div><strong>{step.name}</strong>{execution ? <span>attempt {execution.attempt}</span> : null}</div>
+                    <span className={`run-status is-${execution?.status ?? 'pending'}`}>{execution ? (runStatusLabel[execution.status as WorkflowRunStatus] ?? execution.status) : '待执行'}</span>
+                    {execution?.error ? <p>{execution.error}</p> : null}
+                    {isCurrent && (run.snapshot.pendingQuestion || run.snapshot.pendingApproval) ? <p>{run.snapshot.pendingQuestion ?? run.snapshot.pendingApproval}</p> : null}
+                  </article>
+                })}
+              </div>
+            </section>
+          ))}
+        </div>
+        <section className="run-artifacts" aria-labelledby="run-artifacts-title">
+          <h2 id="run-artifacts-title">Artifact 索引</h2>
+          {run.artifacts.length > 0 ? run.artifacts.map((artifact) => <div className="run-artifact" key={artifact.id}><strong>{artifact.name}</strong><span>{artifact.type}</span><span>{artifact.location ?? '未提供位置'}</span></div>) : <p>当前还没有 Artifact。</p>}
+        </section>
+        <section className="run-events" aria-labelledby="run-events-title">
+          <h2 id="run-events-title">Workflow Event</h2>
+          <div>{run.events.map((event) => <span key={event.id}>{event.type}</span>)}</div>
+        </section>
       </section>
     </main>
   )
@@ -216,14 +325,18 @@ interface WorkflowViewProps {
   workflow: WorkflowViewModel | null
   loading: boolean
   error: string | null
+  idea: string
+  preflight: WorkflowPreflightResult | null
   onBack: () => void
   onCopy: () => void
   onReload: () => void
+  onIdeaChange: (idea: string) => void
+  onPreflight: () => void
   onStart: () => void
   onEdit: () => void
 }
 
-function WorkflowView({ project, workflow, loading, error, onBack, onCopy, onReload, onStart, onEdit }: WorkflowViewProps): React.JSX.Element {
+function WorkflowView({ project, workflow, loading, error, idea, preflight, onBack, onCopy, onReload, onIdeaChange, onPreflight, onStart, onEdit }: WorkflowViewProps): React.JSX.Element {
   if (loading || !workflow) {
     return (
       <main className="content" aria-busy="true">
@@ -273,9 +386,6 @@ function WorkflowView({ project, workflow, loading, error, onBack, onCopy, onRel
                 </button>
               </>
             )}
-            <button className="primary-action" type="button" onClick={onStart} disabled={!workflow.canStart}>
-              <ArrowRight aria-hidden="true" />{copy.workflow.startAction}
-            </button>
           </div>
         </div>
 
@@ -287,6 +397,24 @@ function WorkflowView({ project, workflow, loading, error, onBack, onCopy, onRel
           </div>
         </div>
         {error ? <p className="error-message" role="alert">{error}</p> : null}
+
+        <section className="run-launcher" aria-labelledby="run-launcher-title">
+          <div>
+            <p className="eyebrow">Run Preflight</p>
+            <h2 id="run-launcher-title">输入 Idea，启动 Workflow Run</h2>
+            <p>启动前检查 Workspace 和 Project Workflow；检查结果会随 Run 保存。</p>
+          </div>
+          <label htmlFor="workflow-idea">Idea</label>
+          <textarea id="workflow-idea" value={idea} onChange={(event) => onIdeaChange(event.target.value)} placeholder="描述你想推进的 Idea" />
+          <div className="run-launcher-actions">
+            <button className="secondary-action" type="button" onClick={onPreflight} disabled={!workflow.canStart || !idea.trim()}><ShieldAlert aria-hidden="true" />运行 Preflight</button>
+            <button className="primary-action" type="button" onClick={onStart} disabled={!preflight?.passed}><ArrowRight aria-hidden="true" />{copy.workflow.startAction}</button>
+          </div>
+          {preflight ? <div className={preflight.passed ? 'preflight-result is-valid' : 'preflight-result is-invalid'} role={preflight.passed ? 'status' : 'alert'}>
+            {preflight.checks.map((check) => <span key={check}>{check}</span>)}
+            {preflight.errors.map((message) => <span key={message}>{message}</span>)}
+          </div> : null}
+        </section>
 
         <div className="workflow-phases" aria-label={copy.workflow.phaseList}>
           {definition.phases.map((phase, phaseIndex) => (
@@ -383,6 +511,11 @@ export default function App(): React.JSX.Element {
   const [workflow, setWorkflow] = useState<WorkflowViewModel | null>(null)
   const [workflowLoading, setWorkflowLoading] = useState(false)
   const [workflowError, setWorkflowError] = useState<string | null>(null)
+  const [idea, setIdea] = useState('')
+  const [preflight, setPreflight] = useState<WorkflowPreflightResult | null>(null)
+  const [runs, setRuns] = useState<WorkflowRun[]>([])
+  const [selectedRun, setSelectedRun] = useState<WorkflowRun | null>(null)
+  const [runError, setRunError] = useState<string | null>(null)
 
   useEffect(() => {
     document.title = copy.app.name
@@ -393,6 +526,26 @@ export default function App(): React.JSX.Element {
       setError(copy.projectOverview.loadError)
     })
   }, [])
+
+  useEffect(() => {
+    if (!selectedProject) return
+    void window.appShell.listWorkflowRuns(selectedProject.id).then(setRuns).catch(() => setRuns([]))
+  }, [selectedProject])
+
+  useEffect(() => {
+    if (view !== 'run' || !selectedRun) return
+    let disposed = false
+    const refresh = async (): Promise<void> => {
+      const current = await window.appShell.getWorkflowRun(selectedRun.id)
+      if (!disposed && current) {
+        setSelectedRun(current)
+        setRuns((existing) => [current, ...existing.filter((run) => run.id !== current.id)])
+      }
+    }
+    const timer = window.setInterval(() => { void refresh() }, 500)
+    void refresh()
+    return () => { disposed = true; window.clearInterval(timer) }
+  }, [view, selectedRun?.id])
 
   const importProject = async (): Promise<void> => {
     setError(null)
@@ -423,6 +576,7 @@ export default function App(): React.JSX.Element {
     setWorkflowLoading(true)
     setWorkflowError(null)
     setView('workflow')
+    setPreflight(null)
     try {
       if (!selectedProject) throw new Error('Project is required')
       setWorkflow(await window.appShell.getWorkflow(selectedProject.id))
@@ -456,9 +610,35 @@ export default function App(): React.JSX.Element {
   }
 
   const startWorkflowRun = async (): Promise<void> => {
-    if (!selectedProject || !workflow?.canStart) return
-    const result = await window.appShell.startWorkflowRun(selectedProject.id)
-    setWorkflowError(result.ok ? copy.workflow.startReady : (result.error ?? copy.workflow.startError))
+    if (!selectedProject || !workflow?.canStart || !preflight?.passed) return
+    const result = await window.appShell.startWorkflowRun(selectedProject.id, idea)
+    if (result.ok && result.run) {
+      setSelectedRun(result.run)
+      setRuns((existing) => [result.run!, ...existing.filter((run) => run.id !== result.run!.id)])
+      setRunError(null)
+      setView('run')
+    } else setWorkflowError(result.error ?? copy.workflow.startError)
+  }
+
+  const runPreflight = async (): Promise<void> => {
+    if (!selectedProject) return
+    try {
+      setPreflight(await window.appShell.preflightWorkflowRun(selectedProject.id, idea))
+      setWorkflowError(null)
+    } catch {
+      setWorkflowError(copy.workflow.startError)
+    }
+  }
+
+  const updateRun = async (operation: () => Promise<WorkflowRun>): Promise<void> => {
+    try {
+      const updated = await operation()
+      setSelectedRun(updated)
+      setRuns((existing) => [updated, ...existing.filter((run) => run.id !== updated.id)])
+      setRunError(null)
+    } catch (reason) {
+      setRunError(reason instanceof Error ? reason.message : String(reason))
+    }
   }
 
   const editWorkflow = async (): Promise<void> => {
@@ -479,10 +659,12 @@ export default function App(): React.JSX.Element {
       )
     : view === 'settings'
       ? <SettingsView />
-      : view === 'workflow' && selectedProject
-        ? <WorkflowView project={selectedProject} workflow={workflow} loading={workflowLoading} error={workflowError} onBack={() => setView('projectDetail')} onCopy={copyWorkflow} onReload={reloadWorkflow} onStart={startWorkflowRun} onEdit={editWorkflow} />
+        : view === 'workflow' && selectedProject
+        ? <WorkflowView project={selectedProject} workflow={workflow} loading={workflowLoading} error={workflowError} idea={idea} preflight={preflight} onBack={() => setView('projectDetail')} onCopy={copyWorkflow} onReload={reloadWorkflow} onIdeaChange={(value) => { setIdea(value); setPreflight(null) }} onPreflight={runPreflight} onStart={startWorkflowRun} onEdit={editWorkflow} />
+        : view === 'run' && selectedRun
+          ? <RunBoard run={selectedRun} onBack={() => setView('projectDetail')} onPause={() => { void updateRun(() => window.appShell.pauseWorkflowRun(selectedRun.id)) }} onResume={() => { void updateRun(() => window.appShell.resumeWorkflowRun(selectedRun.id)) }} onRetry={() => { void updateRun(() => window.appShell.retryWorkflowStep(selectedRun.id)) }} onCancel={() => { void updateRun(() => window.appShell.cancelWorkflowRun(selectedRun.id)) }} error={runError} />
         : view === 'projectDetail' && selectedProject
-          ? <ProjectDetail project={selectedProject} onBack={() => setView('projectOverview')} onOpenInIde={openProjectInIde} openError={openError} importWarning={importWarning} onViewWorkflow={openWorkflow} />
+          ? <ProjectDetail project={selectedProject} runs={runs} onBack={() => setView('projectOverview')} onOpenInIde={openProjectInIde} openError={openError} importWarning={importWarning} onViewWorkflow={openWorkflow} onOpenRun={(run) => { setSelectedRun(run); setRunError(null); setView('run') }} />
           : <ProjectEntry mode={view === 'resumeWork' ? 'resumeWork' : 'createProject'} onBack={() => setView('projectOverview')} onImport={importProject} error={error} />
 
   return (
@@ -501,7 +683,7 @@ export default function App(): React.JSX.Element {
             className={view !== 'settings' ? 'navigation-item is-active' : 'navigation-item'}
             type="button"
             aria-current={view !== 'settings' ? 'page' : undefined}
-            onClick={() => setView('projectOverview')}
+          onClick={() => setView('projectOverview')}
           >
             <FolderKanban aria-hidden="true" />
             <span>{copy.navigation.projectOverview}</span>

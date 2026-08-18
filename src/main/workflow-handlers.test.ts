@@ -64,7 +64,8 @@ describe('Workflow IPC handlers', () => {
     await expect(handlers.get(APP_SHELL_CHANNELS.reloadWorkflow)?.({}, 'project-1')).resolves.toEqual(invalid)
     await expect(handlers.get(APP_SHELL_CHANNELS.startWorkflowRun)?.({}, 'project-1')).resolves.toEqual({
       ok: false,
-      error: 'Workflow 校验失败：schemaVersion 无效。'
+      error: 'Workflow 校验失败：schemaVersion 无效。',
+      run: null
     })
     expect(workflow.loadProject).toHaveBeenCalledWith('/work/demo', [])
     expect(workflow.startProjectRun).toHaveBeenCalledWith('/work/demo', [])
@@ -91,5 +92,27 @@ describe('Workflow IPC handlers', () => {
       error: null
     })
     expect(openInIde).toHaveBeenCalledWith(join('/work/demo', '.agent-space', 'workflow.json'))
+  })
+
+  it('runs Preflight and starts through the public Workflow Engine API', async () => {
+    const handlers = new Map<string, (...args: unknown[]) => unknown>()
+    const engine = {
+      preflight: vi.fn().mockResolvedValue({ passed: true, checks: ['Idea 已填写。'], errors: [] }),
+      startRun: vi.fn().mockResolvedValue({ id: 'run-1' })
+    }
+    const workflow = { ...view, source: 'project' as const, canStart: true, validation: { valid: true, errors: [], warnings: [] } }
+    registerWorkflowHandlers({
+      handle: (channel, listener) => handlers.set(channel, listener),
+      projectService: { findById: vi.fn().mockResolvedValue({ id: 'project-1', workspacePath: '/work/demo' }) },
+      workflowService: {
+        getBuiltIn: vi.fn(), copyToProject: vi.fn(), loadProject: vi.fn().mockResolvedValue(workflow), startProjectRun: vi.fn()
+      },
+      workflowEngine: engine as never
+    })
+
+    await expect(handlers.get(APP_SHELL_CHANNELS.preflightWorkflowRun)?.({}, 'project-1', 'An idea')).resolves.toEqual({ passed: true, checks: ['Idea 已填写。'], errors: [] })
+    expect(engine.preflight).toHaveBeenCalledWith(expect.objectContaining({ idea: 'An idea', project: expect.objectContaining({ id: 'project-1' }), workflow }))
+    await expect(handlers.get(APP_SHELL_CHANNELS.startWorkflowRun)?.({}, 'project-1', 'An idea')).resolves.toEqual({ ok: true, error: null, run: { id: 'run-1' } })
+    expect(engine.startRun).toHaveBeenCalledWith(expect.objectContaining({ idea: 'An idea', workflow }))
   })
 })

@@ -9,6 +9,8 @@ import { createDefaultGitExecutor, createProjectService } from './project-servic
 import { createDefaultIdeLauncher } from './ide-launcher'
 import { registerWorkflowHandlers } from './workflow-handlers'
 import { createWorkflowService } from './workflow-service'
+import { createWorkflowEngine } from './workflow-engine'
+import { createFakeRuntimeAdapter } from './fake-runtime'
 import { BUILT_IN_SKILL_MANIFESTS } from '../shared/workflow'
 
 const currentDirectory = fileURLToPath(new URL('.', import.meta.url))
@@ -73,6 +75,10 @@ const projectService = createProjectService({
   execGit: createDefaultGitExecutor()
 })
 const openInIde = createDefaultIdeLauncher()
+const workflowEngine = createWorkflowEngine({
+  databasePath: join(app.getPath('userData'), 'workflow-runs.sqlite'),
+  runtime: createFakeRuntimeAdapter()
+})
 
 registerProjectHandlers({
   handle: (channel, listener) => ipcMain.handle(channel, listener),
@@ -89,6 +95,7 @@ registerWorkflowHandlers({
   handle: (channel, listener) => ipcMain.handle(channel, listener),
   userDataPath: app.getPath('userData'),
   projectService,
+  workflowEngine,
   openInIde,
   workflowService: createWorkflowService({
     readFile,
@@ -101,6 +108,7 @@ registerWorkflowHandlers({
 })
 
 app.whenReady().then(() => {
+  void workflowEngine.recover()
   openMainWindow()
 
   app.on('activate', () => {
@@ -114,4 +122,8 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit()
   }
+})
+
+app.on('before-quit', () => {
+  void workflowEngine.close()
 })

@@ -304,4 +304,58 @@ describe('Desktop Shell navigation', () => {
     expect(screen.getAllByText('运行中').length).toBeGreaterThan(0)
     expect(window.appShell.startWorkflowRun).toHaveBeenCalledWith('project-1', 'Build durable runs')
   })
+
+  it('shows persisted context, decisions, logs, blockers, and allowed operations for a Step card', async () => {
+    const user = userEvent.setup()
+    const project = {
+      id: 'project-1', name: 'demo', workspacePath: '/work/demo', workspaceAvailable: true,
+      remote: null, currentBranch: 'main', head: 'abc123', defaultBranch: 'main',
+      isGreenfield: false, dirty: false,
+      dirtySummary: { staged: 0, unstaged: 0, untracked: 0, files: [] },
+      updatedAt: '2026-08-14T00:00:00.000Z'
+    }
+    const run = {
+      id: 'run-1', projectId: 'project-1', workspacePath: '/work/demo',
+      idea: '这是一个用于验证窄窗口不会重叠的非常长的中文 Workflow Run 标题',
+      workflowId: BUILT_IN_DEVELOPMENT_WORKFLOW.id, workflowVersion: BUILT_IN_DEVELOPMENT_WORKFLOW.version,
+      definition: BUILT_IN_DEVELOPMENT_WORKFLOW, status: 'blocked' as const,
+      error: 'Runtime 报告当前 Step blocked。',
+      snapshot: {
+        phaseIndex: 0, stepIndex: 0, currentStepExecutionId: 'execution-1',
+        pendingQuestion: null, pendingApproval: null, pendingQuestionDetails: null, pendingApprovalDetails: null,
+        blockedBy: { phaseIndex: 0, stepIndex: 0, executionId: 'execution-1', reason: '等待外部依赖恢复。' },
+        nextAction: 'Workflow Run 已 blocked，需要处理阻塞原因。'
+      },
+      stepExecutions: [{
+        id: 'execution-1', runId: 'run-1', phaseId: 'discovery', stepId: 'discover', attempt: 1,
+        status: 'blocked' as const, input: { idea: '测试' }, skill: { name: 'grill-with-docs', version: '1.0.0' },
+        error: 'Runtime 报告当前 Step blocked。', output: null, startedAt: '2026-08-18T00:00:00.000Z', finishedAt: null
+      }],
+      events: [],
+      logs: [{ id: 1, runId: 'run-1', executionId: 'execution-1', type: 'text_delta', message: '已读取当前领域文档。', data: { type: 'text_delta' }, createdAt: '2026-08-18T00:00:00.000Z' }],
+      phaseContexts: [{ id: 'context-1', runId: 'run-1', phaseId: 'discovery', content: '用户确认目标是建立可恢复的 Run Board。', updatedAt: '2026-08-18T00:00:00.000Z' }],
+      decisionRecords: [{
+        id: 'decision-1', runId: 'run-1', phaseId: 'discovery', stepId: 'discover', executionId: 'execution-1', source: 'runtime-question' as const,
+        question: '优先保证什么？', answer: '优先保证可恢复性。', continuation: { phaseIndex: 0, stepIndex: 0, executionId: 'execution-1' }, createdAt: '2026-08-18T00:00:00.000Z'
+      }],
+      artifacts: [], createdAt: '2026-08-18T00:00:00.000Z', updatedAt: '2026-08-18T00:00:00.000Z'
+    }
+    window.appShell.listProjects = vi.fn().mockResolvedValue([project])
+    window.appShell.listWorkflowRuns = vi.fn().mockResolvedValue([run])
+    window.appShell.getWorkflowRun = vi.fn().mockResolvedValue(run)
+
+    render(<App />)
+    await user.click(await screen.findByRole('button', { name: /demo/ }))
+    await user.click(await screen.findByRole('button', { name: /这是一个用于验证窄窗口/ }))
+    await user.click(screen.getByRole('button', { name: /澄清 Idea/ }))
+
+    expect(screen.getByText('用户确认目标是建立可恢复的 Run Board。')).toBeVisible()
+    expect(screen.getByText('优先保证什么？')).toBeVisible()
+    expect(screen.getByText('优先保证可恢复性。')).toBeVisible()
+    expect(screen.getByText('已读取当前领域文档。')).toBeVisible()
+    expect(screen.getAllByText('等待外部依赖恢复。').length).toBeGreaterThan(0)
+    expect(screen.getByRole('heading', { name: '可用操作' })).toBeVisible()
+    expect(screen.getAllByRole('button', { name: '继续' }).at(-1)).toBeEnabled()
+    expect(screen.getAllByRole('button', { name: '取消 Run' }).at(-1)).toBeEnabled()
+  })
 })

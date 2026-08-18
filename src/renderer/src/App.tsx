@@ -260,6 +260,11 @@ function RunBoard({ run, onBack, onPause, onResume, onRetry, onCancel, onAnswer,
   for (const execution of run.stepExecutions) latestExecutions.set(execution.stepId, execution)
   const selectedStep = run.definition.phases.flatMap((phase) => phase.steps).find((step) => step.id === selectedStepId) ?? null
   const selectedExecution = selectedStep ? latestExecutions.get(selectedStep.id) ?? null : null
+  const selectedPhaseContext = selectedExecution ? (run.phaseContexts ?? []).find((context) => context.phaseId === selectedExecution.phaseId) ?? null : null
+  const selectedDecisions = selectedExecution ? (run.decisionRecords ?? []).filter((record) => record.executionId === selectedExecution.id) : []
+  const selectedLogs = selectedExecution ? (run.logs ?? []).filter((log) => log.executionId === selectedExecution.id) : []
+  const selectedBlocker = selectedExecution && run.snapshot.blockedBy?.executionId === selectedExecution.id ? run.snapshot.blockedBy : null
+  const selectedIsCurrent = selectedExecution?.id === run.snapshot.currentStepExecutionId
   const canPause = run.status === 'running'
   const canResume = ['paused', 'waiting', 'blocked'].includes(run.status)
   const canRetry = run.status === 'failed'
@@ -300,6 +305,7 @@ function RunBoard({ run, onBack, onPause, onResume, onRetry, onCancel, onAnswer,
                     <div><strong>{step.name}</strong>{execution ? <span>{copy.run.attempt(execution.attempt)}</span> : null}</div>
                     <span className={`run-status is-${execution?.status ?? 'pending'}`}>{execution ? (copy.run.status[execution.status as WorkflowRunStatus] ?? execution.status) : copy.run.pending}</span>
                     {execution?.error ? <p>{execution.error}</p> : null}
+                    {execution && run.snapshot.blockedBy?.executionId === execution.id ? <p>{run.snapshot.blockedBy.reason}</p> : null}
                     {isCurrent && (run.snapshot.pendingQuestion || run.snapshot.pendingApproval) ? <p>{run.snapshot.pendingQuestion ?? run.snapshot.pendingApproval}</p> : null}
                   </article>
                 })}
@@ -313,12 +319,25 @@ function RunBoard({ run, onBack, onPause, onResume, onRetry, onCancel, onAnswer,
             <div>
               <h3>{selectedStep.name}</h3>
               <p className="run-detail-status">{copy.run.status[selectedExecution.status as WorkflowRunStatus] ?? selectedExecution.status} · {copy.run.attempt(selectedExecution.attempt)}</p>
-              <h4>{copy.run.contextTitle}</h4><p>{run.definition.phases.find((phase) => phase.id === selectedExecution.phaseId)?.goal ?? copy.run.noContext}</p>
+              <h4>{copy.run.contextTitle}</h4><p>{selectedPhaseContext?.content ?? run.definition.phases.find((phase) => phase.id === selectedExecution.phaseId)?.goal ?? copy.run.noContext}</p>
               <h4>{copy.run.inputTitle}</h4><pre>{selectedExecution.input ? JSON.stringify(selectedExecution.input, null, 2) : copy.run.noInput}</pre>
               <h4>{copy.run.outputTitle}</h4><pre>{selectedExecution.output ? JSON.stringify(selectedExecution.output, null, 2) : copy.run.noOutput}</pre>
               <p className={selectedExecution.error ? 'run-detail-error' : 'run-detail-muted'}>{selectedExecution.error ?? copy.run.noError}</p>
             </div>
-            <div><h4>{copy.run.artifactsTitle}</h4>{run.artifacts.filter((artifact) => artifact.stepExecutionId === selectedExecution.id).map((artifact) => <div className="run-artifact" key={artifact.id}><strong>{artifact.name}</strong><span>{artifact.type}</span><span>{artifact.location ?? copy.run.noLocation}</span></div>)}{run.artifacts.every((artifact) => artifact.stepExecutionId !== selectedExecution.id) ? <p>{copy.run.noArtifacts}</p> : null}<h4>{copy.run.eventsTitle}</h4><div className="run-detail-events">{run.events.filter((event) => event.data.executionId === selectedExecution.id).map((event) => <span key={event.id}>{event.type}</span>)}</div></div>
+            <div>
+              <h4>{copy.run.artifactsTitle}</h4>{run.artifacts.filter((artifact) => artifact.stepExecutionId === selectedExecution.id).map((artifact) => <div className="run-artifact" key={artifact.id}><strong>{artifact.name}</strong><span>{artifact.type}</span><span>{artifact.location ?? copy.run.noLocation}</span></div>)}{run.artifacts.every((artifact) => artifact.stepExecutionId !== selectedExecution.id) ? <p>{copy.run.noArtifacts}</p> : null}
+              <h4>{copy.run.decisionsTitle}</h4>{selectedDecisions.length > 0 ? selectedDecisions.map((decision) => <div className="run-decision-record" key={decision.id}><strong>{decision.question}</strong><span>{decision.answer}</span></div>) : <p>{copy.run.noDecisions}</p>}
+              <h4>{copy.run.logsTitle}</h4>{selectedLogs.length > 0 ? <div className="run-detail-logs">{selectedLogs.map((log) => <div key={log.id}><span>{log.type}</span><p>{log.message}</p></div>)}</div> : <p>{copy.run.noLogs}</p>}
+              {selectedBlocker ? <><h4>{copy.run.blockerTitle}</h4><p className="run-detail-error">{selectedBlocker.reason}</p></> : null}
+              <h4>{copy.run.availableActionsTitle}</h4>
+              {selectedIsCurrent ? <div className="run-detail-actions">
+                <button className="secondary-action" type="button" onClick={onPause} disabled={!canPause}><Pause aria-hidden="true" />{copy.run.pause}</button>
+                <button className="secondary-action" type="button" onClick={onResume} disabled={!canResume}><ArrowRight aria-hidden="true" />{copy.run.resume}</button>
+                <button className="secondary-action" type="button" onClick={onRetry} disabled={!canRetry}><RotateCcw aria-hidden="true" />{copy.run.retry}</button>
+                <button className="secondary-action" type="button" onClick={onCancel} disabled={!canCancel}><Square aria-hidden="true" />{copy.run.cancel}</button>
+              </div> : <p>{copy.run.noAvailableActions}</p>}
+              <h4>{copy.run.eventsTitle}</h4><div className="run-detail-events">{run.events.filter((event) => event.data.executionId === selectedExecution.id).map((event) => <span key={event.id}>{event.type}</span>)}</div>
+            </div>
           </div> : <p>{copy.run.noSelection}</p>}
         </section>
         {run.status === 'waiting' && run.snapshot.pendingQuestionDetails?.answer === null ? <section className="run-decision" aria-labelledby="run-question-title"><h2 id="run-question-title">{copy.run.questionTitle}</h2><p>{run.snapshot.pendingQuestionDetails.question}</p><label htmlFor="run-answer">{copy.run.answerPlaceholder}</label><textarea id="run-answer" value={answer} onChange={(event) => setAnswer(event.target.value)} placeholder={copy.run.answerPlaceholder} /><button className="primary-action" type="button" onClick={() => { onAnswer(answer); setAnswer('') }} disabled={!answer.trim()}><Send aria-hidden="true" />{copy.run.answerAction}</button></section> : null}

@@ -226,6 +226,11 @@ describe('WorkflowEngine public API', () => {
     expect(resumed.status).toBe('running')
     expect(resumed.snapshot.pendingQuestion).toBeNull()
     expect(resumed.snapshot.pendingQuestionDetails).toMatchObject({ answer: 'Use the durable path' })
+    expect(resumed.decisionRecords).toEqual(expect.arrayContaining([expect.objectContaining({
+      question: 'Which direction?',
+      answer: 'Use the durable path',
+      executionId: waiting.snapshot.currentStepExecutionId
+    })]))
     expect(resumed.events).toEqual(expect.arrayContaining([expect.objectContaining({ type: 'question_answered', data: expect.objectContaining({ answer: 'Use the durable path' }) })]))
     await vi.waitFor(() => expect(runtime.calls).toHaveLength(2))
     runtime.finish([{ type: 'status_changed', status: 'completed' }])
@@ -245,8 +250,59 @@ describe('WorkflowEngine public API', () => {
     expect(rejected.status).toBe('cancelled')
     expect(rejected.snapshot.pendingApproval).toBeNull()
     expect(rejected.snapshot.pendingApprovalDetails).toMatchObject({ decision: 'rejected' })
+    expect(rejected.decisionRecords).toEqual(expect.arrayContaining([expect.objectContaining({
+      question: 'Publish the release?',
+      answer: 'rejected',
+      executionId: waiting.snapshot.currentStepExecutionId
+    })]))
     expect(rejected.stepExecutions[0]).toMatchObject({ status: 'cancelled' })
     expect(rejected.events).toEqual(expect.arrayContaining([expect.objectContaining({ type: 'approval_rejected' })]))
+    expect(runtime.calls).toHaveLength(1)
+  })
+
+  it('persists Phase Context, runtime logs, and an explicit blocked relation', async () => {
+    directory = await mkdtemp(join(tmpdir(), 'agent-space-run-'))
+    const runtime = new FakeRuntime()
+    engine = createWorkflowEngine({ databasePath: join(directory, 'runs.sqlite'), runtime })
+
+    const run = await engine.startRun({ project, workflow, idea: 'Capture run context' })
+    await vi.waitFor(() => expect(runtime.calls).toHaveLength(1))
+    runtime.finish([
+      { type: 'text_delta', text: 'First context fragment.' },
+      { type: 'tool_call', name: 'inspect', input: { path: 'CONTEXT.md' } },
+      { type: 'status_changed', status: 'blocked' }
+    ])
+
+    const blocked = await engine.waitForIdle(run.id)
+    expect(blocked.snapshot.blockedBy).toMatchObject({
+      executionId: blocked.snapshot.currentStepExecutionId,
+      reason: 'Runtime 报告当前 Step blocked。'
+    })
+    expect(blocked.phaseContexts).toEqual(expect.arrayContaining([expect.objectContaining({
+      phaseId: 'discovery',
+      content: 'First context fragment.'
+    })]))
+    expect(blocked.logs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'text_delta', message: 'First context fragment.' }),
+      expect.objectContaining({ type: 'tool_call', message: 'inspect' }),
+      expect.objectContaining({ type: 'status_changed', message: 'blocked' })
+    ]))
+
+    const resumed = await engine.resumeRun(run.id)
+    expect(resumed.snapshot.blockedBy).toBeNull()
+  })
+
+  it('does not execute or mutate a Run when an action is not currently allowed', async () => {
+    directory = await mkdtemp(join(tmpdir(), 'agent-space-run-'))
+    const runtime = new FakeRuntime()
+    engine = createWorkflowEngine({ databasePath: join(directory, 'runs.sqlite'), runtime })
+
+    const run = await engine.startRun({ project, workflow, idea: 'Reject invalid actions' })
+    const paused = await engine.pauseRun(run.id)
+    const answered = await engine.answerQuestion(run.id, 'Should not apply')
+
+    expect(paused.status).toBe('paused')
+    expect(answered).toEqual(paused)
     expect(runtime.calls).toHaveLength(1)
   })
 

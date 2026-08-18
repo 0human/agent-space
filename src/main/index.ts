@@ -11,6 +11,7 @@ import { registerWorkflowHandlers } from './workflow-handlers'
 import { createWorkflowService } from './workflow-service'
 import { createWorkflowEngine } from './workflow-engine'
 import { createFakeRuntimeAdapter } from './fake-runtime'
+import { createRunWorkspaceManager } from './run-workspace'
 import { BUILT_IN_SKILL_MANIFESTS } from '../shared/workflow'
 
 const currentDirectory = fileURLToPath(new URL('.', import.meta.url))
@@ -77,7 +78,8 @@ const projectService = createProjectService({
 const openInIde = createDefaultIdeLauncher()
 const workflowEngine = createWorkflowEngine({
   databasePath: join(app.getPath('userData'), 'workflow-runs.sqlite'),
-  runtime: createFakeRuntimeAdapter()
+  runtime: createFakeRuntimeAdapter(),
+  runWorkspaceManager: createRunWorkspaceManager({ execGit: createDefaultGitExecutor() })
 })
 
 registerProjectHandlers({

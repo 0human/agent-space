@@ -9,10 +9,12 @@ import type {
   StartWorkflowRunInput
 } from '../shared/workflow-run'
 import { createSqliteRunStore } from './workflow-store'
+import { zhCNMain } from '../shared/i18n/zh-CN'
 
 interface WorkflowEngineDependencies {
   databasePath: string
   runtime: AgentRuntimeAdapter
+  runWorkspaceManager?: import('./run-workspace').RunWorkspaceManager
   now?: () => string
   createId?: () => string
 }
@@ -49,16 +51,17 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
         workflow: run.workflow,
         phaseIndex: run.snapshot.phaseIndex,
         stepIndex: run.snapshot.stepIndex,
-        execution
+        execution,
+        events: run.events
       }
-      let result
+      let events
       try {
-        result = await dependencies.runtime.execute(context)
+        events = await dependencies.runtime.execute(context)
       } catch (error) {
-        result = { type: 'failed' as const, error: error instanceof Error ? error.message : String(error) }
+        events = [{ type: 'error' as const, error: error instanceof Error ? error.message : String(error) }]
       }
       if (closed) return
-      const updated = await store.recordRuntimeResult(runId, execution.id, result)
+      const updated = await store.recordRuntimeResult(runId, execution.id, events)
       if (updated.status !== 'running' || updated.snapshot.currentStepExecutionId === execution.id) return
     }
   }
@@ -75,12 +78,12 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
     async preflight(input): Promise<WorkflowPreflightResult> {
       const checks: string[] = []
       const errors: string[] = []
-      if (input.project.workspaceAvailable === false) errors.push('Project Workspace 不可访问。')
-      else checks.push('Project Workspace 可访问。')
-      if (!input.workflow.canStart || !input.workflow.validation.valid) errors.push(`Project Workflow Validation 失败：${input.workflow.validation.errors.join(' ')}`)
-      else checks.push('Project Workflow Validation 通过。')
-      if (!input.idea.trim()) errors.push('Idea 不能为空。')
-      else checks.push('Idea 已填写。')
+      if (input.project.workspaceAvailable === false) errors.push(zhCNMain.workflowRun.workspaceUnavailable)
+      else checks.push(zhCNMain.workflowRun.workspaceAvailable)
+      if (!input.workflow.canStart || !input.workflow.validation.valid) errors.push(zhCNMain.workflowRun.workflowInvalid(input.workflow.validation.errors.join(' ')))
+      else checks.push(zhCNMain.workflowRun.workflowValid)
+      if (!input.idea.trim()) errors.push(zhCNMain.workflowRun.ideaRequired)
+      else checks.push(zhCNMain.workflowRun.ideaFilled)
       return { passed: errors.length === 0, checks, errors }
     },
 

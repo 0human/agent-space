@@ -7,19 +7,20 @@ import { join } from 'node:path'
 
 import type { Project } from '../shared/project'
 import type { WorkflowView } from '../shared/workflow'
-import type { AgentRuntimeAdapter, RuntimeResult } from '../shared/workflow-run'
+import type { AgentRuntimeAdapter, RuntimeEvent } from '../shared/workflow-run'
 import { createWorkflowEngine, type WorkflowEngine } from './workflow-engine'
+import { createFakeRuntimeAdapter } from './fake-runtime'
 
 class FakeRuntime implements AgentRuntimeAdapter {
   readonly calls: string[] = []
-  private pending: Array<(result: RuntimeResult) => void> = []
+  private pending: Array<(result: RuntimeEvent[]) => void> = []
 
-  execute(context: { execution: { id: string } }): Promise<RuntimeResult> {
+  execute(context: { execution: { id: string } }): Promise<RuntimeEvent[]> {
     this.calls.push(context.execution.id)
     return new Promise((resolve) => this.pending.push(resolve))
   }
 
-  finish(result: RuntimeResult): void {
+  finish(result: RuntimeEvent[]): void {
     const resolve = this.pending.shift()
     if (!resolve) throw new Error('No pending runtime execution')
     resolve(result)
@@ -99,11 +100,11 @@ describe('WorkflowEngine public API', () => {
     const run = await engine.startRun({ ...input, preflight: await engine.preflight(input) })
     expect(run.status).toBe('running')
     expect(run.snapshot.nextAction).toBe('等待 Runtime 完成当前 Step。')
-    expect(run.stepExecutions).toHaveLength(1)
+    expect(run.stepExecutions[0]).toMatchObject({ input: { idea: 'Build a durable workflow run' }, skill: null })
     expect(run.events.map((event) => event.type)).toEqual(['started', 'step_started'])
 
     await vi.waitFor(() => expect(runtime.calls).toHaveLength(1))
-    runtime.finish({ type: 'completed', output: { summary: 'done' }, artifacts: [{ type: 'document', name: 'domain-docs', location: '/work/demo/CONTEXT.md' }] })
+    runtime.finish([{ type: 'status_changed', status: 'completed' }, { type: 'artifact_produced', artifact: { type: 'document', name: 'domain-docs', location: '/work/demo/CONTEXT.md' } }])
     const completed = await engine.waitForIdle(run.id)
     expect(completed.status).toBe('completed')
     expect(completed.snapshot.nextAction).toBe('Workflow Run 已完成。')
@@ -131,7 +132,7 @@ describe('WorkflowEngine public API', () => {
 
     await vi.waitFor(() => expect(runtime.calls).toHaveLength(1))
     await engine.pauseRun(run.id)
-    runtime.finish({ type: 'completed' })
+    runtime.finish([{ type: 'status_changed', status: 'completed' }])
     const paused = await engine.waitForIdle(run.id)
 
     expect(paused.status).toBe('paused')
@@ -146,7 +147,7 @@ describe('WorkflowEngine public API', () => {
     expect(resumed.status).toBe('running')
     expect(resumed.stepExecutions).toHaveLength(2)
     await vi.waitFor(() => expect(resumedRuntime.calls).toHaveLength(1))
-    resumedRuntime.finish({ type: 'completed' })
+    resumedRuntime.finish([{ type: 'status_changed', status: 'completed' }])
     await expect(engine.waitForIdle(run.id)).resolves.toMatchObject({ status: 'completed' })
   })
 
@@ -158,7 +159,7 @@ describe('WorkflowEngine public API', () => {
 
     const waitingRun = await engine.startRun({ project, workflow, idea: 'Ask the user' })
     await vi.waitFor(() => expect(runtime.calls).toHaveLength(1))
-    runtime.finish({ type: 'waiting', question: 'Which direction?' })
+    runtime.finish([{ type: 'question', question: 'Which direction?' }])
     await expect(engine.waitForIdle(waitingRun.id)).resolves.toMatchObject({ status: 'waiting', snapshot: { pendingQuestion: 'Which direction?' } })
 
     await engine.close()
@@ -167,21 +168,21 @@ describe('WorkflowEngine public API', () => {
     await expect(engine.getRun(waitingRun.id)).resolves.toMatchObject({ status: 'waiting' })
     await engine.resumeRun(waitingRun.id)
     await vi.waitFor(() => expect(recoveredRuntime.calls).toHaveLength(1))
-    recoveredRuntime.finish({ type: 'completed' })
+    recoveredRuntime.finish([{ type: 'status_changed', status: 'completed' }])
     await expect(engine.waitForIdle(waitingRun.id)).resolves.toMatchObject({ status: 'completed' })
 
     const blockedRun = await engine.startRun({ project, workflow, idea: 'Wait for a dependency' })
     await vi.waitFor(() => expect(recoveredRuntime.calls).toHaveLength(2))
-    recoveredRuntime.finish({ type: 'blocked', reason: 'Dependency unavailable' })
+    recoveredRuntime.finish([{ type: 'status_changed', status: 'blocked' }])
     await expect(engine.waitForIdle(blockedRun.id)).resolves.toMatchObject({ status: 'blocked' })
 
     const failedRun = await engine.startRun({ project, workflow, idea: 'Retry this Step' })
     await vi.waitFor(() => expect(recoveredRuntime.calls).toHaveLength(3))
-    recoveredRuntime.finish({ type: 'failed', error: 'Transient runtime error' })
+    recoveredRuntime.finish([{ type: 'error', error: 'Transient runtime error' }])
     await expect(engine.waitForIdle(failedRun.id)).resolves.toMatchObject({ status: 'failed', stepExecutions: [expect.objectContaining({ attempt: 1, status: 'failed' })] })
     await engine.retryStep(failedRun.id)
     await vi.waitFor(() => expect(recoveredRuntime.calls).toHaveLength(4))
-    recoveredRuntime.finish({ type: 'completed' })
+    recoveredRuntime.finish([{ type: 'status_changed', status: 'completed' }])
     await expect(engine.waitForIdle(failedRun.id)).resolves.toMatchObject({
       status: 'completed',
       stepExecutions: [expect.objectContaining({ attempt: 1, status: 'failed' }), expect.objectContaining({ attempt: 2, status: 'completed' })]
@@ -190,7 +191,54 @@ describe('WorkflowEngine public API', () => {
     const cancelledRun = await engine.startRun({ project, workflow, idea: 'Cancel this Run' })
     await vi.waitFor(() => expect(recoveredRuntime.calls).toHaveLength(5))
     await engine.cancelRun(cancelledRun.id)
-    recoveredRuntime.finish({ type: 'completed' })
+    recoveredRuntime.finish([{ type: 'status_changed', status: 'completed' }])
     await expect(engine.waitForIdle(cancelledRun.id)).resolves.toMatchObject({ status: 'cancelled', events: expect.arrayContaining([expect.objectContaining({ type: 'cancelled' })]) })
+  })
+
+  it('persists an approval gate separately from a user question', async () => {
+    directory = await mkdtemp(join(tmpdir(), 'agent-space-run-'))
+    const runtime = new FakeRuntime()
+    engine = createWorkflowEngine({ databasePath: join(directory, 'runs.sqlite'), runtime })
+
+    const run = await engine.startRun({ project, workflow, idea: 'Request approval' })
+    await vi.waitFor(() => expect(runtime.calls).toHaveLength(1))
+    runtime.finish([{ type: 'approval_required', approval: 'Publish the release?' }])
+
+    await expect(engine.waitForIdle(run.id)).resolves.toMatchObject({
+      status: 'waiting',
+      snapshot: { pendingQuestion: null, pendingApproval: 'Publish the release?' },
+      events: expect.arrayContaining([expect.objectContaining({ type: 'waiting', data: { approval: 'Publish the release?' } })])
+    })
+  })
+
+  it('recovers an in-progress Run after an application restart', async () => {
+    directory = await mkdtemp(join(tmpdir(), 'agent-space-run-'))
+    const databasePath = join(directory, 'runs.sqlite')
+    const firstRuntime = new FakeRuntime()
+    engine = createWorkflowEngine({ databasePath, runtime: firstRuntime })
+    const run = await engine.startRun({ project, workflow, idea: 'Recover this Run' })
+    await vi.waitFor(() => expect(firstRuntime.calls).toHaveLength(1))
+
+    await engine.close()
+    const recoveredRuntime = new FakeRuntime()
+    engine = createWorkflowEngine({ databasePath, runtime: recoveredRuntime })
+    await engine.recover()
+    await vi.waitFor(() => expect(recoveredRuntime.calls).toHaveLength(1))
+    recoveredRuntime.finish([{ type: 'status_changed', status: 'completed' }])
+
+    await expect(engine.waitForIdle(run.id)).resolves.toMatchObject({ status: 'completed' })
+  })
+
+  it('can resume a blocked fake Run after an application restart', async () => {
+    directory = await mkdtemp(join(tmpdir(), 'agent-space-run-'))
+    const databasePath = join(directory, 'runs.sqlite')
+    engine = createWorkflowEngine({ databasePath, runtime: createFakeRuntimeAdapter(0) })
+    const run = await engine.startRun({ project, workflow, idea: '[blocked] recover this Run' })
+    await expect(engine.waitForIdle(run.id)).resolves.toMatchObject({ status: 'blocked' })
+
+    await engine.close()
+    engine = createWorkflowEngine({ databasePath, runtime: createFakeRuntimeAdapter(0) })
+    await expect(engine.resumeRun(run.id)).resolves.toMatchObject({ status: 'running' })
+    await expect(engine.waitForIdle(run.id)).resolves.toMatchObject({ status: 'completed' })
   })
 })

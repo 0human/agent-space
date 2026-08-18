@@ -358,4 +358,34 @@ describe('Desktop Shell navigation', () => {
     expect(screen.getAllByRole('button', { name: '继续' }).at(-1)).toBeEnabled()
     expect(screen.getAllByRole('button', { name: '取消 Run' }).at(-1)).toBeEnabled()
   })
+
+  it('does not offer Resume while a question is still waiting for an answer', async () => {
+    const user = userEvent.setup()
+    const project = {
+      id: 'project-1', name: 'demo', workspacePath: '/work/demo', workspaceAvailable: true,
+      remote: null, currentBranch: 'main', head: 'abc123', defaultBranch: 'main', isGreenfield: false, dirty: false,
+      dirtySummary: { staged: 0, unstaged: 0, untracked: 0, files: [] }, updatedAt: '2026-08-14T00:00:00.000Z'
+    }
+    const run = {
+      id: 'run-waiting', projectId: 'project-1', workspacePath: '/work/demo', idea: 'Waiting for an answer',
+      workflowId: BUILT_IN_DEVELOPMENT_WORKFLOW.id, workflowVersion: BUILT_IN_DEVELOPMENT_WORKFLOW.version,
+      definition: BUILT_IN_DEVELOPMENT_WORKFLOW, status: 'waiting' as const, error: null,
+      snapshot: {
+        phaseIndex: 0, stepIndex: 0, currentStepExecutionId: 'execution-waiting', pendingQuestion: 'Which path?', pendingApproval: null,
+        pendingQuestionDetails: { question: 'Which path?', answer: null, continuation: { phaseIndex: 0, stepIndex: 0, executionId: 'execution-waiting' } },
+        pendingApprovalDetails: null, blockedBy: null, nextAction: '等待用户处理当前 Step。'
+      },
+      stepExecutions: [{ id: 'execution-waiting', runId: 'run-waiting', phaseId: 'discovery', stepId: 'discover', attempt: 1, status: 'waiting' as const, input: null, skill: null, error: null, output: null, startedAt: null, finishedAt: null }],
+      events: [], logs: [], phaseContexts: [], decisionRecords: [], artifacts: [], createdAt: '2026-08-18T00:00:00.000Z', updatedAt: '2026-08-18T00:00:00.000Z'
+    }
+    window.appShell.listProjects = vi.fn().mockResolvedValue([project])
+    window.appShell.listWorkflowRuns = vi.fn().mockResolvedValue([run])
+    window.appShell.getWorkflowRun = vi.fn().mockResolvedValue(run)
+
+    render(<App />)
+    await user.click(await screen.findByRole('button', { name: /demo/ }))
+    await user.click(await screen.findByRole('button', { name: /Waiting for an answer/ }))
+
+    expect(screen.getAllByRole('button', { name: '继续' }).every((button) => (button as HTMLButtonElement).disabled)).toBe(true)
+  })
 })

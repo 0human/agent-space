@@ -16,9 +16,9 @@ export interface WorkflowLog {
   id: number
   runId: string
   executionId: string
-  type: string
+  type: WorkflowLogType
   message: string
-  data: Record<string, unknown>
+  data: RuntimeEvent
   createdAt: string
 }
 
@@ -100,10 +100,7 @@ export interface PendingApproval {
   continuation: RunContinuation
 }
 
-export interface RunBlocker {
-  phaseIndex: number
-  stepIndex: number
-  executionId: string
+export interface RunBlocker extends RunContinuation {
   reason: string
 }
 
@@ -157,6 +154,8 @@ export type RuntimeEvent =
   | { type: 'artifact_produced'; artifact: RuntimeArtifact }
   | { type: 'status_changed'; status: 'running' | 'completed' | 'blocked' }
   | { type: 'error'; error: string }
+
+export type WorkflowLogType = RuntimeEvent['type']
 
 export interface AgentRuntimeAdapter {
   execute(context: RuntimeExecutionContext): Promise<RuntimeEvent[]>

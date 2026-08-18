@@ -17,6 +17,10 @@ export function createFakeRuntimeAdapter(delayMs = 180): AgentRuntimeAdapter {
       if (context.idea.includes('[blocked]') && !alreadyBlocked) {
         return [{ type: 'status_changed', status: 'blocked' }]
       }
+      const alreadyApproved = context.events.some((event) => event.type === 'approval_approved' && event.data.executionId === context.execution.id)
+      if (step.approvalGate && !alreadyApproved) {
+        return [{ type: 'approval_required', approval: step.approvalGate }]
+      }
       if (step.kind === 'human' && !acknowledgedHumanSteps.has(context.execution.id)) {
         acknowledgedHumanSteps.add(context.execution.id)
         return [{ type: 'question', question: zhCNMain.workflowRun.fakeQuestion(step.name) }]

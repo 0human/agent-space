@@ -211,6 +211,29 @@ describe('WorkflowEngine public API', () => {
     })
   })
 
+  it('enforces an Approval Gate declared by the Workflow Definition', async () => {
+    directory = await mkdtemp(join(tmpdir(), 'agent-space-run-'))
+    const gatedWorkflow: WorkflowView = {
+      ...workflow,
+      definition: {
+        ...workflow.definition,
+        phases: [{
+          ...workflow.definition.phases[0],
+          steps: [{ ...workflow.definition.phases[0].steps[0], approvalGate: 'Publish the result?' }]
+        }]
+      }
+    }
+    engine = createWorkflowEngine({ databasePath: join(directory, 'runs.sqlite'), runtime: createFakeRuntimeAdapter(0) })
+
+    const run = await engine.startRun({ project, workflow: gatedWorkflow, idea: 'Gate this side effect' })
+    const waiting = await engine.waitForIdle(run.id)
+    expect(waiting.status).toBe('waiting')
+    expect(waiting.snapshot.pendingApproval).toBe('Publish the result?')
+
+    await engine.approve(run.id)
+    await expect(engine.waitForIdle(run.id)).resolves.toMatchObject({ status: 'completed' })
+  })
+
   it('answers a persisted question from its continuation and records the structured answer', async () => {
     directory = await mkdtemp(join(tmpdir(), 'agent-space-run-'))
     const runtime = new FakeRuntime()

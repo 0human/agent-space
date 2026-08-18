@@ -253,6 +253,27 @@ interface RunBoardProps {
   error: string | null
 }
 
+interface RunActionButtonsProps {
+  className: string
+  canPause: boolean
+  canResume: boolean
+  canRetry: boolean
+  canCancel: boolean
+  onPause: () => void
+  onResume: () => void
+  onRetry: () => void
+  onCancel: () => void
+}
+
+function RunActionButtons({ className, canPause, canResume, canRetry, canCancel, onPause, onResume, onRetry, onCancel }: RunActionButtonsProps): React.JSX.Element {
+  return <div className={className}>
+    <button className="secondary-action" type="button" onClick={onPause} disabled={!canPause}><Pause aria-hidden="true" />{copy.run.pause}</button>
+    <button className="secondary-action" type="button" onClick={onResume} disabled={!canResume}><ArrowRight aria-hidden="true" />{copy.run.resume}</button>
+    <button className="secondary-action" type="button" onClick={onRetry} disabled={!canRetry}><RotateCcw aria-hidden="true" />{copy.run.retry}</button>
+    <button className="secondary-action" type="button" onClick={onCancel} disabled={!canCancel}><Square aria-hidden="true" />{copy.run.cancel}</button>
+  </div>
+}
+
 function RunBoard({ run, onBack, onPause, onResume, onRetry, onCancel, onAnswer, onApprove, onReject, error }: RunBoardProps): React.JSX.Element {
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null)
   const [answer, setAnswer] = useState('')
@@ -266,7 +287,8 @@ function RunBoard({ run, onBack, onPause, onResume, onRetry, onCancel, onAnswer,
   const selectedBlocker = selectedExecution && run.snapshot.blockedBy?.executionId === selectedExecution.id ? run.snapshot.blockedBy : null
   const selectedIsCurrent = selectedExecution?.id === run.snapshot.currentStepExecutionId
   const canPause = run.status === 'running'
-  const canResume = ['paused', 'waiting', 'blocked'].includes(run.status)
+  const hasPendingDecision = run.status === 'waiting' && Boolean(run.snapshot.pendingQuestionDetails || run.snapshot.pendingApprovalDetails)
+  const canResume = ['paused', 'blocked'].includes(run.status) || (run.status === 'waiting' && !hasPendingDecision)
   const canRetry = run.status === 'failed'
   const canCancel = ['running', 'paused', 'waiting', 'blocked', 'failed'].includes(run.status)
 
@@ -284,12 +306,7 @@ function RunBoard({ run, onBack, onPause, onResume, onRetry, onCancel, onAnswer,
             <h1 id="run-board-title">{run.idea}</h1>
             <p>{run.snapshot.nextAction}</p>
           </div>
-          <div className="workflow-actions">
-            <button className="secondary-action" type="button" onClick={onPause} disabled={!canPause}><Pause aria-hidden="true" />{copy.run.pause}</button>
-            <button className="secondary-action" type="button" onClick={onResume} disabled={!canResume}><ArrowRight aria-hidden="true" />{copy.run.resume}</button>
-            <button className="secondary-action" type="button" onClick={onRetry} disabled={!canRetry}><RotateCcw aria-hidden="true" />{copy.run.retry}</button>
-            <button className="secondary-action" type="button" onClick={onCancel} disabled={!canCancel}><Square aria-hidden="true" />{copy.run.cancel}</button>
-          </div>
+          <RunActionButtons className="workflow-actions" canPause={canPause} canResume={canResume} canRetry={canRetry} canCancel={canCancel} onPause={onPause} onResume={onResume} onRetry={onRetry} onCancel={onCancel} />
         </div>
         {run.error ? <p className="error-message" role="alert">{run.error}</p> : null}
         {error ? <p className="error-message" role="alert">{error}</p> : null}
@@ -330,12 +347,7 @@ function RunBoard({ run, onBack, onPause, onResume, onRetry, onCancel, onAnswer,
               <h4>{copy.run.logsTitle}</h4>{selectedLogs.length > 0 ? <div className="run-detail-logs">{selectedLogs.map((log) => <div key={log.id}><span>{log.type}</span><p>{log.message}</p></div>)}</div> : <p>{copy.run.noLogs}</p>}
               {selectedBlocker ? <><h4>{copy.run.blockerTitle}</h4><p className="run-detail-error">{selectedBlocker.reason}</p></> : null}
               <h4>{copy.run.availableActionsTitle}</h4>
-              {selectedIsCurrent ? <div className="run-detail-actions">
-                <button className="secondary-action" type="button" onClick={onPause} disabled={!canPause}><Pause aria-hidden="true" />{copy.run.pause}</button>
-                <button className="secondary-action" type="button" onClick={onResume} disabled={!canResume}><ArrowRight aria-hidden="true" />{copy.run.resume}</button>
-                <button className="secondary-action" type="button" onClick={onRetry} disabled={!canRetry}><RotateCcw aria-hidden="true" />{copy.run.retry}</button>
-                <button className="secondary-action" type="button" onClick={onCancel} disabled={!canCancel}><Square aria-hidden="true" />{copy.run.cancel}</button>
-              </div> : <p>{copy.run.noAvailableActions}</p>}
+              {selectedIsCurrent ? <RunActionButtons className="run-detail-actions" canPause={canPause} canResume={canResume} canRetry={canRetry} canCancel={canCancel} onPause={onPause} onResume={onResume} onRetry={onRetry} onCancel={onCancel} /> : <p>{copy.run.noAvailableActions}</p>}
               <h4>{copy.run.eventsTitle}</h4><div className="run-detail-events">{run.events.filter((event) => event.data.executionId === selectedExecution.id).map((event) => <span key={event.id}>{event.type}</span>)}</div>
             </div>
           </div> : <p>{copy.run.noSelection}</p>}

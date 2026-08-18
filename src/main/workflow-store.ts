@@ -371,7 +371,7 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
       version_hash: string | null; status: string; created_at: string
     }>(db, 'SELECT * FROM artifacts WHERE run_id = ? ORDER BY rowid', [id])
     const logs = await all<{
-      id: number; run_id: string; execution_id: string; type: string; message: string; data_json: string; created_at: string
+      id: number; run_id: string; execution_id: string; type: WorkflowLog['type']; message: string; data_json: string; created_at: string
     }>(db, 'SELECT * FROM workflow_logs WHERE run_id = ? ORDER BY id', [id])
     const phaseContexts = await all<{
       id: string; run_id: string; phase_id: string; content: string; updated_at: string

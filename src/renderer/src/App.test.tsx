@@ -22,7 +22,14 @@ describe('Desktop Shell navigation', () => {
       }),
       copyWorkflow: vi.fn(),
       reloadWorkflow: vi.fn(),
+      preflightWorkflowRun: vi.fn(),
       startWorkflowRun: vi.fn(),
+      listWorkflowRuns: vi.fn().mockResolvedValue([]),
+      getWorkflowRun: vi.fn(),
+      pauseWorkflowRun: vi.fn(),
+      resumeWorkflowRun: vi.fn(),
+      retryWorkflowStep: vi.fn(),
+      cancelWorkflowRun: vi.fn(),
       openWorkflowFile: vi.fn().mockResolvedValue({ ok: true, error: null })
     }
   })
@@ -257,5 +264,41 @@ describe('Desktop Shell navigation', () => {
     expect(await screen.findByRole('heading', { name: 'Edited Workflow' })).toBeVisible()
     expect(screen.getByRole('alert')).toHaveTextContent('缺少 Skill research。')
     expect(screen.getByRole('button', { name: '启动新 Run' })).toBeDisabled()
+  })
+
+  it('requires a successful Preflight before creating a Run Board', async () => {
+    const user = userEvent.setup()
+    const project = {
+      id: 'project-1', name: 'demo', workspacePath: '/work/demo', workspaceAvailable: true,
+      remote: null, currentBranch: 'main', head: 'abc123', defaultBranch: 'main',
+      isGreenfield: false, dirty: false,
+      dirtySummary: { staged: 0, unstaged: 0, untracked: 0, files: [] },
+      updatedAt: '2026-08-14T00:00:00.000Z'
+    }
+    const definition = { ...BUILT_IN_DEVELOPMENT_WORKFLOW, derivedFrom: { id: 'development-workflow', version: '1.0.0' } }
+    const run = {
+      id: 'run-1', projectId: 'project-1', workspacePath: '/work/demo', idea: 'Build durable runs',
+      workflowId: definition.id, workflowVersion: definition.version, definition, status: 'running' as const,
+      error: null, snapshot: { phaseIndex: 0, stepIndex: 0, currentStepExecutionId: 'execution-1', pendingQuestion: null, pendingApproval: null, nextAction: '等待 Runtime 完成当前 Step。' },
+      stepExecutions: [{ id: 'execution-1', runId: 'run-1', phaseId: 'discovery', stepId: 'discover', attempt: 1, status: 'running' as const, error: null, output: null, startedAt: null, finishedAt: null }],
+      events: [], artifacts: [], createdAt: '2026-08-18T00:00:00.000Z', updatedAt: '2026-08-18T00:00:00.000Z'
+    }
+    window.appShell.listProjects = vi.fn().mockResolvedValue([project])
+    window.appShell.getWorkflow = vi.fn().mockResolvedValue({ definition, source: 'project', path: '/work/demo/.agent-space/workflow.json', validation: { valid: true, errors: [], warnings: [] }, canStart: true, skillManifests: [] })
+    window.appShell.preflightWorkflowRun = vi.fn().mockResolvedValue({ passed: true, checks: ['Idea 已填写。'], errors: [] })
+    window.appShell.startWorkflowRun = vi.fn().mockResolvedValue({ ok: true, error: null, run })
+    window.appShell.getWorkflowRun = vi.fn().mockResolvedValue(run)
+
+    render(<App />)
+    await user.click(await screen.findByRole('button', { name: /demo/ }))
+    await user.click(screen.getByRole('button', { name: '查看 Workflow' }))
+    await user.type(await screen.findByLabelText('Idea'), 'Build durable runs')
+    expect(screen.getByRole('button', { name: '启动新 Run' })).toBeDisabled()
+    await user.click(screen.getByRole('button', { name: '运行 Preflight' }))
+    expect(await screen.findByText('Idea 已填写。')).toBeVisible()
+    await user.click(screen.getByRole('button', { name: '启动新 Run' }))
+    expect(await screen.findByRole('heading', { name: 'Build durable runs' })).toBeVisible()
+    expect(screen.getAllByText('运行中').length).toBeGreaterThan(0)
+    expect(window.appShell.startWorkflowRun).toHaveBeenCalledWith('project-1', 'Build durable runs')
   })
 })

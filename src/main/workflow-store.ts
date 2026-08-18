@@ -6,13 +6,16 @@ import initSqlJs, { type Database as SqlJsDatabase } from 'sql.js'
 
 import type { Project } from '../shared/project'
 import type {
-  RuntimeResult,
+  RuntimeArtifact,
+  RuntimeEvent,
   RunSnapshot,
   StepExecutionStatus,
   WorkflowRun,
   WorkflowRunStatus
 } from '../shared/workflow-run'
 import type { WorkflowDefinition } from '../shared/workflow'
+import { zhCNMain } from '../shared/i18n/zh-CN'
+import type { RunWorkspaceManager } from './run-workspace'
 
 interface StoredRun extends WorkflowRun {
   project: Project
@@ -31,6 +34,7 @@ interface SqliteRunStoreDependencies {
   databasePath: string
   now?: () => string
   createId?: () => string
+  runWorkspaceManager?: RunWorkspaceManager
 }
 
 type SqlParams = Array<string | number | null>
@@ -142,13 +146,29 @@ function nextCursor(workflow: WorkflowDefinition, phaseIndex: number, stepIndex:
 }
 
 function statusNextAction(status: WorkflowRunStatus): string {
-  if (status === 'paused') return 'Workflow Run 已暂停。'
-  if (status === 'waiting') return '等待用户处理当前 Step。'
-  if (status === 'blocked') return 'Workflow Run 已 blocked，需要处理阻塞原因。'
-  if (status === 'failed') return '当前 Step 失败，可重试。'
-  if (status === 'cancelled') return 'Workflow Run 已取消。'
-  if (status === 'completed') return 'Workflow Run 已完成。'
-  return '等待 Runtime 完成当前 Step。'
+  const copy = zhCNMain.workflowRun.nextAction
+  return copy[status]
+}
+
+function resolveRuntimeEvents(events: RuntimeEvent[]):
+  | { type: 'completed'; output?: Record<string, unknown>; artifacts: RuntimeArtifact[] }
+  | { type: 'waiting'; question: string | null; approval: string | null }
+  | { type: 'blocked'; reason: string }
+  | { type: 'failed'; error: string } {
+  const artifacts = events.filter((event): event is Extract<RuntimeEvent, { type: 'artifact_produced' }> => event.type === 'artifact_produced').map((event) => event.artifact)
+  const error = events.find((event): event is Extract<RuntimeEvent, { type: 'error' }> => event.type === 'error')
+  if (error) return { type: 'failed', error: error.error }
+  const question = events.find((event): event is Extract<RuntimeEvent, { type: 'question' }> => event.type === 'question')
+  if (question) return { type: 'waiting', question: question.question, approval: null }
+  const approval = events.find((event): event is Extract<RuntimeEvent, { type: 'approval_required' }> => event.type === 'approval_required')
+  if (approval) return { type: 'waiting', question: null, approval: approval.approval }
+  const blocked = events.find((event): event is Extract<RuntimeEvent, { type: 'status_changed' }> => event.type === 'status_changed' && event.status === 'blocked')
+  if (blocked) return { type: 'blocked', reason: zhCNMain.workflowRun.runtimeBlocked }
+  const status = events.find((event): event is Extract<RuntimeEvent, { type: 'status_changed' }> => event.type === 'status_changed')
+  if (!status || status.status !== 'completed') return { type: 'failed', error: zhCNMain.workflowRun.runtimeInvalid }
+  const toolCall = events.find((event): event is Extract<RuntimeEvent, { type: 'tool_call' }> => event.type === 'tool_call')
+  const text = events.filter((event): event is Extract<RuntimeEvent, { type: 'text_delta' }> => event.type === 'text_delta').map((event) => event.text).join('')
+  return { type: 'completed', output: toolCall || text ? { ...(toolCall ? { toolCall } : {}), ...(text ? { text } : {}) } : undefined, artifacts }
 }
 
 export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
@@ -168,6 +188,8 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
         idea TEXT NOT NULL,
         workflow_id TEXT NOT NULL,
         workflow_version TEXT NOT NULL,
+        base_commit TEXT,
+        branch TEXT,
         workflow_json TEXT NOT NULL,
         project_json TEXT NOT NULL,
         status TEXT NOT NULL,
@@ -176,6 +198,10 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
         updated_at TEXT NOT NULL
       )
     `)
+    const runColumns = await all<{ name: string }>(db, 'PRAGMA table_info(runs)')
+    const existingRunColumns = new Set(runColumns.map((column) => column.name))
+    if (!existingRunColumns.has('base_commit')) await run(db, 'ALTER TABLE runs ADD COLUMN base_commit TEXT')
+    if (!existingRunColumns.has('branch')) await run(db, 'ALTER TABLE runs ADD COLUMN branch TEXT')
     await run(db, `
       CREATE TABLE IF NOT EXISTS run_snapshots (
         run_id TEXT PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE,
@@ -195,6 +221,9 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
         step_id TEXT NOT NULL,
         attempt INTEGER NOT NULL,
         status TEXT NOT NULL,
+        input_json TEXT NOT NULL,
+        skill_name TEXT,
+        skill_version TEXT,
         error TEXT,
         output_json TEXT,
         started_at TEXT,
@@ -202,6 +231,11 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
         UNIQUE(run_id, step_id, attempt)
       )
     `)
+    const executionColumns = await all<{ name: string }>(db, 'PRAGMA table_info(step_executions)')
+    const existingExecutionColumns = new Set(executionColumns.map((column) => column.name))
+    if (!existingExecutionColumns.has('input_json')) await run(db, "ALTER TABLE step_executions ADD COLUMN input_json TEXT NOT NULL DEFAULT '{}'")
+    if (!existingExecutionColumns.has('skill_name')) await run(db, 'ALTER TABLE step_executions ADD COLUMN skill_name TEXT')
+    if (!existingExecutionColumns.has('skill_version')) await run(db, 'ALTER TABLE step_executions ADD COLUMN skill_version TEXT')
     await run(db, `
       CREATE TABLE IF NOT EXISTS workflow_events (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -256,6 +290,7 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
   async function load(id: string): Promise<StoredRun | null> {
     const row = await get<{
       id: string; project_id: string; workspace_path: string; idea: string; workflow_id: string; workflow_version: string;
+      base_commit: string | null; branch: string | null;
       workflow_json: string; project_json: string; status: WorkflowRunStatus; error: string | null; created_at: string; updated_at: string
     }>(db, 'SELECT * FROM runs WHERE id = ?', [id])
     if (!row) return null
@@ -265,7 +300,8 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
     }>(db, 'SELECT * FROM run_snapshots WHERE run_id = ?', [id])
     if (!snapshotRow) throw new Error(`Run Snapshot missing for ${id}`)
     const executions = await all<{
-      id: string; run_id: string; phase_id: string; step_id: string; attempt: number; status: StepExecutionStatus;
+      id: string; run_id: string; phase_id: string; step_id: string; attempt: number; status: StepExecutionStatus; input_json: string;
+      skill_name: string | null; skill_version: string | null;
       error: string | null; output_json: string | null; started_at: string | null; finished_at: string | null
     }>(db, 'SELECT * FROM step_executions WHERE run_id = ? ORDER BY rowid', [id])
     const events = await all<{ id: number; run_id: string; type: string; data_json: string; created_at: string }>(db, 'SELECT * FROM workflow_events WHERE run_id = ? ORDER BY id', [id])
@@ -281,6 +317,8 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
       idea: row.idea,
       workflowId: row.workflow_id,
       workflowVersion: row.workflow_version,
+      baseCommit: row.base_commit,
+      branch: row.branch,
       definition: workflow,
       status: row.status,
       error: row.error,
@@ -294,7 +332,9 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
       },
       stepExecutions: executions.map((execution) => ({
         id: execution.id, runId: execution.run_id, phaseId: execution.phase_id, stepId: execution.step_id,
-        attempt: execution.attempt, status: execution.status, error: execution.error,
+        attempt: execution.attempt, status: execution.status, input: parseJson<Record<string, unknown>>(execution.input_json),
+        skill: execution.skill_name && execution.skill_version ? { name: execution.skill_name, version: execution.skill_version } : null,
+        error: execution.error,
         output: execution.output_json ? parseJson<Record<string, unknown>>(execution.output_json) : null,
         startedAt: execution.started_at, finishedAt: execution.finished_at
       })),
@@ -325,11 +365,11 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
     await run(db, 'UPDATE runs SET status = ?, error = ?, updated_at = ? WHERE id = ?', [status, error, updatedAt, runId])
   }
 
-  async function insertExecution(runId: string, workflow: WorkflowDefinition, phaseIndex: number, stepIndex: number, attempt: number, status: StepExecutionStatus, createdAt: string): Promise<string> {
+  async function insertExecution(runId: string, workflow: WorkflowDefinition, phaseIndex: number, stepIndex: number, attempt: number, status: StepExecutionStatus, createdAt: string, input: Record<string, unknown> = {}): Promise<string> {
     const step = workflow.phases[phaseIndex]?.steps[stepIndex]
     if (!step) throw new Error('Workflow Step 不存在。')
     const id = createId()
-    await run(db, `INSERT INTO step_executions (id, run_id, phase_id, step_id, attempt, status, started_at) VALUES (?, ?, ?, ?, ?, ?, ?)`, [id, runId, workflow.phases[phaseIndex].id, step.id, attempt, status, createdAt])
+    await run(db, `INSERT INTO step_executions (id, run_id, phase_id, step_id, attempt, status, input_json, skill_name, skill_version, started_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [id, runId, workflow.phases[phaseIndex].id, step.id, attempt, status, json(input), step.skill?.name ?? null, step.skill?.version ?? null, createdAt])
     return id
   }
 
@@ -338,10 +378,14 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
     async createRun(input: CreateRunInput): Promise<StoredRun> {
       return locked(async () => transaction(async () => {
         const { id, project, workflow, idea, now: createdAt } = input
-        await run(db, `INSERT INTO runs (id, project_id, workspace_path, idea, workflow_id, workflow_version, workflow_json, project_json, status, error, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
-          id, project.id, project.workspacePath, idea, workflow.id, workflow.version, json(workflow), json(project), 'running', null, createdAt, createdAt
+        const workspace = dependencies.runWorkspaceManager
+          ? await dependencies.runWorkspaceManager.prepare(project, id)
+          : { workspacePath: project.workspacePath, baseCommit: null, branch: null }
+        const runProject = { ...project, workspacePath: workspace.workspacePath }
+        await run(db, `INSERT INTO runs (id, project_id, workspace_path, idea, workflow_id, workflow_version, base_commit, branch, workflow_json, project_json, status, error, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
+          id, project.id, workspace.workspacePath, idea, workflow.id, workflow.version, workspace.baseCommit, workspace.branch, json(workflow), json(runProject), 'running', null, createdAt, createdAt
         ])
-        const executionId = await insertExecution(id, workflow, 0, 0, 1, 'running', createdAt)
+        const executionId = await insertExecution(id, workflow, 0, 0, 1, 'running', createdAt, { idea })
         const snapshot: RunSnapshot = { phaseIndex: 0, stepIndex: 0, currentStepExecutionId: executionId, pendingQuestion: null, pendingApproval: null, nextAction: statusNextAction('running') }
         await run(db, 'INSERT INTO run_snapshots (run_id, phase_index, step_index, current_step_execution_id, pending_question, pending_approval, next_action) VALUES (?, ?, ?, ?, ?, ?, ?)', [id, snapshot.phaseIndex, snapshot.stepIndex, snapshot.currentStepExecutionId, null, null, snapshot.nextAction])
         await appendEvent(id, 'started', { idea }, createdAt)
@@ -366,21 +410,24 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
       })
     },
 
-    async recordRuntimeResult(runId: string, executionId: string, result: RuntimeResult): Promise<StoredRun> {
+    async recordRuntimeResult(runId: string, executionId: string, events: RuntimeEvent[]): Promise<StoredRun> {
       return locked(async () => transaction(async () => {
         const current = await load(runId)
         if (!current) throw new Error('找不到 Workflow Run。')
         if (current.snapshot.currentStepExecutionId !== executionId || current.status === 'cancelled') return current
         const timestamp = now()
+        const result = resolveRuntimeEvents(events)
         if (result.type === 'failed' || result.type === 'waiting' || result.type === 'blocked') {
           const status: StepExecutionStatus = result.type
           const error = result.type === 'failed' ? result.error : result.type === 'blocked' ? result.reason : null
           await run(db, 'UPDATE step_executions SET status = ?, error = ?, finished_at = ? WHERE id = ?', [status, error, result.type === 'waiting' ? null : timestamp, executionId])
           const runStatus = result.type === 'failed' ? 'failed' : result.type
           await updateRunStatus(runId, runStatus, error, timestamp)
-          const snapshot = { ...current.snapshot, pendingQuestion: result.type === 'waiting' ? result.question : null, pendingApproval: null, nextAction: statusNextAction(runStatus) }
+          const snapshot = { ...current.snapshot, pendingQuestion: result.type === 'waiting' ? result.question : null, pendingApproval: result.type === 'waiting' ? result.approval : null, nextAction: statusNextAction(runStatus) }
           await updateSnapshot(runId, snapshot)
-          await appendEvent(runId, result.type, result.type === 'waiting' ? { question: result.question } : { reason: error }, timestamp)
+          await appendEvent(runId, result.type, result.type === 'waiting'
+            ? { ...(result.question ? { question: result.question } : {}), ...(result.approval ? { approval: result.approval } : {}) }
+            : { reason: error, ...(result.type === 'blocked' ? { executionId } : {}) }, timestamp)
           return (await load(runId))!
         }
 

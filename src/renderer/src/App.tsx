@@ -215,36 +215,26 @@ function ProjectDetail({ project, runs, onBack, onOpenInIde, openError, importWa
         <section className="run-list" aria-labelledby="run-list-title">
           <div className="run-list-heading">
             <div>
-              <h2 id="run-list-title">Workflow Runs</h2>
-              <p>从持久状态恢复进行中、等待用户或 blocked 的 Run。</p>
+              <h2 id="run-list-title">{copy.run.listTitle}</h2>
+              <p>{copy.run.listDescription}</p>
             </div>
-            <span>{runs.length} 个 Run</span>
+            <span>{copy.run.count(runs.length)}</span>
           </div>
           {runs.length > 0 ? (
             <div className="run-list-items">
               {runs.map((run) => (
                 <button className="run-list-item" type="button" key={run.id} onClick={() => onOpenRun(run)}>
                   <span><strong>{run.idea}</strong><small>{run.workflowId}@{run.workflowVersion}</small></span>
-                  <span className={`run-status is-${run.status}`}>{runStatusLabel[run.status]}</span>
+                  <span className={`run-status is-${run.status}`}>{copy.run.status[run.status]}</span>
                   <ArrowRight aria-hidden="true" />
                 </button>
               ))}
             </div>
-          ) : <p className="run-list-empty">还没有 Workflow Run。</p>}
+          ) : <p className="run-list-empty">{copy.run.empty}</p>}
         </section>
       </section>
     </main>
   )
-}
-
-const runStatusLabel: Record<WorkflowRunStatus, string> = {
-  running: '运行中',
-  paused: '已暂停',
-  waiting: '等待用户',
-  blocked: '已 blocked',
-  failed: 'Step 失败',
-  completed: '已完成',
-  cancelled: '已取消'
 }
 
 interface RunBoardProps {
@@ -268,27 +258,27 @@ function RunBoard({ run, onBack, onPause, onResume, onRetry, onCancel, error }: 
   return (
     <main className="content workflow-content" aria-labelledby="run-board-title">
       <div className="content-header">
-        <p className="eyebrow">Workflow Run</p>
+        <p className="eyebrow">{copy.run.eyebrow}</p>
         <p className="content-context">{run.workflowId}@{run.workflowVersion}</p>
       </div>
       <section className="run-board-view">
-        <button className="back-action" type="button" onClick={onBack}><ArrowLeft aria-hidden="true" />返回 Project 详情</button>
+        <button className="back-action" type="button" onClick={onBack}><ArrowLeft aria-hidden="true" />{copy.run.backAction}</button>
         <div className="run-board-heading">
           <div>
-            <div className="workflow-source-line"><span className={`run-status is-${run.status}`}>{runStatusLabel[run.status]}</span><span>{run.projectId}</span></div>
+            <div className="workflow-source-line"><span className={`run-status is-${run.status}`}>{copy.run.status[run.status]}</span><span>{copy.run.projectId(run.projectId)}</span></div>
             <h1 id="run-board-title">{run.idea}</h1>
             <p>{run.snapshot.nextAction}</p>
           </div>
           <div className="workflow-actions">
-            <button className="secondary-action" type="button" onClick={onPause} disabled={!canPause}><Pause aria-hidden="true" />暂停</button>
-            <button className="secondary-action" type="button" onClick={onResume} disabled={!canResume}><ArrowRight aria-hidden="true" />继续</button>
-            <button className="secondary-action" type="button" onClick={onRetry} disabled={!canRetry}><RotateCcw aria-hidden="true" />重试失败 Step</button>
-            <button className="secondary-action" type="button" onClick={onCancel} disabled={!canCancel}><Square aria-hidden="true" />取消 Run</button>
+            <button className="secondary-action" type="button" onClick={onPause} disabled={!canPause}><Pause aria-hidden="true" />{copy.run.pause}</button>
+            <button className="secondary-action" type="button" onClick={onResume} disabled={!canResume}><ArrowRight aria-hidden="true" />{copy.run.resume}</button>
+            <button className="secondary-action" type="button" onClick={onRetry} disabled={!canRetry}><RotateCcw aria-hidden="true" />{copy.run.retry}</button>
+            <button className="secondary-action" type="button" onClick={onCancel} disabled={!canCancel}><Square aria-hidden="true" />{copy.run.cancel}</button>
           </div>
         </div>
         {run.error ? <p className="error-message" role="alert">{run.error}</p> : null}
         {error ? <p className="error-message" role="alert">{error}</p> : null}
-        <div className="run-phases" aria-label="Run Board">
+        <div className="run-phases" aria-label={copy.run.runBoardLabel}>
           {run.definition.phases.map((phase, phaseIndex) => (
             <section className={phaseIndex === run.snapshot.phaseIndex ? 'run-phase-column is-current' : 'run-phase-column'} key={phase.id}>
               <div className="run-phase-heading"><span>{String(phaseIndex + 1).padStart(2, '0')}</span><h2>{phase.name}</h2></div>
@@ -297,8 +287,8 @@ function RunBoard({ run, onBack, onPause, onResume, onRetry, onCancel, error }: 
                   const execution = latestExecutions.get(step.id)
                   const isCurrent = phaseIndex === run.snapshot.phaseIndex && stepIndex === run.snapshot.stepIndex
                   return <article className={isCurrent ? 'run-step-card is-current' : 'run-step-card'} key={step.id}>
-                    <div><strong>{step.name}</strong>{execution ? <span>attempt {execution.attempt}</span> : null}</div>
-                    <span className={`run-status is-${execution?.status ?? 'pending'}`}>{execution ? (runStatusLabel[execution.status as WorkflowRunStatus] ?? execution.status) : '待执行'}</span>
+                    <div><strong>{step.name}</strong>{execution ? <span>{copy.run.attempt(execution.attempt)}</span> : null}</div>
+                    <span className={`run-status is-${execution?.status ?? 'pending'}`}>{execution ? (copy.run.status[execution.status as WorkflowRunStatus] ?? execution.status) : copy.run.pending}</span>
                     {execution?.error ? <p>{execution.error}</p> : null}
                     {isCurrent && (run.snapshot.pendingQuestion || run.snapshot.pendingApproval) ? <p>{run.snapshot.pendingQuestion ?? run.snapshot.pendingApproval}</p> : null}
                   </article>
@@ -308,11 +298,11 @@ function RunBoard({ run, onBack, onPause, onResume, onRetry, onCancel, error }: 
           ))}
         </div>
         <section className="run-artifacts" aria-labelledby="run-artifacts-title">
-          <h2 id="run-artifacts-title">Artifact 索引</h2>
-          {run.artifacts.length > 0 ? run.artifacts.map((artifact) => <div className="run-artifact" key={artifact.id}><strong>{artifact.name}</strong><span>{artifact.type}</span><span>{artifact.location ?? '未提供位置'}</span></div>) : <p>当前还没有 Artifact。</p>}
+          <h2 id="run-artifacts-title">{copy.run.artifactsTitle}</h2>
+          {run.artifacts.length > 0 ? run.artifacts.map((artifact) => <div className="run-artifact" key={artifact.id}><strong>{artifact.name}</strong><span>{artifact.type}</span><span>{artifact.location ?? copy.run.noLocation}</span></div>) : <p>{copy.run.noArtifacts}</p>}
         </section>
         <section className="run-events" aria-labelledby="run-events-title">
-          <h2 id="run-events-title">Workflow Event</h2>
+          <h2 id="run-events-title">{copy.run.eventsTitle}</h2>
           <div>{run.events.map((event) => <span key={event.id}>{event.type}</span>)}</div>
         </section>
       </section>
@@ -400,14 +390,14 @@ function WorkflowView({ project, workflow, loading, error, idea, preflight, onBa
 
         <section className="run-launcher" aria-labelledby="run-launcher-title">
           <div>
-            <p className="eyebrow">Run Preflight</p>
-            <h2 id="run-launcher-title">输入 Idea，启动 Workflow Run</h2>
-            <p>启动前检查 Workspace 和 Project Workflow；检查结果会随 Run 保存。</p>
+            <p className="eyebrow">{copy.workflow.preflightEyebrow}</p>
+            <h2 id="run-launcher-title">{copy.workflow.launchTitle}</h2>
+            <p>{copy.workflow.launchDescription}</p>
           </div>
-          <label htmlFor="workflow-idea">Idea</label>
-          <textarea id="workflow-idea" value={idea} onChange={(event) => onIdeaChange(event.target.value)} placeholder="描述你想推进的 Idea" />
+          <label htmlFor="workflow-idea">{copy.workflow.ideaLabel}</label>
+          <textarea id="workflow-idea" value={idea} onChange={(event) => onIdeaChange(event.target.value)} placeholder={copy.workflow.ideaPlaceholder} />
           <div className="run-launcher-actions">
-            <button className="secondary-action" type="button" onClick={onPreflight} disabled={!workflow.canStart || !idea.trim()}><ShieldAlert aria-hidden="true" />运行 Preflight</button>
+            <button className="secondary-action" type="button" onClick={onPreflight} disabled={!workflow.canStart || !idea.trim()}><ShieldAlert aria-hidden="true" />{copy.workflow.preflightAction}</button>
             <button className="primary-action" type="button" onClick={onStart} disabled={!preflight?.passed}><ArrowRight aria-hidden="true" />{copy.workflow.startAction}</button>
           </div>
           {preflight ? <div className={preflight.passed ? 'preflight-result is-valid' : 'preflight-result is-invalid'} role={preflight.passed ? 'status' : 'alert'}>

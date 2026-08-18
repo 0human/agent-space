@@ -19,6 +19,8 @@ export interface StepExecution {
   stepId: string
   attempt: number
   status: StepExecutionStatus
+  input: Record<string, unknown> | null
+  skill: { name: string; version: string } | null
   error: string | null
   output: Record<string, unknown> | null
   startedAt: string | null
@@ -53,6 +55,8 @@ export interface WorkflowRun {
   idea: string
   workflowId: string
   workflowVersion: string
+  baseCommit: string | null
+  branch: string | null
   definition: WorkflowDefinition
   status: WorkflowRunStatus
   error: string | null
@@ -72,6 +76,7 @@ export interface RuntimeExecutionContext {
   phaseIndex: number
   stepIndex: number
   execution: StepExecution
+  events: WorkflowEvent[]
 }
 
 export interface RuntimeArtifact {
@@ -82,14 +87,17 @@ export interface RuntimeArtifact {
   status?: string
 }
 
-export type RuntimeResult =
-  | { type: 'completed'; output?: Record<string, unknown>; artifacts?: RuntimeArtifact[] }
-  | { type: 'waiting'; question: string }
-  | { type: 'blocked'; reason: string }
-  | { type: 'failed'; error: string }
+export type RuntimeEvent =
+  | { type: 'text_delta'; text: string }
+  | { type: 'tool_call'; name: string; input: Record<string, unknown> }
+  | { type: 'question'; question: string }
+  | { type: 'approval_required'; approval: string }
+  | { type: 'artifact_produced'; artifact: RuntimeArtifact }
+  | { type: 'status_changed'; status: 'running' | 'completed' | 'blocked' }
+  | { type: 'error'; error: string }
 
 export interface AgentRuntimeAdapter {
-  execute(context: RuntimeExecutionContext): Promise<RuntimeResult>
+  execute(context: RuntimeExecutionContext): Promise<RuntimeEvent[]>
 }
 
 export interface WorkflowPreflightInput {

@@ -45,7 +45,27 @@ export interface RunSnapshot {
   currentStepExecutionId: string | null
   pendingQuestion: string | null
   pendingApproval: string | null
+  pendingQuestionDetails: PendingQuestion | null
+  pendingApprovalDetails: PendingApproval | null
   nextAction: string
+}
+
+export interface RunContinuation {
+  phaseIndex: number
+  stepIndex: number
+  executionId: string
+}
+
+export interface PendingQuestion {
+  question: string
+  answer: string | null
+  continuation: RunContinuation
+}
+
+export interface PendingApproval {
+  approval: string
+  decision: 'approved' | 'rejected' | null
+  continuation: RunContinuation
 }
 
 export interface WorkflowRun {

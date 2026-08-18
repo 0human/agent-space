@@ -166,7 +166,7 @@ describe('WorkflowEngine public API', () => {
     const recoveredRuntime = new FakeRuntime()
     engine = createWorkflowEngine({ databasePath, runtime: recoveredRuntime })
     await expect(engine.getRun(waitingRun.id)).resolves.toMatchObject({ status: 'waiting' })
-    await engine.resumeRun(waitingRun.id)
+    await engine.answerQuestion(waitingRun.id, 'Proceed')
     await vi.waitFor(() => expect(recoveredRuntime.calls).toHaveLength(1))
     recoveredRuntime.finish([{ type: 'status_changed', status: 'completed' }])
     await expect(engine.waitForIdle(waitingRun.id)).resolves.toMatchObject({ status: 'completed' })
@@ -209,6 +209,45 @@ describe('WorkflowEngine public API', () => {
       snapshot: { pendingQuestion: null, pendingApproval: 'Publish the release?' },
       events: expect.arrayContaining([expect.objectContaining({ type: 'waiting', data: { approval: 'Publish the release?' } })])
     })
+  })
+
+  it('answers a persisted question from its continuation and records the structured answer', async () => {
+    directory = await mkdtemp(join(tmpdir(), 'agent-space-run-'))
+    const runtime = new FakeRuntime()
+    engine = createWorkflowEngine({ databasePath: join(directory, 'runs.sqlite'), runtime })
+
+    const run = await engine.startRun({ project, workflow, idea: 'Need a decision' })
+    await vi.waitFor(() => expect(runtime.calls).toHaveLength(1))
+    runtime.finish([{ type: 'question', question: 'Which direction?' }])
+    const waiting = await engine.waitForIdle(run.id)
+    expect(waiting.snapshot.pendingQuestionDetails).toMatchObject({ question: 'Which direction?', answer: null, continuation: { executionId: waiting.snapshot.currentStepExecutionId } })
+
+    const resumed = await engine.answerQuestion(run.id, 'Use the durable path')
+    expect(resumed.status).toBe('running')
+    expect(resumed.snapshot.pendingQuestion).toBeNull()
+    expect(resumed.snapshot.pendingQuestionDetails).toMatchObject({ answer: 'Use the durable path' })
+    expect(resumed.events).toEqual(expect.arrayContaining([expect.objectContaining({ type: 'question_answered', data: expect.objectContaining({ answer: 'Use the durable path' }) })]))
+    await vi.waitFor(() => expect(runtime.calls).toHaveLength(2))
+    runtime.finish([{ type: 'status_changed', status: 'completed' }])
+    await expect(engine.waitForIdle(run.id)).resolves.toMatchObject({ status: 'completed' })
+  })
+
+  it('rejects an Approval Gate without running the pending Step', async () => {
+    directory = await mkdtemp(join(tmpdir(), 'agent-space-run-'))
+    const runtime = new FakeRuntime()
+    engine = createWorkflowEngine({ databasePath: join(directory, 'runs.sqlite'), runtime })
+
+    const run = await engine.startRun({ project, workflow, idea: 'Request approval' })
+    await vi.waitFor(() => expect(runtime.calls).toHaveLength(1))
+    runtime.finish([{ type: 'approval_required', approval: 'Publish the release?' }])
+    const waiting = await engine.waitForIdle(run.id)
+    const rejected = await engine.reject(waiting.id)
+    expect(rejected.status).toBe('cancelled')
+    expect(rejected.snapshot.pendingApproval).toBeNull()
+    expect(rejected.snapshot.pendingApprovalDetails).toMatchObject({ decision: 'rejected' })
+    expect(rejected.stepExecutions[0]).toMatchObject({ status: 'cancelled' })
+    expect(rejected.events).toEqual(expect.arrayContaining([expect.objectContaining({ type: 'approval_rejected' })]))
+    expect(runtime.calls).toHaveLength(1)
   })
 
   it('recovers an in-progress Run after an application restart', async () => {

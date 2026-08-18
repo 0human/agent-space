@@ -10,9 +10,12 @@ import {
   Plus,
   RefreshCw,
   RotateCcw,
+  Send,
   Settings,
   ShieldAlert,
   Square,
+  ThumbsDown,
+  ThumbsUp,
   Workflow
 } from 'lucide-react'
 
@@ -244,12 +247,19 @@ interface RunBoardProps {
   onResume: () => void
   onRetry: () => void
   onCancel: () => void
+  onAnswer: (answer: string) => void
+  onApprove: () => void
+  onReject: () => void
   error: string | null
 }
 
-function RunBoard({ run, onBack, onPause, onResume, onRetry, onCancel, error }: RunBoardProps): React.JSX.Element {
+function RunBoard({ run, onBack, onPause, onResume, onRetry, onCancel, onAnswer, onApprove, onReject, error }: RunBoardProps): React.JSX.Element {
+  const [selectedStepId, setSelectedStepId] = useState<string | null>(null)
+  const [answer, setAnswer] = useState('')
   const latestExecutions = new Map<string, WorkflowRun['stepExecutions'][number]>()
   for (const execution of run.stepExecutions) latestExecutions.set(execution.stepId, execution)
+  const selectedStep = run.definition.phases.flatMap((phase) => phase.steps).find((step) => step.id === selectedStepId) ?? null
+  const selectedExecution = selectedStep ? latestExecutions.get(selectedStep.id) ?? null : null
   const canPause = run.status === 'running'
   const canResume = ['paused', 'waiting', 'blocked'].includes(run.status)
   const canRetry = run.status === 'failed'
@@ -286,7 +296,7 @@ function RunBoard({ run, onBack, onPause, onResume, onRetry, onCancel, error }: 
                 {phase.steps.map((step, stepIndex) => {
                   const execution = latestExecutions.get(step.id)
                   const isCurrent = phaseIndex === run.snapshot.phaseIndex && stepIndex === run.snapshot.stepIndex
-                  return <article className={isCurrent ? 'run-step-card is-current' : 'run-step-card'} key={step.id}>
+                  return <article className={isCurrent ? 'run-step-card is-current' : 'run-step-card'} key={step.id} role="button" tabIndex={0} aria-pressed={selectedStepId === step.id} onClick={() => setSelectedStepId(step.id)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setSelectedStepId(step.id) } }}>
                     <div><strong>{step.name}</strong>{execution ? <span>{copy.run.attempt(execution.attempt)}</span> : null}</div>
                     <span className={`run-status is-${execution?.status ?? 'pending'}`}>{execution ? (copy.run.status[execution.status as WorkflowRunStatus] ?? execution.status) : copy.run.pending}</span>
                     {execution?.error ? <p>{execution.error}</p> : null}
@@ -297,6 +307,22 @@ function RunBoard({ run, onBack, onPause, onResume, onRetry, onCancel, error }: 
             </section>
           ))}
         </div>
+        <section className="run-details" aria-labelledby="run-details-title">
+          <h2 id="run-details-title">{copy.run.detailsTitle}</h2>
+          {selectedStep && selectedExecution ? <div className="run-details-grid">
+            <div>
+              <h3>{selectedStep.name}</h3>
+              <p className="run-detail-status">{copy.run.status[selectedExecution.status as WorkflowRunStatus] ?? selectedExecution.status} · {copy.run.attempt(selectedExecution.attempt)}</p>
+              <h4>{copy.run.contextTitle}</h4><p>{run.definition.phases.find((phase) => phase.id === selectedExecution.phaseId)?.goal ?? copy.run.noContext}</p>
+              <h4>{copy.run.inputTitle}</h4><pre>{selectedExecution.input ? JSON.stringify(selectedExecution.input, null, 2) : copy.run.noInput}</pre>
+              <h4>{copy.run.outputTitle}</h4><pre>{selectedExecution.output ? JSON.stringify(selectedExecution.output, null, 2) : copy.run.noOutput}</pre>
+              <p className={selectedExecution.error ? 'run-detail-error' : 'run-detail-muted'}>{selectedExecution.error ?? copy.run.noError}</p>
+            </div>
+            <div><h4>{copy.run.artifactsTitle}</h4>{run.artifacts.filter((artifact) => artifact.stepExecutionId === selectedExecution.id).map((artifact) => <div className="run-artifact" key={artifact.id}><strong>{artifact.name}</strong><span>{artifact.type}</span><span>{artifact.location ?? copy.run.noLocation}</span></div>)}{run.artifacts.every((artifact) => artifact.stepExecutionId !== selectedExecution.id) ? <p>{copy.run.noArtifacts}</p> : null}<h4>{copy.run.eventsTitle}</h4><div className="run-detail-events">{run.events.filter((event) => event.data.executionId === selectedExecution.id).map((event) => <span key={event.id}>{event.type}</span>)}</div></div>
+          </div> : <p>{copy.run.noSelection}</p>}
+        </section>
+        {run.status === 'waiting' && run.snapshot.pendingQuestionDetails?.answer === null ? <section className="run-decision" aria-labelledby="run-question-title"><h2 id="run-question-title">{copy.run.questionTitle}</h2><p>{run.snapshot.pendingQuestionDetails.question}</p><label htmlFor="run-answer">{copy.run.answerPlaceholder}</label><textarea id="run-answer" value={answer} onChange={(event) => setAnswer(event.target.value)} placeholder={copy.run.answerPlaceholder} /><button className="primary-action" type="button" onClick={() => { onAnswer(answer); setAnswer('') }} disabled={!answer.trim()}><Send aria-hidden="true" />{copy.run.answerAction}</button></section> : null}
+        {run.status === 'waiting' && run.snapshot.pendingApprovalDetails?.decision === null ? <section className="run-decision" aria-labelledby="run-approval-title"><h2 id="run-approval-title">{copy.run.approvalTitle}</h2><p>{run.snapshot.pendingApprovalDetails.approval}</p><div className="run-decision-actions"><button className="primary-action" type="button" onClick={onApprove}><ThumbsUp aria-hidden="true" />{copy.run.approveAction}</button><button className="secondary-action" type="button" onClick={onReject}><ThumbsDown aria-hidden="true" />{copy.run.rejectAction}</button></div></section> : null}
         <section className="run-artifacts" aria-labelledby="run-artifacts-title">
           <h2 id="run-artifacts-title">{copy.run.artifactsTitle}</h2>
           {run.artifacts.length > 0 ? run.artifacts.map((artifact) => <div className="run-artifact" key={artifact.id}><strong>{artifact.name}</strong><span>{artifact.type}</span><span>{artifact.location ?? copy.run.noLocation}</span></div>) : <p>{copy.run.noArtifacts}</p>}
@@ -652,7 +678,7 @@ export default function App(): React.JSX.Element {
         : view === 'workflow' && selectedProject
         ? <WorkflowView project={selectedProject} workflow={workflow} loading={workflowLoading} error={workflowError} idea={idea} preflight={preflight} onBack={() => setView('projectDetail')} onCopy={copyWorkflow} onReload={reloadWorkflow} onIdeaChange={(value) => { setIdea(value); setPreflight(null) }} onPreflight={runPreflight} onStart={startWorkflowRun} onEdit={editWorkflow} />
         : view === 'run' && selectedRun
-          ? <RunBoard run={selectedRun} onBack={() => setView('projectDetail')} onPause={() => { void updateRun(() => window.appShell.pauseWorkflowRun(selectedRun.id)) }} onResume={() => { void updateRun(() => window.appShell.resumeWorkflowRun(selectedRun.id)) }} onRetry={() => { void updateRun(() => window.appShell.retryWorkflowStep(selectedRun.id)) }} onCancel={() => { void updateRun(() => window.appShell.cancelWorkflowRun(selectedRun.id)) }} error={runError} />
+          ? <RunBoard run={selectedRun} onBack={() => setView('projectDetail')} onPause={() => { void updateRun(() => window.appShell.pauseWorkflowRun(selectedRun.id)) }} onResume={() => { void updateRun(() => window.appShell.resumeWorkflowRun(selectedRun.id)) }} onRetry={() => { void updateRun(() => window.appShell.retryWorkflowStep(selectedRun.id)) }} onCancel={() => { void updateRun(() => window.appShell.cancelWorkflowRun(selectedRun.id)) }} onAnswer={(value) => { void updateRun(() => window.appShell.answerWorkflowQuestion(selectedRun.id, value)) }} onApprove={() => { void updateRun(() => window.appShell.approveWorkflowApproval(selectedRun.id)) }} onReject={() => { void updateRun(() => window.appShell.rejectWorkflowApproval(selectedRun.id)) }} error={runError} />
         : view === 'projectDetail' && selectedProject
           ? <ProjectDetail project={selectedProject} runs={runs} onBack={() => setView('projectOverview')} onOpenInIde={openProjectInIde} openError={openError} importWarning={importWarning} onViewWorkflow={openWorkflow} onOpenRun={(run) => { setSelectedRun(run); setRunError(null); setView('run') }} />
           : <ProjectEntry mode={view === 'resumeWork' ? 'resumeWork' : 'createProject'} onBack={() => setView('projectOverview')} onImport={importProject} error={error} />

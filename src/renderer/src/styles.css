@@ -723,10 +723,16 @@ button:focus-visible {
   background: #ffffff;
   border: 1px solid #d8ddd8;
   border-radius: 5px;
+  cursor: pointer;
 }
 
 .run-step-card.is-current {
   border-color: #9cbaa6;
+}
+
+.run-step-card[aria-pressed="true"] {
+  outline: 2px solid #78c896;
+  outline-offset: 1px;
 }
 
 .run-step-card > div {
@@ -798,6 +804,89 @@ button:focus-visible {
   border-radius: 4px;
   font: 11px ui-monospace, SFMono-Regular, Menlo, monospace;
 }
+
+.run-details,
+.run-decision {
+  margin-top: 30px;
+  padding: 24px 0 0;
+  border-top: 1px solid #d8ddd8;
+}
+
+.run-details h2,
+.run-decision h2 {
+  margin: 0;
+  color: #252b27;
+  font-size: 16px;
+}
+
+.run-details-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(220px, 0.8fr);
+  gap: 24px;
+  margin-top: 16px;
+}
+
+.run-details h3 {
+  margin: 0;
+  color: #303731;
+  font-size: 15px;
+}
+
+.run-details h4 {
+  margin: 18px 0 7px;
+  color: #667068;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.run-details p,
+.run-decision p {
+  margin: 0;
+  color: #68726b;
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.run-detail-status { color: #276544 !important; margin-top: 6px !important; }
+.run-detail-error { color: #8c382f !important; margin-top: 16px !important; }
+.run-detail-muted { color: #89928b !important; margin-top: 16px !important; }
+
+.run-details pre {
+  max-width: 100%;
+  margin: 0;
+  padding: 10px;
+  color: #4b574e;
+  background: #f5f7f5;
+  border: 1px solid #dfe4df;
+  border-radius: 4px;
+  font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.run-detail-events,
+.run-decision-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.run-detail-events span {
+  padding: 4px 7px;
+  color: #5f6a62;
+  background: #eef1ee;
+  border: 1px solid #d8ded9;
+  border-radius: 4px;
+  font: 11px ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.run-decision > p { margin: 10px 0 14px; color: #303731; font-size: 14px; }
+.run-decision label { display: block; margin-bottom: 6px; color: #667068; font-size: 12px; }
+.run-decision textarea { width: 100%; min-height: 86px; resize: vertical; padding: 10px; border: 1px solid #ccd5cd; border-radius: 5px; font: inherit; font-size: 13px; }
+.run-decision .primary-action { margin-top: 10px; }
+.run-decision-actions { margin-top: 14px; }
 
 .workflow-origin {
   color: #3d6650;
@@ -1246,6 +1335,10 @@ button:focus-visible {
   .run-artifact {
     grid-template-columns: minmax(0, 1fr);
     gap: 5px;
+  }
+
+  .run-details-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .project-metadata {

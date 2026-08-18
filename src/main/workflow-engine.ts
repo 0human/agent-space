@@ -28,6 +28,9 @@ export interface WorkflowEngine {
   resumeRun(runId: string): Promise<WorkflowRun>
   retryStep(runId: string): Promise<WorkflowRun>
   cancelRun(runId: string): Promise<WorkflowRun>
+  answerQuestion(runId: string, answer: string): Promise<WorkflowRun>
+  approve(runId: string): Promise<WorkflowRun>
+  reject(runId: string): Promise<WorkflowRun>
   recover(): Promise<void>
   waitForIdle(runId: string): Promise<WorkflowRun>
   close(): Promise<void>
@@ -111,7 +114,7 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
 
     async resumeRun(runId) {
       const run = await store.resume(runId)
-      ensureRunning(runId)
+      if (run.status === 'running') ensureRunning(runId)
       return run
     },
 
@@ -123,6 +126,22 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
 
     async cancelRun(runId) {
       return store.setStatus(runId, 'cancelled')
+    },
+
+    async answerQuestion(runId, answer) {
+      const run = await store.answerQuestion(runId, answer)
+      ensureRunning(runId)
+      return run
+    },
+
+    async approve(runId) {
+      const run = await store.decideApproval(runId, 'approved')
+      ensureRunning(runId)
+      return run
+    },
+
+    async reject(runId) {
+      return store.decideApproval(runId, 'rejected')
     },
 
     async recover() {

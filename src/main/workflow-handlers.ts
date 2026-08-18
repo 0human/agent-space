@@ -86,6 +86,9 @@ export function registerWorkflowHandlers({ handle, projectService, workflowServi
   handle(APP_SHELL_CHANNELS.resumeWorkflowRun, async (_event: unknown, runId: unknown) => workflowEngine!.resumeRun(String(runId)))
   handle(APP_SHELL_CHANNELS.retryWorkflowStep, async (_event: unknown, runId: unknown) => workflowEngine!.retryStep(String(runId)))
   handle(APP_SHELL_CHANNELS.cancelWorkflowRun, async (_event: unknown, runId: unknown) => workflowEngine!.cancelRun(String(runId)))
+  handle(APP_SHELL_CHANNELS.answerWorkflowQuestion, async (_event: unknown, runId: unknown, answer: unknown) => workflowEngine!.answerQuestion(String(runId), typeof answer === 'string' ? answer : ''))
+  handle(APP_SHELL_CHANNELS.approveWorkflowApproval, async (_event: unknown, runId: unknown) => workflowEngine!.approve(String(runId)))
+  handle(APP_SHELL_CHANNELS.rejectWorkflowApproval, async (_event: unknown, runId: unknown) => workflowEngine!.reject(String(runId)))
   handle(APP_SHELL_CHANNELS.openWorkflowFile, async (_event: unknown, projectId: unknown) => {
     const project = await findProject(projectId)
     if (!project) return { ok: false, error: '找不到这个 Project。' }

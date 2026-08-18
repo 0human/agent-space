@@ -18,6 +18,9 @@ const appShellApi: AppShellApi = Object.freeze({
   resumeWorkflowRun: (runId) => ipcRenderer.invoke(APP_SHELL_CHANNELS.resumeWorkflowRun, runId),
   retryWorkflowStep: (runId) => ipcRenderer.invoke(APP_SHELL_CHANNELS.retryWorkflowStep, runId),
   cancelWorkflowRun: (runId) => ipcRenderer.invoke(APP_SHELL_CHANNELS.cancelWorkflowRun, runId),
+  answerWorkflowQuestion: (runId, answer) => ipcRenderer.invoke(APP_SHELL_CHANNELS.answerWorkflowQuestion, runId, answer),
+  approveWorkflowApproval: (runId) => ipcRenderer.invoke(APP_SHELL_CHANNELS.approveWorkflowApproval, runId),
+  rejectWorkflowApproval: (runId) => ipcRenderer.invoke(APP_SHELL_CHANNELS.rejectWorkflowApproval, runId),
   openWorkflowFile: (projectId) => ipcRenderer.invoke(APP_SHELL_CHANNELS.openWorkflowFile, projectId)
 })
 

@@ -23,6 +23,9 @@ export const APP_SHELL_CHANNELS = {
   resumeWorkflowRun: 'workflow-run:resume',
   retryWorkflowStep: 'workflow-run:retry-step',
   cancelWorkflowRun: 'workflow-run:cancel',
+  answerWorkflowQuestion: 'workflow-run:answer-question',
+  approveWorkflowApproval: 'workflow-run:approve',
+  rejectWorkflowApproval: 'workflow-run:reject',
   openWorkflowFile: 'workflow:open-file'
 } as const
 
@@ -42,5 +45,8 @@ export interface AppShellApi {
   resumeWorkflowRun: (runId: string) => Promise<WorkflowRun>
   retryWorkflowStep: (runId: string) => Promise<WorkflowRun>
   cancelWorkflowRun: (runId: string) => Promise<WorkflowRun>
+  answerWorkflowQuestion: (runId: string, answer: string) => Promise<WorkflowRun>
+  approveWorkflowApproval: (runId: string) => Promise<WorkflowRun>
+  rejectWorkflowApproval: (runId: string) => Promise<WorkflowRun>
   openWorkflowFile: (projectId: string) => Promise<OpenProjectResult>
 }

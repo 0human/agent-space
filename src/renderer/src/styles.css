@@ -715,6 +715,12 @@ button:focus-visible {
   gap: 7px;
 }
 
+.run-step-group {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+
 .run-step-card {
   display: grid;
   gap: 8px;
@@ -757,6 +763,48 @@ button:focus-visible {
 .run-step-card p {
   margin: 0;
   color: #8c382f;
+  font-size: 11px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.run-approval-card {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px;
+  background: #fffaf1;
+  border: 1px solid #e9cda9;
+  border-radius: 5px;
+}
+
+.run-approval-card.is-current {
+  border-color: #d39b59;
+  box-shadow: inset 0 3px #d39b59;
+}
+
+.run-approval-card > div:first-child {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.run-approval-card strong {
+  color: #5f421f;
+  font-size: 11px;
+}
+
+.run-approval-card > div:first-child span {
+  color: #896d48;
+  font-size: 10px;
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+
+.run-approval-card p {
+  margin: 0;
+  color: #5f421f;
   font-size: 11px;
   line-height: 1.45;
   overflow-wrap: anywhere;

@@ -318,13 +318,22 @@ function RunBoard({ run, onBack, onPause, onResume, onRetry, onCancel, onAnswer,
                 {phase.steps.map((step, stepIndex) => {
                   const execution = latestExecutions.get(step.id)
                   const isCurrent = phaseIndex === run.snapshot.phaseIndex && stepIndex === run.snapshot.stepIndex
-                  return <article className={isCurrent ? 'run-step-card is-current' : 'run-step-card'} key={step.id} role="button" tabIndex={0} aria-pressed={selectedStepId === step.id} onClick={() => setSelectedStepId(step.id)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setSelectedStepId(step.id) } }}>
-                    <div><strong>{step.name}</strong>{execution ? <span>{copy.run.attempt(execution.attempt)}</span> : null}</div>
-                    <span className={`run-status is-${execution?.status ?? 'pending'}`}>{execution ? (copy.run.status[execution.status as WorkflowRunStatus] ?? execution.status) : copy.run.pending}</span>
-                    {execution?.error ? <p>{execution.error}</p> : null}
-                    {execution && run.snapshot.blockedBy?.executionId === execution.id ? <p>{run.snapshot.blockedBy.reason}</p> : null}
-                    {isCurrent && (run.snapshot.pendingQuestion || run.snapshot.pendingApproval) ? <p>{run.snapshot.pendingQuestion ?? run.snapshot.pendingApproval}</p> : null}
-                  </article>
+                  const isApprovalPending = Boolean(step.approvalGate && execution && run.snapshot.pendingApprovalDetails?.decision === null && run.snapshot.pendingApprovalDetails.continuation.executionId === execution.id)
+                  return <div className="run-step-group" key={step.id}>
+                    <article className={isCurrent ? 'run-step-card is-current' : 'run-step-card'} role="button" tabIndex={0} aria-pressed={selectedStepId === step.id} onClick={() => setSelectedStepId(step.id)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setSelectedStepId(step.id) } }}>
+                      <div><strong>{step.name}</strong>{execution ? <span>{copy.run.attempt(execution.attempt)}</span> : null}</div>
+                      <span className={`run-status is-${execution?.status ?? 'pending'}`}>{execution ? (copy.run.status[execution.status as WorkflowRunStatus] ?? execution.status) : copy.run.pending}</span>
+                      {execution?.error ? <p>{execution.error}</p> : null}
+                      {execution && run.snapshot.blockedBy?.executionId === execution.id ? <p>{run.snapshot.blockedBy.reason}</p> : null}
+                      {isCurrent && (run.snapshot.pendingQuestion || run.snapshot.pendingApproval) ? <p>{run.snapshot.pendingQuestion ?? run.snapshot.pendingApproval}</p> : null}
+                    </article>
+                    {step.approvalGate ? <article className={isApprovalPending ? 'run-approval-card is-current' : 'run-approval-card'} aria-label={`${copy.run.approvalTitle}: ${step.approvalGate}`}>
+                      <div><strong>{copy.run.approvalTitle}</strong><span>{step.name}</span></div>
+                      <p>{step.approvalGate}</p>
+                      <span className={`run-status is-${isApprovalPending ? 'waiting' : execution?.status ?? 'pending'}`}>{isApprovalPending ? copy.run.status.waiting : execution ? (copy.run.status[execution.status as WorkflowRunStatus] ?? execution.status) : copy.run.pending}</span>
+                      {isApprovalPending ? <div className="run-decision-actions"><button className="primary-action" type="button" onClick={onApprove}><ThumbsUp aria-hidden="true" />{copy.run.approveAction}</button><button className="secondary-action" type="button" onClick={onReject}><ThumbsDown aria-hidden="true" />{copy.run.rejectAction}</button></div> : null}
+                    </article> : null}
+                  </div>
                 })}
               </div>
             </section>
@@ -353,7 +362,6 @@ function RunBoard({ run, onBack, onPause, onResume, onRetry, onCancel, onAnswer,
           </div> : <p>{copy.run.noSelection}</p>}
         </section>
         {run.status === 'waiting' && run.snapshot.pendingQuestionDetails?.answer === null ? <section className="run-decision" aria-labelledby="run-question-title"><h2 id="run-question-title">{copy.run.questionTitle}</h2><p>{run.snapshot.pendingQuestionDetails.question}</p><label htmlFor="run-answer">{copy.run.answerPlaceholder}</label><textarea id="run-answer" value={answer} onChange={(event) => setAnswer(event.target.value)} placeholder={copy.run.answerPlaceholder} /><button className="primary-action" type="button" onClick={() => { onAnswer(answer); setAnswer('') }} disabled={!answer.trim()}><Send aria-hidden="true" />{copy.run.answerAction}</button></section> : null}
-        {run.status === 'waiting' && run.snapshot.pendingApprovalDetails?.decision === null ? <section className="run-decision" aria-labelledby="run-approval-title"><h2 id="run-approval-title">{copy.run.approvalTitle}</h2><p>{run.snapshot.pendingApprovalDetails.approval}</p><div className="run-decision-actions"><button className="primary-action" type="button" onClick={onApprove}><ThumbsUp aria-hidden="true" />{copy.run.approveAction}</button><button className="secondary-action" type="button" onClick={onReject}><ThumbsDown aria-hidden="true" />{copy.run.rejectAction}</button></div></section> : null}
         <section className="run-artifacts" aria-labelledby="run-artifacts-title">
           <h2 id="run-artifacts-title">{copy.run.artifactsTitle}</h2>
           {run.artifacts.length > 0 ? run.artifacts.map((artifact) => <div className="run-artifact" key={artifact.id}><strong>{artifact.name}</strong><span>{artifact.type}</span><span>{artifact.location ?? copy.run.noLocation}</span></div>) : <p>{copy.run.noArtifacts}</p>}

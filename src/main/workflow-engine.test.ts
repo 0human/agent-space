@@ -7,16 +7,18 @@ import { join } from 'node:path'
 
 import type { Project } from '../shared/project'
 import type { WorkflowView } from '../shared/workflow'
-import type { AgentRuntimeAdapter, RuntimeEvent } from '../shared/workflow-run'
+import type { AgentRuntimeAdapter, RuntimeEvent, RuntimeExecutionContext } from '../shared/workflow-run'
 import { createWorkflowEngine, type WorkflowEngine } from './workflow-engine'
 import { createFakeRuntimeAdapter } from './fake-runtime'
 
 class FakeRuntime implements AgentRuntimeAdapter {
   readonly calls: string[] = []
+  readonly contexts: RuntimeExecutionContext[] = []
   private pending: Array<(result: RuntimeEvent[]) => void> = []
 
-  execute(context: { execution: { id: string } }): Promise<RuntimeEvent[]> {
+  execute(context: RuntimeExecutionContext): Promise<RuntimeEvent[]> {
     this.calls.push(context.execution.id)
+    this.contexts.push(context)
     return new Promise((resolve) => this.pending.push(resolve))
   }
 
@@ -39,6 +41,7 @@ const project: Project = {
   isGreenfield: false,
   dirty: false,
   dirtySummary: { staged: 0, unstaged: 0, untracked: 0, files: [] },
+  permissionPolicy: { grantedPermissions: ['workspace.read', 'workspace.write'] },
   updatedAt: '2026-08-18T00:00:00.000Z'
 }
 
@@ -52,7 +55,7 @@ const workflow: WorkflowView = {
       id: 'discovery',
       name: 'Discovery',
       goal: 'Clarify the idea',
-      steps: [{ id: 'discover', name: 'Clarify Idea', kind: 'skill', artifacts: ['domain-docs'] }]
+      steps: [{ id: 'discover', name: 'Clarify Idea', kind: 'skill', skill: { name: 'grill-with-docs', version: '1.0.0' }, artifacts: ['domain-docs'] }]
     }]
   },
   source: 'project',
@@ -100,7 +103,7 @@ describe('WorkflowEngine public API', () => {
     const run = await engine.startRun({ ...input, preflight: await engine.preflight(input) })
     expect(run.status).toBe('running')
     expect(run.snapshot.nextAction).toBe('等待 Runtime 完成当前 Step。')
-    expect(run.stepExecutions[0]).toMatchObject({ input: { idea: 'Build a durable workflow run' }, skill: null })
+    expect(run.stepExecutions[0]).toMatchObject({ input: { idea: 'Build a durable workflow run' }, skill: { name: 'grill-with-docs', version: '1.0.0' } })
     expect(run.events.map((event) => event.type)).toEqual(['started', 'step_started'])
 
     await vi.waitFor(() => expect(runtime.calls).toHaveLength(1))
@@ -258,6 +261,48 @@ describe('WorkflowEngine public API', () => {
     await vi.waitFor(() => expect(runtime.calls).toHaveLength(2))
     runtime.finish([{ type: 'status_changed', status: 'completed' }])
     await expect(engine.waitForIdle(run.id)).resolves.toMatchObject({ status: 'completed' })
+  })
+
+  it('passes the durable Discovery inputs to the Runtime Adapter', async () => {
+    directory = await mkdtemp(join(tmpdir(), 'agent-space-run-'))
+    const runtime = new FakeRuntime()
+    engine = createWorkflowEngine({ databasePath: join(directory, 'runs.sqlite'), runtime })
+
+    const run = await engine.startRun({ project, workflow, idea: 'Clarify the product direction' })
+    await vi.waitFor(() => expect(runtime.contexts).toHaveLength(1))
+    expect(runtime.contexts[0]).toMatchObject({
+      workspace: { path: '/work/demo' },
+      skill: { name: 'grill-with-docs', version: '1.0.0' },
+      phaseContext: null,
+      inputArtifacts: [],
+      decisionRecords: [],
+      permissionPolicy: { grantedPermissions: ['workspace.read', 'workspace.write'] }
+    })
+
+    runtime.finish([
+      { type: 'text_delta', text: '用户希望优先验证本地工作流。', sessionId: 'thread-1' },
+      { type: 'artifact_produced', artifact: { type: 'domain-context', name: 'CONTEXT.md', location: '/work/demo/CONTEXT.md' }, sessionId: 'thread-1' },
+      { type: 'question', question: '首个目标用户是谁？', sessionId: 'thread-1' }
+    ])
+    await engine.waitForIdle(run.id)
+    await engine.answerQuestion(run.id, '独立开发者')
+    await vi.waitFor(() => expect(runtime.contexts).toHaveLength(2))
+
+    expect(runtime.contexts[1]).toMatchObject({
+      workspace: { path: '/work/demo' },
+      execution: { runtimeSessionId: 'thread-1' },
+      skill: { name: 'grill-with-docs', version: '1.0.0' },
+      phaseContext: { phaseId: 'discovery', content: '用户希望优先验证本地工作流。' },
+      inputArtifacts: [expect.objectContaining({ name: 'CONTEXT.md', location: '/work/demo/CONTEXT.md' })],
+      decisionRecords: [expect.objectContaining({ question: '首个目标用户是谁？', answer: '独立开发者', stepId: 'discover' })],
+      permissionPolicy: { grantedPermissions: ['workspace.read', 'workspace.write'] }
+    })
+
+    runtime.finish([
+      { type: 'artifact_produced', artifact: { type: 'domain-context', name: 'CONTEXT.md', location: '/work/demo/CONTEXT.md' }, sessionId: 'thread-1' },
+      { type: 'status_changed', status: 'completed', sessionId: 'thread-1' }
+    ])
+    await expect(engine.waitForIdle(run.id)).resolves.toMatchObject({ artifacts: [expect.objectContaining({ name: 'CONTEXT.md' })] })
   })
 
   it('rejects an Approval Gate without running the pending Step', async () => {

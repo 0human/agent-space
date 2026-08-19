@@ -6,7 +6,7 @@
       "name": "grill-with-docs",
       "version": "1.0.0",
       "entry": "skills/grill-with-docs/SKILL.md",
-      "dependencies": [],
+      "dependencies": ["grilling", "domain-modeling"],
       "supportedRuntimes": ["codex"],
       "capabilities": ["question", "artifact"],
       "requiredPermissions": ["workspace.read", "workspace.write"]
@@ -55,6 +55,24 @@
       "supportedRuntimes": ["codex"],
       "capabilities": ["review"],
       "requiredPermissions": ["workspace.read"]
+    },
+    {
+      "name": "grilling",
+      "version": "1.0.0",
+      "entry": "skills/grilling/SKILL.md",
+      "dependencies": [],
+      "supportedRuntimes": ["codex"],
+      "capabilities": ["question"],
+      "requiredPermissions": ["workspace.read"]
+    },
+    {
+      "name": "domain-modeling",
+      "version": "1.0.0",
+      "entry": "skills/domain-modeling/SKILL.md",
+      "dependencies": [],
+      "supportedRuntimes": ["codex"],
+      "capabilities": ["artifact"],
+      "requiredPermissions": ["workspace.read", "workspace.write"]
     }
   ]
 }

@@ -1,4 +1,5 @@
 import type { Project } from './project'
+import type { PermissionPolicy } from './project'
 import type { WorkflowDefinition, WorkflowView } from './workflow'
 
 export type WorkflowRunStatus = 'running' | 'paused' | 'waiting' | 'blocked' | 'failed' | 'completed' | 'cancelled'
@@ -52,6 +53,7 @@ export interface StepExecution {
   status: StepExecutionStatus
   input: Record<string, unknown> | null
   skill: { name: string; version: string } | null
+  runtimeSessionId?: string | null
   error: string | null
   output: Record<string, unknown> | null
   startedAt: string | null
@@ -130,11 +132,17 @@ export interface WorkflowRun {
 export interface RuntimeExecutionContext {
   runId: string
   project: Project
+  workspace: { path: string }
   idea: string
   workflow: WorkflowDefinition
   phaseIndex: number
   stepIndex: number
   execution: StepExecution
+  skill: StepExecution['skill']
+  phaseContext: PhaseContext | null
+  inputArtifacts: ArtifactIndex[]
+  decisionRecords: DecisionRecord[]
+  permissionPolicy: PermissionPolicy
   events: WorkflowEvent[]
 }
 
@@ -147,18 +155,37 @@ export interface RuntimeArtifact {
 }
 
 export type RuntimeEvent =
-  | { type: 'text_delta'; text: string }
-  | { type: 'tool_call'; name: string; input: Record<string, unknown> }
-  | { type: 'question'; question: string }
-  | { type: 'approval_required'; approval: string }
-  | { type: 'artifact_produced'; artifact: RuntimeArtifact }
-  | { type: 'status_changed'; status: 'running' | 'completed' | 'blocked' }
-  | { type: 'error'; error: string }
+  | ({ type: 'text_delta'; text: string } & RuntimeEventMetadata)
+  | ({ type: 'tool_call'; name: string; input: Record<string, unknown> } & RuntimeEventMetadata)
+  | ({ type: 'question'; question: string } & RuntimeEventMetadata)
+  | ({ type: 'approval_required'; approval: string } & RuntimeEventMetadata)
+  | ({ type: 'artifact_produced'; artifact: RuntimeArtifact } & RuntimeEventMetadata)
+  | ({ type: 'status_changed'; status: 'running' | 'completed' | 'blocked' } & RuntimeEventMetadata)
+  | ({ type: 'error'; error: string } & RuntimeEventMetadata)
+
+export interface RuntimeEventMetadata {
+  sessionId?: string
+  provider?: string
+  source?: string
+  permissionPolicy?: PermissionPolicy
+}
 
 export type WorkflowLogType = RuntimeEvent['type']
 
 export interface AgentRuntimeAdapter {
+  preflight?(context: RuntimePreflightContext): Promise<RuntimePreflightResult>
   execute(context: RuntimeExecutionContext): Promise<RuntimeEvent[]>
+}
+
+export interface RuntimePreflightContext {
+  workspace: { path: string }
+  skill: StepExecution['skill']
+  permissionPolicy: PermissionPolicy
+}
+
+export interface RuntimePreflightResult {
+  checks: string[]
+  errors: string[]
 }
 
 export interface WorkflowPreflightInput {

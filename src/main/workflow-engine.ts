@@ -10,6 +10,7 @@ import type {
 } from '../shared/workflow-run'
 import { createSqliteRunStore } from './workflow-store'
 import { zhCNMain } from '../shared/i18n/zh-CN'
+import { DEFAULT_PROJECT_PERMISSIONS } from '../shared/project'
 
 interface WorkflowEngineDependencies {
   databasePath: string
@@ -50,11 +51,17 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
       const context: RuntimeExecutionContext = {
         runId,
         project: run.project,
+        workspace: { path: run.workspacePath },
         idea: run.idea,
         workflow: run.workflow,
         phaseIndex: run.snapshot.phaseIndex,
         stepIndex: run.snapshot.stepIndex,
         execution,
+        skill: execution.skill,
+        phaseContext: run.phaseContexts.find((candidate) => candidate.phaseId === execution.phaseId) ?? null,
+        inputArtifacts: run.artifacts,
+        decisionRecords: run.decisionRecords.filter((record) => record.phaseId === execution.phaseId),
+        permissionPolicy: run.project.permissionPolicy ?? { grantedPermissions: [...DEFAULT_PROJECT_PERMISSIONS] },
         events: run.events
       }
       let events
@@ -87,6 +94,16 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
       else checks.push(zhCNMain.workflowRun.workflowValid)
       if (!input.idea.trim()) errors.push(zhCNMain.workflowRun.ideaRequired)
       else checks.push(zhCNMain.workflowRun.ideaFilled)
+      const firstStep = input.workflow.definition.phases[0]?.steps[0]
+      if (dependencies.runtime.preflight) {
+        const runtime = await dependencies.runtime.preflight({
+          workspace: { path: input.project.workspacePath },
+          skill: firstStep?.skill ?? null,
+          permissionPolicy: input.project.permissionPolicy ?? { grantedPermissions: [...DEFAULT_PROJECT_PERMISSIONS] }
+        })
+        checks.push(...runtime.checks)
+        errors.push(...runtime.errors)
+      }
       return { passed: errors.length === 0, checks, errors }
     },
 

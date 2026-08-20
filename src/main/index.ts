@@ -10,7 +10,7 @@ import { createDefaultIdeLauncher } from './ide-launcher'
 import { registerWorkflowHandlers } from './workflow-handlers'
 import { createWorkflowService } from './workflow-service'
 import { createWorkflowEngine } from './workflow-engine'
-import { createFakeRuntimeAdapter } from './fake-runtime'
+import { createCodexRuntimeAdapter } from './codex-runtime'
 import { createRunWorkspaceManager } from './run-workspace'
 import { BUILT_IN_SKILL_MANIFESTS } from '../shared/workflow'
 
@@ -78,7 +78,10 @@ const projectService = createProjectService({
 const openInIde = createDefaultIdeLauncher()
 const workflowEngine = createWorkflowEngine({
   databasePath: join(app.getPath('userData'), 'workflow-runs.sqlite'),
-  runtime: createFakeRuntimeAdapter(),
+  runtime: createCodexRuntimeAdapter({
+    skillManifests: BUILT_IN_SKILL_MANIFESTS,
+    skillPackagePath: join(currentDirectory, '../../.agents')
+  }),
   runWorkspaceManager: createRunWorkspaceManager({ execGit: createDefaultGitExecutor() })
 })
 

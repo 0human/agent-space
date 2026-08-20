@@ -250,6 +250,7 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
         input_json TEXT NOT NULL,
         skill_name TEXT,
         skill_version TEXT,
+        runtime_session_id TEXT,
         error TEXT,
         output_json TEXT,
         started_at TEXT,
@@ -262,6 +263,7 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
     if (!existingExecutionColumns.has('input_json')) await run(db, "ALTER TABLE step_executions ADD COLUMN input_json TEXT NOT NULL DEFAULT '{}'")
     if (!existingExecutionColumns.has('skill_name')) await run(db, 'ALTER TABLE step_executions ADD COLUMN skill_name TEXT')
     if (!existingExecutionColumns.has('skill_version')) await run(db, 'ALTER TABLE step_executions ADD COLUMN skill_version TEXT')
+    if (!existingExecutionColumns.has('runtime_session_id')) await run(db, 'ALTER TABLE step_executions ADD COLUMN runtime_session_id TEXT')
     await run(db, `
       CREATE TABLE IF NOT EXISTS workflow_events (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -362,7 +364,7 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
     if (!snapshotRow) throw new Error(`Run Snapshot missing for ${id}`)
     const executions = await all<{
       id: string; run_id: string; phase_id: string; step_id: string; attempt: number; status: StepExecutionStatus; input_json: string;
-      skill_name: string | null; skill_version: string | null;
+      skill_name: string | null; skill_version: string | null; runtime_session_id: string | null;
       error: string | null; output_json: string | null; started_at: string | null; finished_at: string | null
     }>(db, 'SELECT * FROM step_executions WHERE run_id = ? ORDER BY rowid', [id])
     const events = await all<{ id: number; run_id: string; type: string; data_json: string; created_at: string }>(db, 'SELECT * FROM workflow_events WHERE run_id = ? ORDER BY id', [id])
@@ -407,6 +409,7 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
         id: execution.id, runId: execution.run_id, phaseId: execution.phase_id, stepId: execution.step_id,
         attempt: execution.attempt, status: execution.status, input: parseJson<Record<string, unknown>>(execution.input_json),
         skill: execution.skill_name && execution.skill_version ? { name: execution.skill_name, version: execution.skill_version } : null,
+        runtimeSessionId: execution.runtime_session_id,
         error: execution.error,
         output: execution.output_json ? parseJson<Record<string, unknown>>(execution.output_json) : null,
         startedAt: execution.started_at, finishedAt: execution.finished_at
@@ -438,6 +441,9 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
       ])
     }
 
+    const sessionId = events.find((event) => event.sessionId)?.sessionId
+    if (sessionId) await run(db, 'UPDATE step_executions SET runtime_session_id = ? WHERE id = ?', [sessionId, executionId])
+
     const content = events
       .filter((event): event is Extract<RuntimeEvent, { type: 'text_delta' }> => event.type === 'text_delta')
       .map((event) => event.text)
@@ -452,6 +458,21 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
       await run(db, 'UPDATE phase_contexts SET content = ?, updated_at = ? WHERE id = ?', [`${existing.content}\n${content}`.trim(), createdAt, existing.id])
     } else {
       await run(db, 'INSERT INTO phase_contexts (id, run_id, phase_id, content, updated_at) VALUES (?, ?, ?, ?, ?)', [createId(), current.id, phaseId, content, createdAt])
+    }
+  }
+
+  async function appendArtifacts(runId: string, executionId: string, artifacts: RuntimeArtifact[], createdAt: string): Promise<void> {
+    for (const artifact of artifacts) {
+      const existing = await get<{ id: string }>(db, 'SELECT id FROM artifacts WHERE run_id = ? AND name = ? AND location IS ?', [runId, artifact.name, artifact.location ?? null])
+      if (existing) {
+        await run(db, 'UPDATE artifacts SET type = ?, step_execution_id = ?, version_hash = ?, status = ? WHERE id = ?', [
+          artifact.type, executionId, artifact.versionHash ?? null, artifact.status ?? 'available', existing.id
+        ])
+        continue
+      }
+      await run(db, 'INSERT INTO artifacts (id, run_id, step_execution_id, type, name, location, version_hash, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', [
+        createId(), runId, executionId, artifact.type, artifact.name, artifact.location ?? null, artifact.versionHash ?? null, artifact.status ?? 'available', createdAt
+      ])
     }
   }
 
@@ -477,7 +498,7 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
     const step = workflow.phases[phaseIndex]?.steps[stepIndex]
     if (!step) throw new Error('Workflow Step 不存在。')
     const id = createId()
-    await run(db, `INSERT INTO step_executions (id, run_id, phase_id, step_id, attempt, status, input_json, skill_name, skill_version, started_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [id, runId, workflow.phases[phaseIndex].id, step.id, attempt, status, json(input), step.skill?.name ?? null, step.skill?.version ?? null, createdAt])
+    await run(db, `INSERT INTO step_executions (id, run_id, phase_id, step_id, attempt, status, input_json, skill_name, skill_version, runtime_session_id, started_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [id, runId, workflow.phases[phaseIndex].id, step.id, attempt, status, json(input), step.skill?.name ?? null, step.skill?.version ?? null, null, createdAt])
     return id
   }
 
@@ -526,6 +547,11 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
         const timestamp = now()
         await appendRuntimeRecords(current, executionId, events, timestamp)
         const result = resolveRuntimeEvents(events)
+        if (result.type === 'completed') await appendArtifacts(runId, executionId, result.artifacts, timestamp)
+        else {
+          const artifacts = events.filter((event): event is Extract<RuntimeEvent, { type: 'artifact_produced' }> => event.type === 'artifact_produced').map((event) => event.artifact)
+          await appendArtifacts(runId, executionId, artifacts, timestamp)
+        }
         if (result.type === 'failed' || result.type === 'waiting' || result.type === 'blocked') {
           const status: StepExecutionStatus = result.type
           const error = result.type === 'failed' ? result.error : result.type === 'blocked' ? result.reason : null
@@ -545,11 +571,6 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
         }
 
         await run(db, 'UPDATE step_executions SET status = ?, output_json = ?, finished_at = ? WHERE id = ?', ['completed', result.output ? json(result.output) : null, timestamp, executionId])
-        for (const artifact of result.artifacts ?? []) {
-          await run(db, 'INSERT INTO artifacts (id, run_id, step_execution_id, type, name, location, version_hash, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', [
-            createId(), runId, executionId, artifact.type, artifact.name, artifact.location ?? null, artifact.versionHash ?? null, artifact.status ?? 'available', timestamp
-          ])
-        }
         await appendEvent(runId, 'step_completed', { executionId, artifacts: result.artifacts?.map((artifact) => artifact.name) ?? [] }, timestamp)
         const cursor = nextCursor(current.workflow, current.snapshot.phaseIndex, current.snapshot.stepIndex)
         if (!cursor) {

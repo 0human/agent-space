@@ -7,6 +7,75 @@ import { createProjectService, inspectWorkspace } from './project-service'
 import type { Project } from '../shared/project'
 
 describe('Workspace inspection', () => {
+  it('clones a GitHub repository through the system Git credential chain', async () => {
+    let stored = ''
+    let cloned = false
+    const cloneGitHub = vi.fn(async () => { cloned = true })
+    const service = createProjectService({
+      readFile: async () => stored || (() => { throw Object.assign(new Error('missing'), { code: 'ENOENT' }) })(),
+      writeFile: async (_path, data) => { stored = data },
+      mkdir: async () => undefined,
+      createId: () => 'github-project-1',
+      cloneGitHub,
+      execGit: async (_path, args) => {
+        const command = args.join(' ')
+        if (command === 'rev-parse --is-inside-work-tree') {
+          if (!cloned) throw new Error('not yet cloned')
+          return 'true\n'
+        }
+        if (command === 'remote') return 'origin\n'
+        if (command === 'config --get remote.origin.url') return 'https://github.com/example/demo.git\n'
+        if (command === 'branch --show-current') return 'main\n'
+        if (command === 'rev-parse HEAD') return 'abc123\n'
+        if (command === 'status --porcelain=v1 --untracked-files=all') return ''
+        return ''
+      }
+    })
+
+    const project = await service.cloneGitHub('/data/projects.json', 'https://github.com/example/demo.git', '/work/demo')
+
+    expect(cloneGitHub).toHaveBeenCalledWith('https://github.com/example/demo.git', resolve('/work/demo'))
+    expect(project.remote).toBe('https://github.com/example/demo.git')
+    expect(stored).not.toContain('token')
+  })
+
+  it('rejects non-GitHub URLs before any network operation', async () => {
+    const cloneGitHub = vi.fn()
+    const service = createProjectService({
+      readFile: async () => '[]', writeFile: async () => undefined, mkdir: async () => undefined,
+      execGit: async () => { throw new Error('not used') }, cloneGitHub
+    })
+
+    await expect(service.cloneGitHub('/data/projects.json', 'https://evil.example/repo.git', '/work/repo'))
+      .rejects.toThrow('请输入有效的 GitHub 仓库地址。')
+    expect(cloneGitHub).not.toHaveBeenCalled()
+  })
+
+  it('fetches an existing partial clone to recover without repeating clone', async () => {
+    let recovered = false
+    const fetchGitHub = vi.fn(async () => { recovered = true })
+    const cloneGitHub = vi.fn()
+    const service = createProjectService({
+      readFile: async () => '[]', writeFile: async () => undefined, mkdir: async () => undefined,
+      readDirectory: async () => ['.git'],
+      execGit: async (_path, args) => {
+        if (args.join(' ') === 'rev-parse --is-inside-work-tree') {
+          if (!recovered) throw new Error('partial clone')
+          return 'true\n'
+        }
+        if (args.join(' ') === 'remote') return 'origin\n'
+        if (args.join(' ') === 'config --get remote.origin.url') return 'https://github.com/example/demo.git\n'
+        if (args.join(' ') === 'status --porcelain=v1 --untracked-files=all') return ''
+        return ''
+      }, fetchGitHub, cloneGitHub
+    })
+
+    await service.cloneGitHub('/data/projects.json', 'https://github.com/example/demo.git', '/work/demo')
+
+    expect(fetchGitHub).toHaveBeenCalledWith(resolve('/work/demo'))
+    expect(cloneGitHub).not.toHaveBeenCalled()
+  })
+
   it('reports the real Git identity and dirty workspace summary', async () => {
     const commands: Record<string, string> = {
       'rev-parse --is-inside-work-tree': 'true\n',

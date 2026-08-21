@@ -40,6 +40,25 @@ export interface ProjectImportResult {
   warning: string | null
 }
 
+export interface DataTransferNotice {
+  destination: string
+  data: string
+  permissions: string
+  recovery: string
+}
+
+export interface GitHubProjectCloneResult extends ProjectImportResult {
+  transferNotice: DataTransferNotice
+}
+
+export interface GitHubProjectCloneBlocked {
+  blocked: true
+  reason: string
+  transferNotice: DataTransferNotice
+}
+
+export type GitHubProjectCloneResponse = GitHubProjectCloneResult | GitHubProjectCloneBlocked
+
 export interface OpenProjectResult {
   ok: boolean
   error: string | null

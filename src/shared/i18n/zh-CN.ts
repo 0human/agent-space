@@ -6,7 +6,14 @@ export const zhCNMain = {
     dirtyDetail: '继续导入不会 stash、reset 或丢弃这些修改。',
     dirtyWarning: '该 Workspace 有未提交修改。继续导入不会 stash、reset 或丢弃这些修改。',
     continueAction: '继续导入',
-    cancelAction: '取消'
+    cancelAction: '取消',
+    githubDestinationTitle: '选择 GitHub Project 的本地目录',
+    githubNoticeTitle: 'Data Transfer Notice',
+    githubNoticeMessage: '即将连接 GitHub 并 clone Project。',
+    githubData: '数据：仓库元数据和 Git 对象写入你选择的本地 Workspace。',
+    githubPermissions: '权限：使用系统 Git credential、gh 登录或操作系统凭据存储；Agent Space 不保存 token。',
+    githubRecovery: '断网恢复：Workspace 保留在本地；恢复网络后可继续 fetch，不会重复 clone。',
+    githubContinueAction: '继续连接 GitHub'
   },
   projectOpen: {
     error: '没有找到可用的外部 IDE。请安装并启用 IDE 的命令行启动器。'

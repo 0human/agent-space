@@ -1,14 +1,15 @@
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 
 import { APP_SHELL_CHANNELS } from '../shared/app-shell'
 import { zhCNMain as copy } from '../shared/i18n/zh-CN'
-import type { OpenProjectResult, Project, ProjectImportResult } from '../shared/project'
+import type { GitHubProjectCloneResponse, OpenProjectResult, Project, ProjectImportResult } from '../shared/project'
 
 interface ProjectService {
   list: (filePath: string) => Promise<Project[]>
   inspectDirectory: (workspacePath: string) => Promise<{ dirty: boolean }>
   importDirectory: (filePath: string, workspacePath: string) => Promise<Project>
   findById: (filePath: string, projectId: string) => Promise<Project | null>
+  cloneGitHub?: (filePath: string, repositoryUrl: string, destinationPath: string) => Promise<Project>
 }
 
 interface ProjectHandlerDependencies {
@@ -72,6 +73,46 @@ export function registerProjectHandlers({
       warning: project.dirty
         ? copy.projectImport.dirtyWarning
         : null
+    }
+  })
+
+  handle(APP_SHELL_CHANNELS.cloneGitHubProject, async (_event: unknown, value: unknown): Promise<GitHubProjectCloneResponse | null> => {
+    const repositoryUrl = typeof value === 'string' ? value.trim() : ''
+    if (!repositoryUrl) throw new Error('请输入 GitHub 仓库地址。')
+    const destination = await dialog.showOpenDialog({
+      properties: ['openDirectory', 'createDirectory'],
+      title: copy.projectImport.githubDestinationTitle
+    })
+    const parentPath = destination.filePaths[0]
+    if (destination.canceled || !parentPath) return null
+    const projectName = repositoryUrl.split(/[/:]/).pop()?.replace(/\.git$/i, '') || 'github-project'
+    const destinationPath = resolve(parentPath, projectName)
+    const transferNotice = {
+      destination: repositoryUrl,
+      data: copy.projectImport.githubData,
+      permissions: copy.projectImport.githubPermissions,
+      recovery: copy.projectImport.githubRecovery
+    }
+    const confirmation = await dialog.showMessageBox({
+      type: 'warning',
+      buttons: [copy.projectImport.githubContinueAction, copy.projectImport.cancelAction],
+      defaultId: 1,
+      cancelId: 1,
+      title: copy.projectImport.githubNoticeTitle,
+      message: `${copy.projectImport.githubNoticeMessage}\n\n${transferNotice.destination}`,
+      detail: `${transferNotice.data}\n${transferNotice.permissions}\n${transferNotice.recovery}`
+    })
+    if (confirmation.response !== 0) return null
+    if (!service.cloneGitHub) throw new Error('GitHub clone 不可用。')
+    try {
+      const project = await service.cloneGitHub(filePath, repositoryUrl, destinationPath)
+      return { project, warning: project.dirty ? copy.projectImport.dirtyWarning : null, transferNotice }
+    } catch (reason) {
+      return {
+        blocked: true,
+        reason: reason instanceof Error ? reason.message : String(reason),
+        transferNotice
+      }
     }
   })
 

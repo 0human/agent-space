@@ -11,6 +11,7 @@ describe('Desktop Shell navigation', () => {
       getRuntimeInfo: vi.fn().mockResolvedValue({ platform: 'darwin', version: '0.1.0' }),
       listProjects: vi.fn().mockResolvedValue([]),
       importProject: vi.fn().mockResolvedValue(null),
+      cloneGitHubProject: vi.fn().mockResolvedValue(null),
       openProjectInIde: vi.fn().mockResolvedValue({ ok: true, error: null }),
       getWorkflow: vi.fn().mockResolvedValue({
         definition: BUILT_IN_DEVELOPMENT_WORKFLOW,
@@ -108,6 +109,35 @@ describe('Desktop Shell navigation', () => {
 
     await user.click(screen.getByRole('button', { name: '在外部 IDE 中打开' }))
     expect(window.appShell.openProjectInIde).toHaveBeenCalledWith('project-1')
+  })
+
+  it('clones a GitHub Project only after showing its transfer boundary', async () => {
+    const user = userEvent.setup()
+    const project = {
+      id: 'github-project-1', name: 'demo', workspacePath: '/work/demo', workspaceAvailable: true,
+      remote: 'https://github.com/example/demo.git', currentBranch: 'main', head: 'abc123', defaultBranch: 'main',
+      isGreenfield: false, dirty: false, dirtySummary: { staged: 0, unstaged: 0, untracked: 0, files: [] }, updatedAt: '2026-08-14T00:00:00.000Z'
+    }
+    window.appShell.cloneGitHubProject = vi.fn().mockResolvedValue({
+      project,
+      warning: null,
+      transferNotice: {
+        destination: 'https://github.com/example/demo.git',
+        data: '数据：仓库元数据和 Git 对象写入你选择的本地 Workspace。',
+        permissions: '权限：使用系统 Git credential、gh 登录或操作系统凭据存储；Agent Space 不保存 token。',
+        recovery: '断网恢复：Workspace 保留在本地；恢复网络后可继续 fetch，不会重复 clone。'
+      }
+    })
+
+    render(<App />)
+    await user.click(screen.getByRole('button', { name: '创建 Project' }))
+    await user.type(screen.getByLabelText('GitHub 仓库地址'), 'https://github.com/example/demo.git')
+    await user.click(screen.getByRole('button', { name: '选择目录并 clone' }))
+
+    expect(window.appShell.cloneGitHubProject).toHaveBeenCalledWith('https://github.com/example/demo.git')
+    expect(screen.getByRole('heading', { name: 'demo' })).toBeVisible()
+    expect(screen.getByText('Data Transfer Notice')).toBeVisible()
+    expect(screen.getByText(/External Destination: https:\/\/github.com\/example\/demo\.git/)).toBeVisible()
   })
 
   it('restores a persisted Project in Project Overview after restart', async () => {

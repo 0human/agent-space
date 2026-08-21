@@ -136,7 +136,18 @@ async function closeDatabase(db: SqliteCompat, path: string): Promise<void> {
 }
 
 function json(value: unknown): string {
-  return JSON.stringify(value)
+  const sanitize = (candidate: unknown): unknown => {
+    if (typeof candidate === 'string') {
+      return candidate
+        .replace(/(https?:\/\/)([^/@\s]+)@/gi, '$1<redacted>@')
+        .replace(/(bearer\s+)[A-Za-z0-9._~+\/-]+/gi, '$1<redacted>')
+        .replace(/((?:token|secret|password|authorization)[=:]\s*)[^\s,;]+/gi, '$1<redacted>')
+    }
+    if (Array.isArray(candidate)) return candidate.map(sanitize)
+    if (candidate && typeof candidate === 'object') return Object.fromEntries(Object.entries(candidate).map(([key, value]) => [key, sanitize(value)]))
+    return candidate
+  }
+  return JSON.stringify(sanitize(value))
 }
 
 function parseJson<T>(value: string): T {

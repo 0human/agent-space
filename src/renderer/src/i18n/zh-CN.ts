@@ -33,6 +33,11 @@ export const zhCN = {
     backAction: '返回 Project 概览',
     description: '选择已有 Git 目录，或选择空目录创建 Greenfield Project。',
     chooseAction: '选择 Workspace 目录',
+    githubAction: '从 GitHub clone Project',
+    githubUrlLabel: 'GitHub 仓库地址',
+    githubUrlPlaceholder: 'https://github.com/owner/repository.git',
+    githubCloneAction: '选择目录并 clone',
+    cloneBlocked: (reason: string) => `GitHub 连接已 blocked：${reason}。保留本地 Workspace，网络恢复后可重试。`,
     importError: '导入 Project 失败。'
   },
   projectDetail: {
@@ -64,6 +69,8 @@ export const zhCN = {
     unavailable: 'Workspace 已删除或不可访问',
     unavailableDescription: '找不到这个 Workspace，路径可能已被移动或删除。',
     openError: '打开外部 IDE 失败。'
+    ,transferNoticeTitle: 'Data Transfer Notice'
+    ,transferDestination: 'External Destination'
   },
   workflow: {
     eyebrow: 'Project Workflow',

@@ -1,6 +1,8 @@
+import { execFile as execFileCallback } from 'node:child_process'
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { promisify } from 'node:util'
 import { app, BrowserWindow, dialog, ipcMain } from 'electron'
 
 import { createMainWindow, registerAppShellHandlers } from './app-shell'
@@ -15,6 +17,7 @@ import { createRunWorkspaceManager } from './run-workspace'
 import { BUILT_IN_SKILL_MANIFESTS } from '../shared/workflow'
 
 const currentDirectory = fileURLToPath(new URL('.', import.meta.url))
+const execFile = promisify(execFileCallback)
 
 function openMainWindow(): BrowserWindow {
   const mainWindow = createMainWindow({
@@ -73,7 +76,13 @@ const projectService = createProjectService({
     await mkdir(path, options)
   },
   readDirectory: async (path) => readdir(path),
-  execGit: createDefaultGitExecutor()
+  execGit: createDefaultGitExecutor(),
+  cloneGitHub: async (repositoryUrl, destinationPath) => {
+    await execFile('git', ['clone', repositoryUrl, destinationPath], { encoding: 'utf8' })
+  },
+  fetchGitHub: async (workspacePath) => {
+    await execFile('git', ['-C', workspacePath, 'fetch', '--prune', 'origin'], { encoding: 'utf8' })
+  }
 })
 const openInIde = createDefaultIdeLauncher()
 const workflowEngine = createWorkflowEngine({

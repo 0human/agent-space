@@ -19,6 +19,8 @@ export interface ProjectServiceDependencies {
   mkdir: (path: string, options: { recursive: true }) => Promise<void>
   execGit: (workspacePath: string, args: string[]) => Promise<string>
   readDirectory?: (workspacePath: string) => Promise<string[]>
+  cloneGitHub?: (repositoryUrl: string, destinationPath: string) => Promise<void>
+  fetchGitHub?: (workspacePath: string) => Promise<void>
   now?: () => string
   createId?: () => string
 }
@@ -54,6 +56,19 @@ function parseStatus(output: string): DirtyWorkspaceSummary {
   }
 
   return summary
+}
+
+function sanitizeGitError(reason: unknown): Error {
+  const message = reason instanceof Error ? reason.message : String(reason)
+  return new Error(message.replace(/(https?:\/\/)([^/@\s]+)@/gi, '$1<redacted>@'))
+}
+
+function isGitHubRepository(url: string): boolean {
+  return /^(?:https:\/\/github\.com\/[^/\s]+\/[^/\s]+(?:\.git)?|git@github\.com:[^/\s]+\/[^/\s]+(?:\.git)?)$/i.test(url)
+}
+
+function canonicalGitHubRemote(url: string): string {
+  return url.trim().replace(/\.git$/i, '').toLowerCase()
 }
 
 export async function inspectWorkspace(
@@ -153,6 +168,26 @@ export function createProjectService(dependencies: ProjectServiceDependencies) {
     await dependencies.writeFile(filePath, JSON.stringify(projects, null, 2), 'utf8')
   }
 
+  async function importDirectory(filePath: string, workspacePath: string): Promise<Project> {
+    const normalizedWorkspacePath = resolve(workspacePath)
+    const state = await inspectWorkspace(normalizedWorkspacePath, dependencies)
+    const projects = await load(filePath)
+    const existing = projects.find((project) => resolve(project.workspacePath) === normalizedWorkspacePath)
+    const project: Project = {
+      id: existing?.id ?? createId(),
+      name: existing?.name ?? (basename(normalizedWorkspacePath) || normalizedWorkspacePath),
+      workspacePath: normalizedWorkspacePath,
+      ...state,
+      permissionPolicy: existing?.permissionPolicy ?? { grantedPermissions: [...DEFAULT_PROJECT_PERMISSIONS] },
+      updatedAt: now()
+    }
+    const next = existing
+      ? projects.map((candidate) => candidate.id === existing.id ? project : candidate)
+      : [...projects, project]
+    await save(filePath, next)
+    return project
+  }
+
   async function refresh(project: Project): Promise<Project> {
     const state = await inspectWorkspace(project.workspacePath, dependencies)
     return { ...project, ...state, updatedAt: now() }
@@ -178,23 +213,39 @@ export function createProjectService(dependencies: ProjectServiceDependencies) {
     },
 
     async importDirectory(filePath: string, workspacePath: string): Promise<Project> {
-      const normalizedWorkspacePath = resolve(workspacePath)
-      const state = await inspectWorkspace(normalizedWorkspacePath, dependencies)
-      const projects = await load(filePath)
-      const existing = projects.find((project) => resolve(project.workspacePath) === normalizedWorkspacePath)
-      const project: Project = {
-        id: existing?.id ?? createId(),
-        name: existing?.name ?? (basename(normalizedWorkspacePath) || normalizedWorkspacePath),
-        workspacePath: normalizedWorkspacePath,
-        ...state,
-        permissionPolicy: existing?.permissionPolicy ?? { grantedPermissions: [...DEFAULT_PROJECT_PERMISSIONS] },
-        updatedAt: now()
+      return importDirectory(filePath, workspacePath)
+    },
+
+    async cloneGitHub(filePath: string, repositoryUrl: string, destinationPath: string): Promise<Project> {
+      const url = repositoryUrl.trim()
+      if (!isGitHubRepository(url)) throw new Error('请输入有效的 GitHub 仓库地址。')
+      const workspacePath = resolve(destinationPath)
+      let existing = false
+      let existingRemote: string | null = null
+      try {
+        const state = await inspectWorkspace(workspacePath, dependencies)
+        existing = !state.isGreenfield
+        existingRemote = state.remote
+      } catch {
+        const entries = await (dependencies.readDirectory?.(workspacePath) ?? Promise.resolve([])).catch(() => [])
+        // A non-empty directory may be a partial clone. Fetch it instead of risking a second clone.
+        existing = entries.length > 0
       }
-      const next = existing
-        ? projects.map((candidate) => candidate.id === existing.id ? project : candidate)
-        : [...projects, project]
-      await save(filePath, next)
-      return project
+      if (existingRemote && canonicalGitHubRemote(existingRemote) !== canonicalGitHubRemote(url)) {
+        throw new Error('目标 Workspace 已连接到另一个 GitHub 仓库。')
+      }
+      try {
+        if (existing) {
+          if (!dependencies.fetchGitHub) throw new Error('无法恢复 GitHub Workspace。')
+          await dependencies.fetchGitHub(workspacePath)
+        } else {
+          if (!dependencies.cloneGitHub) throw new Error('GitHub clone 不可用。')
+          await dependencies.cloneGitHub(url, workspacePath)
+        }
+      } catch (reason) {
+        throw sanitizeGitError(reason)
+      }
+      return importDirectory(filePath, workspacePath)
     },
 
     async findById(filePath: string, projectId: string): Promise<Project | null> {

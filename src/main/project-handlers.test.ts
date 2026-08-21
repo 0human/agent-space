@@ -1,6 +1,6 @@
 // @vitest-environment node
 
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 
 import { APP_SHELL_CHANNELS } from '../shared/app-shell'
@@ -53,6 +53,62 @@ describe('Project IPC handlers', () => {
       cancelId: 1
     }))
     expect(service.importDirectory).toHaveBeenCalledWith(join('/data', 'projects.json'), '/work/demo')
+  })
+
+  it('shows a Data Transfer Notice before cloning a GitHub Project', async () => {
+    const handlers = new Map<string, (...args: unknown[]) => unknown>()
+    const cloneGitHub = vi.fn().mockResolvedValue(project)
+    const dialog = {
+      showOpenDialog: vi.fn().mockResolvedValue({ canceled: false, filePaths: ['/work'] }),
+      showMessageBox: vi.fn().mockResolvedValue({ response: 0 })
+    }
+    registerProjectHandlers({
+      handle: (channel, listener) => handlers.set(channel, listener), dialog,
+      openInIde: vi.fn(), userDataPath: '/data',
+      service: { list: vi.fn(), inspectDirectory: vi.fn(), importDirectory: vi.fn(), findById: vi.fn(), cloneGitHub }
+    })
+
+    await expect(handlers.get(APP_SHELL_CHANNELS.cloneGitHubProject)?.({}, 'https://github.com/example/demo.git')).resolves.toMatchObject({
+      project,
+      transferNotice: { destination: 'https://github.com/example/demo.git' }
+    })
+    expect(dialog.showMessageBox).toHaveBeenCalledWith(expect.objectContaining({ title: 'Data Transfer Notice' }))
+    expect(cloneGitHub).toHaveBeenCalledWith(join('/data', 'projects.json'), 'https://github.com/example/demo.git', resolve('/work/demo'))
+  })
+
+  it('does not clone when the transfer notice is cancelled', async () => {
+    const handlers = new Map<string, (...args: unknown[]) => unknown>()
+    const cloneGitHub = vi.fn()
+    registerProjectHandlers({
+      handle: (channel, listener) => handlers.set(channel, listener),
+      dialog: {
+        showOpenDialog: vi.fn().mockResolvedValue({ canceled: false, filePaths: ['/work'] }),
+        showMessageBox: vi.fn().mockResolvedValue({ response: 1 })
+      },
+      openInIde: vi.fn(), userDataPath: '/data',
+      service: { list: vi.fn(), inspectDirectory: vi.fn(), importDirectory: vi.fn(), findById: vi.fn(), cloneGitHub }
+    })
+
+    await expect(handlers.get(APP_SHELL_CHANNELS.cloneGitHubProject)?.({}, 'git@github.com:example/demo.git')).resolves.toBeNull()
+    expect(cloneGitHub).not.toHaveBeenCalled()
+  })
+
+  it('returns a blocked result when GitHub is unavailable after confirmation', async () => {
+    const handlers = new Map<string, (...args: unknown[]) => unknown>()
+    registerProjectHandlers({
+      handle: (channel, listener) => handlers.set(channel, listener),
+      dialog: {
+        showOpenDialog: vi.fn().mockResolvedValue({ canceled: false, filePaths: ['/work'] }),
+        showMessageBox: vi.fn().mockResolvedValue({ response: 0 })
+      },
+      openInIde: vi.fn(), userDataPath: '/data',
+      service: { list: vi.fn(), inspectDirectory: vi.fn(), importDirectory: vi.fn(), findById: vi.fn(), cloneGitHub: vi.fn().mockRejectedValue(new Error('网络连接失败')) }
+    })
+
+    await expect(handlers.get(APP_SHELL_CHANNELS.cloneGitHubProject)?.({}, 'https://github.com/example/demo.git')).resolves.toMatchObject({
+      blocked: true,
+      reason: '网络连接失败'
+    })
   })
 
   it('does not register a Dirty Workspace when the user cancels the warning', async () => {

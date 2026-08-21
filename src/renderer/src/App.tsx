@@ -20,7 +20,7 @@ import {
 } from 'lucide-react'
 
 import type { RuntimeInfo } from '../../shared/app-shell'
-import type { Project } from '../../shared/project'
+import type { DataTransferNotice, Project } from '../../shared/project'
 import type { WorkflowView as WorkflowViewModel } from '../../shared/workflow'
 import type { WorkflowPreflightResult, WorkflowRun, WorkflowRunStatus } from '../../shared/workflow-run'
 import { zhCN as copy } from './i18n/zh-CN'
@@ -111,11 +111,14 @@ interface ProjectEntryProps {
   mode: 'createProject' | 'resumeWork'
   onBack: () => void
   onImport: () => void
+  onClone: (repositoryUrl: string) => void
   error: string | null
+  cloneBlocked: string | null
 }
 
-function ProjectEntry({ mode, onBack, onImport, error }: ProjectEntryProps): React.JSX.Element {
+function ProjectEntry({ mode, onBack, onImport, onClone, error, cloneBlocked }: ProjectEntryProps): React.JSX.Element {
   const isCreate = mode === 'createProject'
+  const [repositoryUrl, setRepositoryUrl] = useState('')
   const eyebrow = isCreate ? copy.projectEntry.createEyebrow : copy.projectEntry.resumeEyebrow
   const title = isCreate ? copy.projectEntry.createTitle : copy.projectEntry.resumeTitle
 
@@ -135,6 +138,17 @@ function ProjectEntry({ mode, onBack, onImport, error }: ProjectEntryProps): Rea
           <FolderKanban aria-hidden="true" />
           {copy.projectEntry.chooseAction}
         </button>
+        {isCreate ? (
+          <div className="github-entry">
+            <label htmlFor="github-repository-url">{copy.projectEntry.githubUrlLabel}</label>
+            <input id="github-repository-url" value={repositoryUrl} onChange={(event) => setRepositoryUrl(event.target.value)} placeholder={copy.projectEntry.githubUrlPlaceholder} />
+            <button className="secondary-action" type="button" onClick={() => onClone(repositoryUrl)} disabled={!repositoryUrl.trim()}>
+              <FolderKanban aria-hidden="true" />
+              {copy.projectEntry.githubCloneAction}
+            </button>
+          </div>
+        ) : null}
+        {cloneBlocked ? <p className="blocked-notice" role="status">{copy.projectEntry.cloneBlocked(cloneBlocked)}</p> : null}
         {error ? <p className="error-message" role="alert">{error}</p> : null}
       </section>
     </main>
@@ -148,11 +162,12 @@ interface ProjectDetailProps {
   onOpenInIde: () => void
   openError: string | null
   importWarning: string | null
+  transferNotice: DataTransferNotice | null
   onViewWorkflow: () => void
   onOpenRun: (run: WorkflowRun) => void
 }
 
-function ProjectDetail({ project, runs, onBack, onOpenInIde, openError, importWarning, onViewWorkflow, onOpenRun }: ProjectDetailProps): React.JSX.Element {
+function ProjectDetail({ project, runs, onBack, onOpenInIde, openError, importWarning, transferNotice, onViewWorkflow, onOpenRun }: ProjectDetailProps): React.JSX.Element {
   const workspaceAvailable = project.workspaceAvailable !== false
 
   return (
@@ -193,6 +208,15 @@ function ProjectDetail({ project, runs, onBack, onOpenInIde, openError, importWa
           </div>
         ) : null}
         {openError ? <p className="error-message" role="alert">{openError}</p> : null}
+        {transferNotice ? (
+          <section className="transfer-notice" aria-label={copy.projectDetail.transferNoticeTitle}>
+            <strong>{copy.projectDetail.transferNoticeTitle}</strong>
+            <span>{copy.projectDetail.transferDestination}: {transferNotice.destination}</span>
+            <span>{transferNotice.data}</span>
+            <span>{transferNotice.permissions}</span>
+            <span>{transferNotice.recovery}</span>
+          </section>
+        ) : null}
         <dl className="project-metadata">
           <div><dt>{copy.projectDetail.remote}</dt><dd>{project.remote ?? copy.projectDetail.notConfigured}</dd></div>
           <div><dt>{copy.projectDetail.type}</dt><dd>{project.isGreenfield ? copy.projectDetail.greenfieldProject : copy.projectDetail.gitProject}</dd></div>
@@ -563,6 +587,8 @@ export default function App(): React.JSX.Element {
   const [error, setError] = useState<string | null>(null)
   const [openError, setOpenError] = useState<string | null>(null)
   const [importWarning, setImportWarning] = useState<string | null>(null)
+  const [transferNotice, setTransferNotice] = useState<DataTransferNotice | null>(null)
+  const [cloneBlocked, setCloneBlocked] = useState<string | null>(null)
   const [workflow, setWorkflow] = useState<WorkflowViewModel | null>(null)
   const [workflowLoading, setWorkflowLoading] = useState(false)
   const [workflowError, setWorkflowError] = useState<string | null>(null)
@@ -610,6 +636,29 @@ export default function App(): React.JSX.Element {
       setProjects((current) => [result.project, ...current.filter((project) => project.id !== result.project.id)])
       setSelectedProject(result.project)
       setImportWarning(result.warning)
+      setTransferNotice(null)
+      setCloneBlocked(null)
+      setView('projectDetail')
+    } catch {
+      setError(copy.projectEntry.importError)
+    }
+  }
+
+  const cloneGitHubProject = async (repositoryUrl: string): Promise<void> => {
+    setError(null)
+    try {
+      const result = await window.appShell.cloneGitHubProject(repositoryUrl)
+      if (!result) return
+      if ('blocked' in result) {
+        setCloneBlocked(result.reason)
+        setTransferNotice(result.transferNotice)
+        return
+      }
+      setProjects((current) => [result.project, ...current.filter((project) => project.id !== result.project.id)])
+      setSelectedProject(result.project)
+      setImportWarning(result.warning)
+      setTransferNotice(result.transferNotice)
+      setCloneBlocked(null)
       setView('projectDetail')
     } catch {
       setError(copy.projectEntry.importError)
@@ -708,7 +757,7 @@ export default function App(): React.JSX.Element {
           onCreateProject={() => { setError(null); setView('createProject') }}
           onResumeWork={() => { setError(null); setView('resumeWork') }}
           projects={projects}
-          onOpenProject={(project) => { setSelectedProject(project); setOpenError(null); setImportWarning(null); setView('projectDetail') }}
+          onOpenProject={(project) => { setSelectedProject(project); setOpenError(null); setImportWarning(null); setTransferNotice(null); setView('projectDetail') }}
           error={error}
         />
       )
@@ -719,8 +768,8 @@ export default function App(): React.JSX.Element {
         : view === 'run' && selectedRun
           ? <RunBoard run={selectedRun} onBack={() => setView('projectDetail')} onPause={() => { void updateRun(() => window.appShell.pauseWorkflowRun(selectedRun.id)) }} onResume={() => { void updateRun(() => window.appShell.resumeWorkflowRun(selectedRun.id)) }} onRetry={() => { void updateRun(() => window.appShell.retryWorkflowStep(selectedRun.id)) }} onCancel={() => { void updateRun(() => window.appShell.cancelWorkflowRun(selectedRun.id)) }} onAnswer={(value) => { void updateRun(() => window.appShell.answerWorkflowQuestion(selectedRun.id, value)) }} onApprove={() => { void updateRun(() => window.appShell.approveWorkflowApproval(selectedRun.id)) }} onReject={() => { void updateRun(() => window.appShell.rejectWorkflowApproval(selectedRun.id)) }} error={runError} />
         : view === 'projectDetail' && selectedProject
-          ? <ProjectDetail project={selectedProject} runs={runs} onBack={() => setView('projectOverview')} onOpenInIde={openProjectInIde} openError={openError} importWarning={importWarning} onViewWorkflow={openWorkflow} onOpenRun={(run) => { setSelectedRun(run); setRunError(null); setView('run') }} />
-          : <ProjectEntry mode={view === 'resumeWork' ? 'resumeWork' : 'createProject'} onBack={() => setView('projectOverview')} onImport={importProject} error={error} />
+          ? <ProjectDetail project={selectedProject} runs={runs} onBack={() => setView('projectOverview')} onOpenInIde={openProjectInIde} openError={openError} importWarning={importWarning} transferNotice={transferNotice} onViewWorkflow={openWorkflow} onOpenRun={(run) => { setSelectedRun(run); setRunError(null); setView('run') }} />
+          : <ProjectEntry mode={view === 'resumeWork' ? 'resumeWork' : 'createProject'} onBack={() => setView('projectOverview')} onImport={importProject} onClone={cloneGitHubProject} error={error} cloneBlocked={cloneBlocked} />
 
   return (
     <div className="app-shell">

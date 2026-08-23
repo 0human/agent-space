@@ -36,7 +36,7 @@
       "dependencies": [],
       "supportedRuntimes": ["codex"],
       "capabilities": ["artifact"],
-      "requiredPermissions": ["workspace.read", "workspace.write"]
+      "requiredPermissions": ["workspace.read", "workspace.write", "network.github"]
     },
     {
       "name": "to-tickets",

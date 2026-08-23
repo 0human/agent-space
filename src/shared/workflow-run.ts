@@ -3,7 +3,7 @@ import type { PermissionPolicy } from './project'
 import type { WorkflowDefinition, WorkflowView } from './workflow'
 
 export type WorkflowRunStatus = 'running' | 'paused' | 'waiting' | 'blocked' | 'failed' | 'completed' | 'cancelled'
-export type StepExecutionStatus = 'pending' | 'running' | 'waiting' | 'blocked' | 'failed' | 'completed' | 'cancelled'
+export type StepExecutionStatus = 'pending' | 'running' | 'waiting' | 'blocked' | 'failed' | 'completed' | 'skipped' | 'cancelled'
 
 export interface WorkflowEvent {
   id: number
@@ -149,6 +149,7 @@ export interface RuntimeExecutionContext {
 export interface RuntimeArtifact {
   type: string
   name: string
+  runId?: string
   location?: string | null
   versionHash?: string | null
   status?: string

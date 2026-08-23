@@ -8,6 +8,8 @@ disable-model-invocation: true
 
 Break a plan, spec, or conversation into a set of **tickets** — tracer-bullet vertical slices, each declaring the tickets that **block** it.
 
+在 Development Workflow 中，使用当前 Run 的 specification Artifact、Phase Context 和 Decision Record，不重新进行访谈。先输出候选的垂直切片、粒度和 blocking edges，使用 `APPROVAL_REQUIRED:` 等待用户批准；批准后按依赖顺序通过 `gh issue create` 发布，每个 ticket 添加 `ready-for-agent` label，在正文写入 `Run ID: <id>` 和 `Blocked by`。使用 GitHub 原生 sub-issue/dependency API 建立关系，并为每个发布的 URL 输出 `ARTIFACT: {"type":"ticket","name":"<title>","location":"https://github.com/..."}`；所有失败或网络中断都应保留可恢复的 Step 状态。
+
 The issue tracker and triage label vocabulary should have been provided to you — run `/setup-matt-pocock-skills` if not.
 
 ## Process

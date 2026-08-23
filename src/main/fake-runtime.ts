@@ -30,6 +30,7 @@ export function createFakeRuntimeAdapter(delayMs = 180): AgentRuntimeAdapter {
       for (const name of step.artifacts ?? []) events.push({ type: 'artifact_produced', artifact: {
         type: 'workflow-artifact',
         name,
+        status: name === 'specification' ? 'ready' : 'available',
         location: `${context.project.workspacePath}/.agent-space/artifacts/${context.runId}/${name}`
       } })
       return events

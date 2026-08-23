@@ -50,6 +50,24 @@ describe('Codex Runtime Adapter recorded contract', () => {
     ]))
   })
 
+  it('accepts published GitHub specification and ticket Artifacts while rejecting other external URLs', async () => {
+    const adapter = createCodexRuntimeAdapter({
+      runProcess: async () => ({ code: 0, stderr: '', stdout: [
+        '{"type":"thread.started","thread_id":"thread-publish"}',
+        JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'ARTIFACT: ' + JSON.stringify({ type: 'specification', name: 'specification', status: 'ready', location: 'https://github.com/example/project/issues/42' }) } }),
+        JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'ARTIFACT: ' + JSON.stringify({ type: 'ticket', name: 'ticket', location: 'https://evil.example/issues/1' }) } }),
+        '{"type":"turn.completed"}'
+      ].join('\n') })
+    })
+
+    await expect(adapter.execute({
+      runId: 'run-1', project: { workspacePath: '/work/demo' } as never, workspace: { path: '/work/demo' }, idea: 'Publish a spec',
+      workflow: { phases: [] } as never, phaseIndex: 0, stepIndex: 0,
+      execution: { id: 'execution-1', runtimeSessionId: null } as never, skill: { name: 'to-spec', version: '1.0.0' },
+      phaseContext: null, inputArtifacts: [], decisionRecords: [], permissionPolicy: { grantedPermissions: ['workspace.read', 'network.github'] }, events: []
+    })).resolves.toEqual(expect.arrayContaining([expect.objectContaining({ type: 'artifact_produced', artifact: expect.objectContaining({ location: 'https://github.com/example/project/issues/42' }) })]))
+  })
+
   it('starts a new Codex session and resumes the persisted session in the same workspace', async () => {
     const calls: Array<{ command: string; args: string[]; cwd: string }> = []
     const adapter = createCodexRuntimeAdapter({

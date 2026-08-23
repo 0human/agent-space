@@ -125,6 +125,19 @@ describe('WorkflowEngine public API', () => {
     })
   })
 
+  it('shows a GitHub Data Transfer Notice when a later Skill publishes external artifacts', async () => {
+    directory = await mkdtemp(join(tmpdir(), 'agent-space-run-'))
+    engine = createWorkflowEngine({ databasePath: join(directory, 'runs.sqlite'), runtime: new FakeRuntime() })
+    const publishingWorkflow: WorkflowView = {
+      ...workflow,
+      skillManifests: [{ name: 'to-spec', version: '1.0.0', entry: 'skills/to-spec/SKILL.md', dependencies: [], supportedRuntimes: ['codex'], capabilities: ['artifact'], requiredPermissions: ['workspace.read', 'network.github'] }],
+      definition: { ...workflow.definition, phases: [{ ...workflow.definition.phases[0], steps: [{ id: 'spec', name: '形成规格', kind: 'skill', skill: { name: 'to-spec', version: '1.0.0' } }] }] }
+    }
+
+    const result = await engine.preflight({ project, workflow: publishingWorkflow, idea: 'Publish a specification' })
+    expect(result.checks.some((check) => check.includes('External Destination: GitHub'))).toBe(true)
+  })
+
   it('pauses between Steps and resumes from the durable cursor after restart', async () => {
     directory = await mkdtemp(join(tmpdir(), 'agent-space-run-'))
     const databasePath = join(directory, 'runs.sqlite')
@@ -237,6 +250,27 @@ describe('WorkflowEngine public API', () => {
     await expect(engine.waitForIdle(run.id)).resolves.toMatchObject({ status: 'completed' })
   })
 
+  it('enforces a declared Approval Gate even when Runtime returns completed directly', async () => {
+    directory = await mkdtemp(join(tmpdir(), 'agent-space-run-'))
+    const runtime = new FakeRuntime()
+    const gatedWorkflow: WorkflowView = {
+      ...workflow,
+      definition: {
+        ...workflow.definition,
+        phases: [{ ...workflow.definition.phases[0], steps: [{ ...workflow.definition.phases[0].steps[0], approvalGate: 'Publish the specification?' }] }]
+      }
+    }
+    engine = createWorkflowEngine({ databasePath: join(directory, 'runs.sqlite'), runtime })
+    const run = await engine.startRun({ project, workflow: gatedWorkflow, idea: 'Publish only after approval' })
+    const waiting = await engine.waitForIdle(run.id)
+    expect(waiting).toMatchObject({ status: 'waiting', snapshot: { pendingApproval: 'Publish the specification?' }, artifacts: [] })
+
+    await engine.approve(run.id)
+    await vi.waitFor(() => expect(runtime.calls).toHaveLength(1))
+    runtime.finish([{ type: 'artifact_produced', artifact: { type: 'specification', name: 'specification', runId: run.id, location: 'https://github.com/example/project/issues/1' } }, { type: 'status_changed', status: 'completed' }])
+    await expect(engine.waitForIdle(run.id)).resolves.toMatchObject({ status: 'completed', artifacts: [expect.objectContaining({ location: 'https://github.com/example/project/issues/1' })] })
+  })
+
   it('answers a persisted question from its continuation and records the structured answer', async () => {
     directory = await mkdtemp(join(tmpdir(), 'agent-space-run-'))
     const runtime = new FakeRuntime()
@@ -303,6 +337,34 @@ describe('WorkflowEngine public API', () => {
       { type: 'status_changed', status: 'completed', sessionId: 'thread-1' }
     ])
     await expect(engine.waitForIdle(run.id)).resolves.toMatchObject({ artifacts: [expect.objectContaining({ name: 'CONTEXT.md' })] })
+  })
+
+  it('carries Discovery context and decisions into the Requirements Phase', async () => {
+    directory = await mkdtemp(join(tmpdir(), 'agent-space-run-'))
+    const runtime = new FakeRuntime()
+    const multiPhaseWorkflow: WorkflowView = {
+      ...workflow,
+      definition: {
+        ...workflow.definition,
+        phases: [
+          workflow.definition.phases[0],
+          { id: 'requirements', name: 'Requirements', goal: 'Write the specification', steps: [{ id: 'spec', name: 'Write specification', kind: 'skill', skill: { name: 'to-spec', version: '1.0.0' } }] }
+        ]
+      }
+    }
+    engine = createWorkflowEngine({ databasePath: join(directory, 'runs.sqlite'), runtime })
+    const run = await engine.startRun({ project, workflow: multiPhaseWorkflow, idea: 'Use Discovery context' })
+    await vi.waitFor(() => expect(runtime.calls).toHaveLength(1))
+    runtime.finish([{ type: 'text_delta', text: '已确认目标用户是独立开发者。' }, { type: 'question', question: '是否保留本地优先？' }])
+    const waiting = await engine.waitForIdle(run.id)
+    await engine.answerQuestion(waiting.id, '保留本地优先')
+    await vi.waitFor(() => expect(runtime.calls).toHaveLength(2))
+    expect(runtime.contexts[1]).toMatchObject({ phaseContext: { content: expect.stringContaining('已确认目标用户是独立开发者。') }, decisionRecords: [expect.objectContaining({ answer: '保留本地优先' })] })
+    runtime.finish([{ type: 'status_changed', status: 'completed' }])
+    await vi.waitFor(() => expect(runtime.calls).toHaveLength(3))
+    expect(runtime.contexts[2]).toMatchObject({ phaseContext: { content: expect.stringContaining('已确认目标用户是独立开发者。') }, decisionRecords: [expect.objectContaining({ answer: '保留本地优先' })] })
+    runtime.finish([{ type: 'status_changed', status: 'completed' }])
+    await expect(engine.waitForIdle(run.id)).resolves.toMatchObject({ status: 'completed' })
   })
 
   it('rejects an Approval Gate without running the pending Step', async () => {
@@ -403,5 +465,40 @@ describe('WorkflowEngine public API', () => {
     engine = createWorkflowEngine({ databasePath, runtime: createFakeRuntimeAdapter(0) })
     await expect(engine.resumeRun(run.id)).resolves.toMatchObject({ status: 'running' })
     await expect(engine.waitForIdle(run.id)).resolves.toMatchObject({ status: 'completed' })
+  })
+
+  it('skips a conditional Planning Step with a durable reason and can recover it', async () => {
+    directory = await mkdtemp(join(tmpdir(), 'agent-space-run-'))
+    const runtime = new FakeRuntime()
+    const conditionalWorkflow: WorkflowView = {
+      ...workflow,
+      definition: {
+        ...workflow.definition,
+        phases: [{
+          ...workflow.definition.phases[0],
+          steps: [
+            { ...workflow.definition.phases[0].steps[0], artifacts: ['specification'] },
+            { id: 'tickets', name: 'Planning', kind: 'skill', condition: 'planning.required' }
+          ]
+        }]
+      }
+    }
+    engine = createWorkflowEngine({ databasePath: join(directory, 'runs.sqlite'), runtime })
+
+    const run = await engine.startRun({ project, workflow: conditionalWorkflow, idea: 'Small change' })
+    await vi.waitFor(() => expect(runtime.calls).toHaveLength(1))
+    runtime.finish([{ type: 'artifact_produced', artifact: { type: 'specification', name: 'specification', status: 'skip-planning' } }, { type: 'status_changed', status: 'completed' }])
+
+    const skipped = await engine.waitForIdle(run.id)
+    expect(skipped.status).toBe('completed')
+    expect(skipped.stepExecutions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ stepId: 'tickets', status: 'skipped', output: { reason: '根据规格结果跳过 Planning。' } })
+    ]))
+    expect(skipped.events).toEqual(expect.arrayContaining([expect.objectContaining({ type: 'step_skipped', data: expect.objectContaining({ stepId: 'tickets', reason: '根据规格结果跳过 Planning。' }) })]))
+
+    await engine.retryStep(run.id)
+    await vi.waitFor(() => expect(runtime.calls).toHaveLength(2))
+    runtime.finish([{ type: 'status_changed', status: 'completed' }])
+    await expect(engine.waitForIdle(run.id)).resolves.toMatchObject({ status: 'completed', stepExecutions: expect.arrayContaining([expect.objectContaining({ stepId: 'tickets', status: 'completed', attempt: 2 })]) })
   })
 })

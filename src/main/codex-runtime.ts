@@ -58,7 +58,12 @@ function isDiscoveryArtifact(artifact: RuntimeArtifact): boolean {
   return name === 'context.md' || (location.toLowerCase().includes('/docs/adr/') && location.toLowerCase().endsWith('.md'))
 }
 
+function isPublishedWorkflowArtifact(artifact: RuntimeArtifact): boolean {
+  return ['specification', 'ticket', 'tickets', 'decision-record'].includes(artifact.type) && /^https:\/\/github\.com\//i.test(artifact.location ?? '')
+}
+
 function isArtifactInsideWorkspace(artifact: RuntimeArtifact, workspacePath: string): boolean {
+  if (isPublishedWorkflowArtifact(artifact)) return true
   if (!artifact.location) return false
   const workspace = resolve(workspacePath)
   const location = resolve(artifact.location)
@@ -73,7 +78,7 @@ function parseAgentMessage(text: string, sessionId?: string): RuntimeEvent {
   if (text.startsWith(ARTIFACT_PREFIX)) {
     try {
       const artifact = JSON.parse(text.slice(ARTIFACT_PREFIX.length).trim()) as RuntimeArtifact
-      if (artifact && typeof artifact === 'object' && typeof artifact.name === 'string' && typeof artifact.type === 'string' && isDiscoveryArtifact(artifact)) {
+      if (artifact && typeof artifact === 'object' && typeof artifact.name === 'string' && typeof artifact.type === 'string' && (isDiscoveryArtifact(artifact) || isPublishedWorkflowArtifact(artifact))) {
         return { type: 'artifact_produced', artifact, ...(sessionId ? { sessionId } : {}) }
       }
     } catch {
@@ -136,7 +141,8 @@ function defaultRunProcess(command: string, args: string[], options: { cwd: stri
 function promptFor(context: RuntimeExecutionContext, skillInstructions: string): string {
   return [
     `执行固定 Skill ${context.skill?.name ?? 'unknown'}@${context.skill?.version ?? 'unknown'}。`,
-    '这是一次可恢复的 Discovery Phase 执行。只使用下面提供的上下文和输入，不要创建隐藏的 Workflow 状态。',
+    '这是一次可恢复的 Workflow Phase 执行。只使用下面提供的上下文和输入，不要创建隐藏的 Workflow 状态。',
+    `Workflow Run ID: ${context.runId}（所有 GitHub spec、ticket、Decision Record 和 URL 必须在正文或 Artifact 元数据中关联此 Run ID。）`,
     `Idea: ${context.idea}`,
     `Phase: ${context.workflow.phases[context.phaseIndex]?.id ?? 'unknown'}`,
     `Workspace: ${context.workspace.path}`,
@@ -147,7 +153,7 @@ function promptFor(context: RuntimeExecutionContext, skillInstructions: string):
     'Fixed Skill instructions:',
     skillInstructions,
     '需要用户回答时，最后一条消息必须以 QUESTION: 开头；需要审批时以 APPROVAL_REQUIRED: 开头。',
-    '确认写入 CONTEXT.md 或 docs/adr/*.md 后，输出 ARTIFACT: 后跟 JSON 对象。普通聊天、日志和临时文件不要标记为 Artifact。'
+    '确认写入 CONTEXT.md 或 docs/adr/*.md，或已获批准发布 GitHub spec/ticket 后，输出 ARTIFACT: 后跟 JSON 对象。GitHub URL 仅允许 https://github.com/；普通聊天、日志和临时文件不要标记为 Artifact。'
   ].join('\n')
 }
 
@@ -174,6 +180,7 @@ export function createCodexRuntimeAdapter(dependencies: CodexRuntimeDependencies
   function enrichEvents(events: RuntimeEvent[], context: RuntimeExecutionContext): RuntimeEvent[] {
     return events.filter((event) => event.type !== 'artifact_produced' || isArtifactInsideWorkspace(event.artifact, context.workspace.path)).map((event) => ({
       ...event,
+      ...(event.type === 'artifact_produced' && isPublishedWorkflowArtifact(event.artifact) ? { artifact: { ...event.artifact, runId: context.runId } } : {}),
       ...(event.type === 'error' ? { error: sanitizeSensitiveText(event.error) } : event.type === 'text_delta' ? { text: sanitizeSensitiveText(event.text) } : {}),
       provider: 'codex',
       source: 'codex exec --json',

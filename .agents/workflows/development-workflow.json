@@ -14,13 +14,13 @@
       "id": "requirements",
       "name": "需求与领域文档",
       "goal": "将已确认的上下文形成可审阅规格。",
-      "steps": [{ "id": "spec", "name": "形成规格", "kind": "skill", "skill": { "name": "to-spec", "version": "1.0.0" }, "artifacts": ["specification"] }]
+      "steps": [{ "id": "spec", "name": "形成规格", "kind": "skill", "skill": { "name": "to-spec", "version": "1.0.0" }, "artifacts": ["specification"], "approvalGate": "确认测试 seam 并发布 GitHub 规格" }]
     },
     {
       "id": "planning",
       "name": "规划",
       "goal": "将规格拆分为有依赖关系的交付切片。",
-      "steps": [{ "id": "tickets", "name": "拆分 tickets", "kind": "skill", "skill": { "name": "to-tickets", "version": "1.0.0" }, "artifacts": ["tickets"], "condition": "specification.ready" }]
+      "steps": [{ "id": "tickets", "name": "拆分 tickets", "kind": "skill", "skill": { "name": "to-tickets", "version": "1.0.0" }, "artifacts": ["tickets"], "condition": "planning.required", "approvalGate": "批准发布带 blocking edges 的 GitHub tickets" }]
     },
     {
       "id": "implementation",

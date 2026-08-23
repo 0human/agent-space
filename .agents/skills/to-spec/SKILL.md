@@ -6,6 +6,8 @@ disable-model-invocation: true
 
 This skill takes the current conversation context and codebase understanding and produces a spec. Do NOT interview the user — just synthesize what you already know.
 
+在 Development Workflow 中，当前 `Workflow Run ID`、Phase Context、已有 Artifact、Decision Record 和 domain docs 是输入。先提出将要验证的测试 seam，并通过 `QUESTION:` 等待用户确认；不要重新开始 Discovery 访谈。确认后按模板形成规格草案，使用 `APPROVAL_REQUIRED:` 等待用户批准，获批后用 `gh issue create` 发布到当前 Project 的 GitHub repository，添加 `ready-for-agent` label。Issue 正文必须包含 `Run ID: <id>`，并输出 `ARTIFACT: {"type":"specification","name":"specification","status":"ready","location":"https://github.com/..."}`。如果判断为小型工作，可将规格 Artifact 的 `status` 设为 `skip-planning`，并说明跳过 Planning 的原因；规格仍须发布并登记。
+
 The issue tracker and triage label vocabulary should have been provided to you — run `/setup-matt-pocock-skills` if not.
 
 ## Process

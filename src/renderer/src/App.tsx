@@ -313,7 +313,7 @@ function RunBoard({ run, onBack, onPause, onResume, onRetry, onCancel, onAnswer,
   const canPause = run.status === 'running'
   const hasPendingDecision = run.status === 'waiting' && Boolean(run.snapshot.pendingQuestionDetails || run.snapshot.pendingApprovalDetails)
   const canResume = ['paused', 'blocked'].includes(run.status) || (run.status === 'waiting' && !hasPendingDecision)
-  const canRetry = run.status === 'failed'
+  const canRetry = run.status === 'failed' || run.stepExecutions.some((execution) => execution.status === 'skipped')
   const canCancel = ['running', 'paused', 'waiting', 'blocked', 'failed'].includes(run.status)
 
   return (
@@ -348,6 +348,7 @@ function RunBoard({ run, onBack, onPause, onResume, onRetry, onCancel, onAnswer,
                       <div><strong>{step.name}</strong>{execution ? <span>{copy.run.attempt(execution.attempt)}</span> : null}</div>
                       <span className={`run-status is-${execution?.status ?? 'pending'}`}>{execution ? (copy.run.status[execution.status as WorkflowRunStatus] ?? execution.status) : copy.run.pending}</span>
                       {execution?.error ? <p>{execution.error}</p> : null}
+                      {execution?.status === 'skipped' && typeof execution.output?.reason === 'string' ? <p>{execution.output.reason}</p> : null}
                       {execution && run.snapshot.blockedBy?.executionId === execution.id ? <p>{run.snapshot.blockedBy.reason}</p> : null}
                       {isCurrent && (run.snapshot.pendingQuestion || run.snapshot.pendingApproval) ? <p>{run.snapshot.pendingQuestion ?? run.snapshot.pendingApproval}</p> : null}
                     </article>
@@ -380,7 +381,7 @@ function RunBoard({ run, onBack, onPause, onResume, onRetry, onCancel, onAnswer,
               <h4>{copy.run.logsTitle}</h4>{selectedLogs.length > 0 ? <div className="run-detail-logs">{selectedLogs.map((log) => <div key={log.id}><span>{log.type}</span><p>{log.message}</p></div>)}</div> : <p>{copy.run.noLogs}</p>}
               {selectedBlocker ? <><h4>{copy.run.blockerTitle}</h4><p className="run-detail-error">{selectedBlocker.reason}</p></> : null}
               <h4>{copy.run.availableActionsTitle}</h4>
-              {selectedIsCurrent ? <RunActionButtons className="run-detail-actions" canPause={canPause} canResume={canResume} canRetry={canRetry} canCancel={canCancel} onPause={onPause} onResume={onResume} onRetry={onRetry} onCancel={onCancel} /> : <p>{copy.run.noAvailableActions}</p>}
+              {selectedIsCurrent || selectedExecution.status === 'skipped' ? <RunActionButtons className="run-detail-actions" canPause={canPause} canResume={canResume} canRetry={selectedExecution.status === 'skipped' || canRetry} canCancel={canCancel} onPause={onPause} onResume={onResume} onRetry={onRetry} onCancel={onCancel} /> : <p>{copy.run.noAvailableActions}</p>}
               <h4>{copy.run.eventsTitle}</h4><div className="run-detail-events">{run.events.filter((event) => event.data.executionId === selectedExecution.id).map((event) => <span key={event.id}>{event.type}</span>)}</div>
             </div>
           </div> : <p>{copy.run.noSelection}</p>}

@@ -162,6 +162,28 @@ function nextCursor(workflow: WorkflowDefinition, phaseIndex: number, stepIndex:
   return null
 }
 
+const PLANNING_SKIP_REASON = '根据规格结果跳过 Planning。'
+
+function conditionResult(condition: string | undefined, current: StoredRun): { satisfied: boolean; reason: string } {
+  if (!condition) return { satisfied: true, reason: '' }
+  if (condition === 'planning.required') {
+    const specification = [...current.artifacts].reverse().find((artifact) => artifact.type === 'specification' || artifact.name === 'specification')
+    if (!specification) return { satisfied: true, reason: '' }
+    const skipped = ['skip-planning', 'small-work', 'not-required'].includes(specification.status)
+    return skipped ? { satisfied: false, reason: PLANNING_SKIP_REASON } : { satisfied: true, reason: '' }
+  }
+  if (condition === 'specification.ready') {
+    const specification = [...current.artifacts].reverse().find((artifact) => artifact.type === 'specification' || artifact.name === 'specification')
+    const ready = specification?.status === 'ready' || specification?.status === 'available'
+    return ready ? { satisfied: true, reason: '' } : { satisfied: false, reason: '规格尚未就绪，跳过当前 Step。' }
+  }
+  if (condition === 'project.release.enabled') {
+    const release = (current.project as Project & { release?: { enabled?: boolean } }).release
+    return release?.enabled === true ? { satisfied: true, reason: '' } : { satisfied: false, reason: 'Project 未启用 Release，跳过当前 Step。' }
+  }
+  return { satisfied: true, reason: '' }
+}
+
 function statusNextAction(status: WorkflowRunStatus): string {
   const copy = zhCNMain.workflowRun.nextAction
   return copy[status]
@@ -474,6 +496,8 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
 
   async function appendArtifacts(runId: string, executionId: string, artifacts: RuntimeArtifact[], createdAt: string): Promise<void> {
     for (const artifact of artifacts) {
+      const externalWorkflowArtifact = ['specification', 'ticket', 'tickets', 'decision-record'].includes(artifact.type) && /^https:\/\/github\.com\//i.test(artifact.location ?? '')
+      if (externalWorkflowArtifact && artifact.runId !== runId) continue
       const existing = await get<{ id: string }>(db, 'SELECT id FROM artifacts WHERE run_id = ? AND name = ? AND location IS ?', [runId, artifact.name, artifact.location ?? null])
       if (existing) {
         await run(db, 'UPDATE artifacts SET type = ?, step_execution_id = ?, version_hash = ?, status = ? WHERE id = ?', [
@@ -558,6 +582,16 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
         const timestamp = now()
         await appendRuntimeRecords(current, executionId, events, timestamp)
         const result = resolveRuntimeEvents(events)
+        const declaredApproval = current.workflow.phases[current.snapshot.phaseIndex]?.steps[current.snapshot.stepIndex]?.approvalGate
+        const alreadyApproved = current.events.some((event) => event.type === 'approval_approved' && event.data.executionId === executionId)
+        if (result.type === 'completed' && declaredApproval && !alreadyApproved) {
+          await run(db, 'UPDATE step_executions SET status = ?, finished_at = NULL WHERE id = ?', ['waiting', executionId])
+          await updateRunStatus(runId, 'waiting', null, timestamp)
+          const continuation = { phaseIndex: current.snapshot.phaseIndex, stepIndex: current.snapshot.stepIndex, executionId }
+          await updateSnapshot(runId, { ...current.snapshot, pendingQuestion: null, pendingApproval: declaredApproval, pendingQuestionDetails: null, pendingApprovalDetails: { approval: declaredApproval, decision: null, continuation }, blockedBy: null, nextAction: statusNextAction('waiting') })
+          await appendEvent(runId, 'waiting', { approval: declaredApproval }, timestamp)
+          return (await load(runId))!
+        }
         if (result.type === 'completed') await appendArtifacts(runId, executionId, result.artifacts, timestamp)
         else {
           const artifacts = events.filter((event): event is Extract<RuntimeEvent, { type: 'artifact_produced' }> => event.type === 'artifact_produced').map((event) => event.artifact)
@@ -583,7 +617,17 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
 
         await run(db, 'UPDATE step_executions SET status = ?, output_json = ?, finished_at = ? WHERE id = ?', ['completed', result.output ? json(result.output) : null, timestamp, executionId])
         await appendEvent(runId, 'step_completed', { executionId, artifacts: result.artifacts?.map((artifact) => artifact.name) ?? [] }, timestamp)
-        const cursor = nextCursor(current.workflow, current.snapshot.phaseIndex, current.snapshot.stepIndex)
+        const completedRun = (await load(runId))!
+        let cursor = nextCursor(completedRun.workflow, completedRun.snapshot.phaseIndex, completedRun.snapshot.stepIndex)
+        while (cursor) {
+          const step = completedRun.workflow.phases[cursor.phaseIndex]?.steps[cursor.stepIndex]
+          const result = conditionResult(step?.condition, { ...completedRun, snapshot: { ...completedRun.snapshot, ...cursor } })
+          if (result.satisfied) break
+          const skippedExecutionId = await insertExecution(runId, completedRun.workflow, cursor.phaseIndex, cursor.stepIndex, 1, 'skipped', timestamp)
+          await run(db, 'UPDATE step_executions SET output_json = ?, finished_at = ? WHERE id = ?', [json({ reason: result.reason }), timestamp, skippedExecutionId])
+          await appendEvent(runId, 'step_skipped', { executionId: skippedExecutionId, stepId: step?.id ?? null, phaseIndex: cursor.phaseIndex, stepIndex: cursor.stepIndex, reason: result.reason }, timestamp)
+          cursor = nextCursor(completedRun.workflow, cursor.phaseIndex, cursor.stepIndex)
+        }
         if (!cursor) {
           await updateRunStatus(runId, 'completed', null, timestamp)
           await updateSnapshot(runId, { ...current.snapshot, currentStepExecutionId: null, pendingQuestion: null, pendingApproval: null, pendingQuestionDetails: null, pendingApprovalDetails: null, blockedBy: null, nextAction: statusNextAction('completed') })
@@ -591,10 +635,26 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
         } else if (current.status === 'paused') {
           await updateSnapshot(runId, { ...current.snapshot, ...cursor, currentStepExecutionId: null, pendingQuestion: null, pendingApproval: null, pendingQuestionDetails: null, pendingApprovalDetails: null, blockedBy: null, nextAction: statusNextAction('paused') })
         } else {
-          const nextExecutionId = await insertExecution(runId, current.workflow, cursor.phaseIndex, cursor.stepIndex, 1, 'running', timestamp)
+          const nextExecutionId = await insertExecution(runId, completedRun.workflow, cursor.phaseIndex, cursor.stepIndex, 1, 'running', timestamp)
           await updateSnapshot(runId, { ...current.snapshot, ...cursor, currentStepExecutionId: nextExecutionId, pendingQuestion: null, pendingApproval: null, pendingQuestionDetails: null, pendingApprovalDetails: null, blockedBy: null, nextAction: statusNextAction('running') })
           await appendEvent(runId, 'step_started', { executionId: nextExecutionId, phaseIndex: cursor.phaseIndex, stepIndex: cursor.stepIndex, attempt: 1 }, timestamp)
         }
+        return (await load(runId))!
+      }))
+    },
+
+    async requestApproval(runId: string, executionId: string, approval: string): Promise<StoredRun> {
+      return locked(async () => transaction(async () => {
+        const current = await load(runId)
+        if (!current) throw new Error('找不到 Workflow Run。')
+        if (current.snapshot.currentStepExecutionId !== executionId || current.status !== 'running') return current
+        if (current.events.some((event) => event.type === 'approval_approved' && event.data.executionId === executionId)) return current
+        const timestamp = now()
+        await run(db, 'UPDATE step_executions SET status = ?, finished_at = NULL WHERE id = ?', ['waiting', executionId])
+        await updateRunStatus(runId, 'waiting', null, timestamp)
+        const continuation = { phaseIndex: current.snapshot.phaseIndex, stepIndex: current.snapshot.stepIndex, executionId }
+        await updateSnapshot(runId, { ...current.snapshot, pendingQuestion: null, pendingApproval: approval, pendingQuestionDetails: null, pendingApprovalDetails: { approval, decision: null, continuation }, blockedBy: null, nextAction: statusNextAction('waiting') })
+        await appendEvent(runId, 'waiting', { approval }, timestamp)
         return (await load(runId))!
       }))
     },
@@ -636,13 +696,18 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
         const current = await load(runId)
         if (!current) throw new Error('找不到 Workflow Run。')
         const failed = current.stepExecutions.find((execution) => execution.id === current.snapshot.currentStepExecutionId && execution.status === 'failed')
-        if (!failed) return current
+        const skipped = failed ? null : [...current.stepExecutions].reverse().find((execution) => execution.status === 'skipped')
+        const previous = failed ?? skipped
+        if (!previous) return current
         const timestamp = now()
-        const executionId = await insertExecution(runId, current.workflow, current.snapshot.phaseIndex, current.snapshot.stepIndex, failed.attempt + 1, 'running', timestamp)
+        const phaseIndex = current.workflow.phases.findIndex((phase) => phase.id === previous.phaseId)
+        const stepIndex = current.workflow.phases[phaseIndex]?.steps.findIndex((step) => step.id === previous.stepId) ?? -1
+        if (phaseIndex < 0 || stepIndex < 0) return current
+        const executionId = await insertExecution(runId, current.workflow, phaseIndex, stepIndex, previous.attempt + 1, 'running', timestamp)
         await updateRunStatus(runId, 'running', null, timestamp)
-        await updateSnapshot(runId, { ...current.snapshot, currentStepExecutionId: executionId, pendingQuestion: null, pendingApproval: null, pendingQuestionDetails: null, pendingApprovalDetails: null, blockedBy: null, nextAction: statusNextAction('running') })
-        await appendEvent(runId, 'step_retried', { previousExecutionId: failed.id, executionId, attempt: failed.attempt + 1 }, timestamp)
-        await appendEvent(runId, 'step_started', { executionId, phaseIndex: current.snapshot.phaseIndex, stepIndex: current.snapshot.stepIndex, attempt: failed.attempt + 1 }, timestamp)
+        await updateSnapshot(runId, { ...current.snapshot, phaseIndex, stepIndex, currentStepExecutionId: executionId, pendingQuestion: null, pendingApproval: null, pendingQuestionDetails: null, pendingApprovalDetails: null, blockedBy: null, nextAction: statusNextAction('running') })
+        await appendEvent(runId, 'step_retried', { previousExecutionId: previous.id, executionId, attempt: previous.attempt + 1 }, timestamp)
+        await appendEvent(runId, 'step_started', { executionId, phaseIndex, stepIndex, attempt: previous.attempt + 1 }, timestamp)
         return (await load(runId))!
       }))
     },

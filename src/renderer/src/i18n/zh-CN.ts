@@ -118,7 +118,7 @@ export const zhCN = {
     listDescription: '从持久状态恢复进行中、等待用户或 blocked 的 Run。',
     count: (count: number) => `${count} 个 Run`,
     empty: '还没有 Workflow Run。',
-    status: { running: '运行中', paused: '已暂停', waiting: '等待用户', blocked: '已 blocked', failed: 'Step 失败', completed: '已完成', cancelled: '已取消' },
+    status: { running: '运行中', paused: '已暂停', waiting: '等待用户', blocked: '已 blocked', failed: 'Step 失败', completed: '已完成', skipped: '已跳过', cancelled: '已取消' },
     boardEyebrow: 'Workflow Run',
     runBoardLabel: 'Run Board',
     snapshotTitle: '当前 Snapshot',

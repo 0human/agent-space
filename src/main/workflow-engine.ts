@@ -48,6 +48,15 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
       if (!run || run.status !== 'running' || !run.snapshot.currentStepExecutionId) return
       const execution = run.stepExecutions.find((candidate) => candidate.id === run.snapshot.currentStepExecutionId)
       if (!execution) return
+      const step = run.workflow.phases[run.snapshot.phaseIndex]?.steps[run.snapshot.stepIndex]
+      const alreadyApproved = run.events.some((event) => event.type === 'approval_approved' && event.data.executionId === execution.id)
+      if (step?.approvalGate && !alreadyApproved) {
+        await store.requestApproval(runId, execution.id, step.approvalGate)
+        return
+      }
+      const currentPhase = run.workflow.phases[run.snapshot.phaseIndex]?.id
+      const phaseContext = run.phaseContexts.find((candidate) => candidate.phaseId === currentPhase)
+      const contextContent = run.phaseContexts.filter((candidate) => candidate.id !== phaseContext?.id).map((candidate) => `[${candidate.phaseId}]\n${candidate.content}`).join('\n')
       const context: RuntimeExecutionContext = {
         runId,
         project: run.project,
@@ -58,9 +67,13 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
         stepIndex: run.snapshot.stepIndex,
         execution,
         skill: execution.skill,
-        phaseContext: run.phaseContexts.find((candidate) => candidate.phaseId === execution.phaseId) ?? null,
+        phaseContext: phaseContext
+          ? { ...phaseContext, content: [contextContent, phaseContext.content].filter(Boolean).join('\n') }
+          : contextContent
+            ? { id: `${run.id}:phase-context`, runId: run.id, phaseId: currentPhase ?? 'unknown', content: contextContent, updatedAt: run.updatedAt }
+            : null,
         inputArtifacts: run.artifacts,
-        decisionRecords: run.decisionRecords.filter((record) => record.phaseId === execution.phaseId),
+        decisionRecords: run.decisionRecords,
         permissionPolicy: run.project.permissionPolicy ?? { grantedPermissions: [...DEFAULT_PROJECT_PERMISSIONS] },
         events: run.events
       }
@@ -94,6 +107,13 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
       else checks.push(zhCNMain.workflowRun.workflowValid)
       if (!input.idea.trim()) errors.push(zhCNMain.workflowRun.ideaRequired)
       else checks.push(zhCNMain.workflowRun.ideaFilled)
+      for (const phase of input.workflow.definition.phases) {
+        for (const step of phase.steps) {
+          if (!step.skill) continue
+          const manifest = input.workflow.skillManifests.find((candidate) => candidate.name === step.skill?.name && candidate.version === step.skill?.version)
+          if (manifest?.requiredPermissions.includes('network.github')) checks.push(`Data Transfer Notice：External Destination: GitHub；Step ${phase.name}/${step.name} 将发送规格、tickets、blocking edges 和 Workflow Run ID；权限：network.github；断网后从持久化 Step Execution 恢复。`)
+        }
+      }
       const firstStep = input.workflow.definition.phases[0]?.steps[0]
       if (dependencies.runtime.preflight) {
         const runtime = await dependencies.runtime.preflight({

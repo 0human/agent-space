@@ -611,6 +611,7 @@ button:focus-visible {
 .run-status.is-blocked,
 .run-status.is-failed { color: #8c382f; background: #fff0ee; border-color: #e5b8b2; }
 .run-status.is-completed { color: #276544; background: #eaf4ed; border-color: #c5ddcc; }
+.run-status.is-skipped { color: #6b5a2b; background: #fff8df; border-color: #eadba3; }
 .run-status.is-cancelled { color: #68726b; background: #eef1ee; border-color: #d8ded9; }
 
 .run-launcher {

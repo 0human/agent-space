@@ -27,6 +27,7 @@ interface CodexRuntimeDependencies {
 const QUESTION_PREFIX = 'QUESTION:'
 const APPROVAL_PREFIX = 'APPROVAL_REQUIRED:'
 const ARTIFACT_PREFIX = 'ARTIFACT:'
+const VERIFICATION_ARTIFACT_TYPES = ['check-result', 'test-result', 'review-report', 'commit'] as const
 
 export function sanitizeSensitiveText(value: string): string {
   return value
@@ -62,6 +63,10 @@ function isPublishedWorkflowArtifact(artifact: RuntimeArtifact): boolean {
   return ['specification', 'ticket', 'tickets', 'decision-record'].includes(artifact.type) && /^https:\/\/github\.com\//i.test(artifact.location ?? '')
 }
 
+function isVerificationArtifact(artifact: RuntimeArtifact): boolean {
+  return VERIFICATION_ARTIFACT_TYPES.includes(artifact.type as typeof VERIFICATION_ARTIFACT_TYPES[number])
+}
+
 function isArtifactInsideWorkspace(artifact: RuntimeArtifact, workspacePath: string): boolean {
   if (isPublishedWorkflowArtifact(artifact)) return true
   if (!artifact.location) return false
@@ -69,7 +74,8 @@ function isArtifactInsideWorkspace(artifact: RuntimeArtifact, workspacePath: str
   const location = resolve(artifact.location)
   const relativeLocation = relative(workspace, location).replaceAll('\\', '/')
   if (relativeLocation.startsWith('../') || relativeLocation === '..' || relativeLocation.startsWith('/')) return false
-  return relativeLocation === 'CONTEXT.md' || (relativeLocation.startsWith('docs/adr/') && relativeLocation.endsWith('.md'))
+  if (relativeLocation === 'CONTEXT.md' || (relativeLocation.startsWith('docs/adr/') && relativeLocation.endsWith('.md'))) return true
+  return isVerificationArtifact(artifact) && !relativeLocation.startsWith('../')
 }
 
 function parseAgentMessage(text: string, sessionId?: string): RuntimeEvent {
@@ -78,7 +84,7 @@ function parseAgentMessage(text: string, sessionId?: string): RuntimeEvent {
   if (text.startsWith(ARTIFACT_PREFIX)) {
     try {
       const artifact = JSON.parse(text.slice(ARTIFACT_PREFIX.length).trim()) as RuntimeArtifact
-      if (artifact && typeof artifact === 'object' && typeof artifact.name === 'string' && typeof artifact.type === 'string' && (isDiscoveryArtifact(artifact) || isPublishedWorkflowArtifact(artifact))) {
+      if (artifact && typeof artifact === 'object' && typeof artifact.name === 'string' && typeof artifact.type === 'string' && (isDiscoveryArtifact(artifact) || isPublishedWorkflowArtifact(artifact) || isVerificationArtifact(artifact))) {
         return { type: 'artifact_produced', artifact, ...(sessionId ? { sessionId } : {}) }
       }
     } catch {
@@ -153,7 +159,7 @@ function promptFor(context: RuntimeExecutionContext, skillInstructions: string):
     'Fixed Skill instructions:',
     skillInstructions,
     '需要用户回答时，最后一条消息必须以 QUESTION: 开头；需要审批时以 APPROVAL_REQUIRED: 开头。',
-    '确认写入 CONTEXT.md 或 docs/adr/*.md，或已获批准发布 GitHub spec/ticket 后，输出 ARTIFACT: 后跟 JSON 对象。GitHub URL 仅允许 https://github.com/；普通聊天、日志和临时文件不要标记为 Artifact。'
+    '确认写入 CONTEXT.md 或 docs/adr/*.md，或已获批准发布 GitHub spec/ticket 后，输出 ARTIFACT: 后跟 JSON 对象。GitHub URL 仅允许 https://github.com/；普通聊天、日志和临时文件不要标记为 Artifact。implement 和 code-review 完成时必须将 typecheck、相关测试、全量测试和 review 结果写入 Workspace，并分别输出 type 为 check-result、test-result、review-report 的 Artifact。code-review 发现问题时必须先在当前 Workspace 修复，再重新运行相关检查和 review，直到结果通过后才报告 completed。'
   ].join('\n')
 }
 

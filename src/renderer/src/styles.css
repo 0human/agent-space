@@ -836,11 +836,35 @@ button:focus-visible {
   overflow-wrap: anywhere;
 }
 
+.run-delivery,
 .run-artifacts,
 .run-events {
   margin-top: 30px;
   padding-top: 24px;
   border-top: 1px solid #d8ddd8;
+}
+
+.run-delivery-metadata {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+  margin: 0;
+}
+
+.run-delivery-metadata div {
+  display: grid;
+  gap: 4px;
+}
+
+.run-delivery-metadata dt {
+  color: #778178;
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.run-delivery-metadata dd {
+  margin: 0;
+  overflow-wrap: anywhere;
 }
 
 .run-artifacts > p {

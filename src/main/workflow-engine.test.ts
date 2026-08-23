@@ -125,6 +125,60 @@ describe('WorkflowEngine public API', () => {
     })
   })
 
+  it('runs Automatic Review before committing the isolated implementation workspace', async () => {
+    directory = await mkdtemp(join(tmpdir(), 'agent-space-run-'))
+    const runtime = new FakeRuntime()
+    const commitAfterReview = vi.fn().mockResolvedValue({
+      commit: 'commit-10',
+      artifact: { type: 'commit', name: 'commit', runId: 'run-10', location: '/work/demo-agent-space/run-10@commit-10', versionHash: 'commit-10', status: 'available' }
+    })
+    engine = createWorkflowEngine({ databasePath: join(directory, 'runs.sqlite'), runtime, runWorkspaceManager: { prepare: vi.fn().mockResolvedValue({ workspacePath: '/work/demo-agent-space/run-10', baseCommit: 'abc123', branch: 'main/agent-space/run-10' }) }, gitDeliveryManager: { commitAfterReview } })
+    const reviewWorkflow: WorkflowView = {
+      ...workflow,
+      definition: { ...workflow.definition, phases: [{ ...workflow.definition.phases[0], steps: [{ id: 'review', name: '自动 Review', kind: 'skill', skill: { name: 'code-review', version: '1.0.0' }, artifacts: ['review-report'] }] }] }
+    }
+
+    const run = await engine.startRun({ project, workflow: reviewWorkflow, idea: 'Implement issue #10' })
+    await vi.waitFor(() => expect(runtime.calls).toHaveLength(1))
+    runtime.finish([{ type: 'status_changed', status: 'completed' }, { type: 'artifact_produced', artifact: { type: 'review-report', name: 'review-report', location: '/work/demo-agent-space/run-10/review.md' } }])
+    const completed = await engine.waitForIdle(run.id)
+
+    expect(commitAfterReview).toHaveBeenCalledWith(expect.objectContaining({ workspacePath: '/work/demo-agent-space/run-10', runId: run.id, baseCommit: 'abc123' }))
+    expect(completed.status).toBe('completed')
+    expect(completed.artifacts).toEqual(expect.arrayContaining([expect.objectContaining({ type: 'commit', versionHash: 'commit-10', stepExecutionId: run.stepExecutions[0].id })]))
+  })
+
+  it('fails the Review Step when local Git delivery cannot commit', async () => {
+    directory = await mkdtemp(join(tmpdir(), 'agent-space-run-'))
+    const runtime = new FakeRuntime()
+    engine = createWorkflowEngine({
+      databasePath: join(directory, 'runs.sqlite'),
+      runtime,
+      gitDeliveryManager: { commitAfterReview: vi.fn().mockRejectedValue(new Error('Git commit 被拒绝。')) }
+    })
+    const reviewWorkflow: WorkflowView = {
+      ...workflow,
+      definition: { ...workflow.definition, phases: [{ ...workflow.definition.phases[0], steps: [{ id: 'review', name: '自动 Review', kind: 'skill', skill: { name: 'code-review', version: '1.0.0' } }] }] }
+    }
+    const run = await engine.startRun({ project, workflow: reviewWorkflow, idea: 'Review issue #10' })
+    await vi.waitFor(() => expect(runtime.calls).toHaveLength(1))
+    runtime.finish([{ type: 'status_changed', status: 'completed' }])
+    await expect(engine.waitForIdle(run.id)).resolves.toMatchObject({ status: 'failed', error: 'Git commit 被拒绝。', snapshot: { nextAction: '当前 Step 失败，可重试。' } })
+  })
+
+  it('ends local Git delivery when the Project has no remote', async () => {
+    directory = await mkdtemp(join(tmpdir(), 'agent-space-run-'))
+    const runtime = new FakeRuntime()
+    const commitAfterReview = vi.fn().mockResolvedValue({ commit: 'commit-local', artifact: { type: 'commit', name: 'commit', runId: 'run-local', location: '/work/demo@commit-local', versionHash: 'commit-local', status: 'available' } })
+    engine = createWorkflowEngine({ databasePath: join(directory, 'runs.sqlite'), runtime, gitDeliveryManager: { commitAfterReview } })
+    const localWorkflow: WorkflowView = { ...workflow, definition: { ...workflow.definition, phases: [{ ...workflow.definition.phases[0], steps: [{ id: 'review', name: '自动 Review', kind: 'skill', skill: { name: 'code-review', version: '1.0.0' } }] }, { id: 'delivery', name: '创建 PR', goal: 'delivery', steps: [{ id: 'delivery', name: '创建 PR', kind: 'tool', adapter: 'github.pull-request', condition: 'project.remote.present' }] }] } }
+    const run = await engine.startRun({ project: { ...project, remote: null }, workflow: localWorkflow, idea: 'Local delivery #10' })
+    await vi.waitFor(() => expect(runtime.calls).toHaveLength(1))
+    runtime.finish([{ type: 'status_changed', status: 'completed' }])
+    await expect(engine.waitForIdle(run.id)).resolves.toMatchObject({ status: 'completed', artifacts: [expect.objectContaining({ type: 'commit' })] })
+    expect(runtime.calls).toHaveLength(1)
+  })
+
   it('shows a GitHub Data Transfer Notice when a later Skill publishes external artifacts', async () => {
     directory = await mkdtemp(join(tmpdir(), 'agent-space-run-'))
     engine = createWorkflowEngine({ databasePath: join(directory, 'runs.sqlite'), runtime: new FakeRuntime() })

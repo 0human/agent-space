@@ -181,6 +181,9 @@ function conditionResult(condition: string | undefined, current: StoredRun): { s
     const release = (current.project as Project & { release?: { enabled?: boolean } }).release
     return release?.enabled === true ? { satisfied: true, reason: '' } : { satisfied: false, reason: 'Project 未启用 Release，跳过当前 Step。' }
   }
+  if (condition === 'project.remote.present') {
+    return current.project.remote ? { satisfied: true, reason: '' } : { satisfied: false, reason: 'Project 没有 remote，已完成本地 Git delivery。' }
+  }
   return { satisfied: true, reason: '' }
 }
 
@@ -419,6 +422,7 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
       id: row.id,
       projectId: row.project_id,
       workspacePath: row.workspace_path,
+      remote: parseJson<Project>(row.project_json).remote,
       idea: row.idea,
       workflowId: row.workflow_id,
       workflowVersion: row.workflow_version,
@@ -509,6 +513,24 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
         createId(), runId, executionId, artifact.type, artifact.name, artifact.location ?? null, artifact.versionHash ?? null, artifact.status ?? 'available', createdAt
       ])
     }
+  }
+
+  async function registerArtifact(runId: string, executionId: string, artifact: RuntimeArtifact): Promise<void> {
+    await locked(async () => transaction(async () => {
+      await appendArtifacts(runId, executionId, [artifact], now())
+    }))
+  }
+
+  async function markDeliveryFailed(runId: string, executionId: string, error: string): Promise<void> {
+    await locked(async () => transaction(async () => {
+      const current = await load(runId)
+      if (!current) throw new Error('找不到 Workflow Run。')
+      const timestamp = now()
+      await run(db, 'UPDATE step_executions SET status = ?, error = ?, finished_at = ? WHERE id = ?', ['failed', error, timestamp, executionId])
+      await updateRunStatus(runId, 'failed', error, timestamp)
+      await updateSnapshot(runId, { ...current.snapshot, currentStepExecutionId: executionId, pendingQuestion: null, pendingApproval: null, pendingQuestionDetails: null, pendingApprovalDetails: null, blockedBy: null, nextAction: statusNextAction('failed') })
+      await appendEvent(runId, 'failed', { executionId, error }, timestamp)
+    }))
   }
 
   async function appendDecisionRecord(current: StoredRun, executionId: string, source: DecisionRecord['source'], question: string, answer: string, continuation: DecisionRecord['continuation'], createdAt: string): Promise<void> {
@@ -641,6 +663,14 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
         }
         return (await load(runId))!
       }))
+    },
+
+    async registerArtifact(runId: string, executionId: string, artifact: RuntimeArtifact): Promise<void> {
+      await registerArtifact(runId, executionId, artifact)
+    },
+
+    async markDeliveryFailed(runId: string, executionId: string, error: string): Promise<void> {
+      await markDeliveryFailed(runId, executionId, error)
     },
 
     async requestApproval(runId: string, executionId: string, approval: string): Promise<StoredRun> {

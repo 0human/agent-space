@@ -275,6 +275,31 @@ button:focus-visible {
   padding: 46px 0;
 }
 
+.github-entry {
+  display: grid;
+  gap: 0.55rem;
+  max-width: 38rem;
+  margin-top: 1.25rem;
+}
+
+.github-entry input {
+  width: 100%;
+  border: 1px solid #ccd1cc;
+  border-radius: 6px;
+  padding: 0.7rem 0.8rem;
+  font: inherit;
+  background: #ffffff;
+}
+
+.transfer-notice {
+  display: grid;
+  gap: 0.35rem;
+  margin: 1rem 0;
+  padding: 0.85rem 1rem;
+  border-left: 3px solid #39755a;
+  background: #eef4ef;
+}
+
 .project-entry h1 {
   margin: 34px 0 0;
   color: #171b18;

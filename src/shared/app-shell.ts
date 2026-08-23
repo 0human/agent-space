@@ -1,4 +1,4 @@
-import type { OpenProjectResult, Project, ProjectImportResult } from './project'
+import type { GitHubProjectCloneResponse, OpenProjectResult, Project, ProjectImportResult } from './project'
 import type { WorkflowView } from './workflow'
 import type { WorkflowPreflightResult, WorkflowRun, WorkflowRunActionResult } from './workflow-run'
 
@@ -11,6 +11,7 @@ export const APP_SHELL_CHANNELS = {
   getRuntimeInfo: 'app-shell:get-runtime-info',
   listProjects: 'project:list',
   importProject: 'project:import',
+  cloneGitHubProject: 'project:clone-github',
   openProjectInIde: 'project:open-in-ide',
   getWorkflow: 'workflow:get',
   copyWorkflow: 'workflow:copy',
@@ -33,6 +34,7 @@ export interface AppShellApi {
   getRuntimeInfo: () => Promise<RuntimeInfo>
   listProjects: () => Promise<Project[]>
   importProject: () => Promise<ProjectImportResult | null>
+  cloneGitHubProject: (repositoryUrl: string) => Promise<GitHubProjectCloneResponse | null>
   openProjectInIde: (projectId: string) => Promise<OpenProjectResult>
   getWorkflow: (projectId: string) => Promise<WorkflowView>
   copyWorkflow: (projectId: string) => Promise<WorkflowView | null>

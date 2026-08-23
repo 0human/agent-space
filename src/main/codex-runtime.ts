@@ -28,6 +28,17 @@ const QUESTION_PREFIX = 'QUESTION:'
 const APPROVAL_PREFIX = 'APPROVAL_REQUIRED:'
 const ARTIFACT_PREFIX = 'ARTIFACT:'
 
+export function sanitizeSensitiveText(value: string): string {
+  return value
+    .replace(/(https?:\/\/)([^/@\s]+)@/gi, '$1<redacted>@')
+    .replace(/(bearer\s+)[A-Za-z0-9._~+\/-]+/gi, '$1<redacted>')
+    .replace(/((?:token|secret|password|authorization)[=:]\s*)[^\s,;]+/gi, '$1<redacted>')
+}
+
+function isNetworkFailure(value: string): boolean {
+  return /(?:network|offline|enotfound|eai_again|timeout|timed out|connection reset|connection refused|could not resolve)/i.test(value)
+}
+
 function parseJsonLine(line: string): Record<string, unknown> | null {
   try {
     const value: unknown = JSON.parse(line)
@@ -163,6 +174,7 @@ export function createCodexRuntimeAdapter(dependencies: CodexRuntimeDependencies
   function enrichEvents(events: RuntimeEvent[], context: RuntimeExecutionContext): RuntimeEvent[] {
     return events.filter((event) => event.type !== 'artifact_produced' || isArtifactInsideWorkspace(event.artifact, context.workspace.path)).map((event) => ({
       ...event,
+      ...(event.type === 'error' ? { error: sanitizeSensitiveText(event.error) } : event.type === 'text_delta' ? { text: sanitizeSensitiveText(event.text) } : {}),
       provider: 'codex',
       source: 'codex exec --json',
       permissionPolicy: context.permissionPolicy
@@ -214,10 +226,15 @@ export function createCodexRuntimeAdapter(dependencies: CodexRuntimeDependencies
       try {
         result = await runProcess(command, args, { cwd: context.workspace.path })
       } catch (error) {
-        return [{ type: 'error', error: error instanceof Error ? error.message : String(error) }]
+        const message = sanitizeSensitiveText(error instanceof Error ? error.message : String(error))
+        return isNetworkFailure(message) ? [{ type: 'status_changed', status: 'blocked', source: 'codex exec --json' }] : [{ type: 'error', error: message }]
       }
       const parsed = parseCodexJsonl(result.stdout)
-      if (result.code !== 0) return [{ type: 'error', error: result.stderr.trim() || `Codex Runtime 退出码 ${String(result.code)}。`, provider: 'codex', source: 'codex exec --json', permissionPolicy: context.permissionPolicy }]
+      if (result.code !== 0) {
+        const message = sanitizeSensitiveText(result.stderr.trim() || `Codex Runtime 退出码 ${String(result.code)}。`)
+        if (isNetworkFailure(message)) return [{ type: 'status_changed', status: 'blocked', provider: 'codex', source: 'codex exec --json', permissionPolicy: context.permissionPolicy }]
+        return [{ type: 'error', error: message, provider: 'codex', source: 'codex exec --json', permissionPolicy: context.permissionPolicy }]
+      }
       const events = enrichEvents(parsed.events, context)
       return events.length > 0 ? events : [{ type: 'error', error: 'Codex Runtime 未返回有效事件。', provider: 'codex', source: 'codex exec --json', permissionPolicy: context.permissionPolicy }]
     }

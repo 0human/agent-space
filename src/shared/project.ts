@@ -20,6 +20,11 @@ export interface PermissionPolicy {
   grantedPermissions: string[]
 }
 
+export interface ProjectDeliveryPolicy {
+  requiredChecks?: string[]
+  requiredApprovals?: number
+}
+
 export const DEFAULT_PROJECT_PERMISSIONS = [
   'workspace.read',
   'workspace.write',
@@ -33,6 +38,7 @@ export interface Project extends WorkspaceState {
   workspacePath: string
   updatedAt: string
   permissionPolicy?: PermissionPolicy
+  deliveryPolicy?: ProjectDeliveryPolicy
 }
 
 export interface ProjectImportResult {

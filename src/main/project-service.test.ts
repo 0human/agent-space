@@ -51,6 +51,36 @@ describe('Workspace inspection', () => {
     expect(cloneGitHub).not.toHaveBeenCalled()
   })
 
+  it('accepts an SSH alias that resolves to GitHub', async () => {
+    let stored = ''
+    let cloned = false
+    const cloneGitHub = vi.fn(async () => { cloned = true })
+    const service = createProjectService({
+      readFile: async () => stored || (() => { throw Object.assign(new Error('missing'), { code: 'ENOENT' }) })(),
+      writeFile: async (_path, data) => { stored = data },
+      mkdir: async () => undefined,
+      createId: () => 'github-alias-project-1',
+      resolveSshHost: vi.fn().mockResolvedValue('github.com'),
+      cloneGitHub,
+      execGit: async (_path, args) => {
+        const command = args.join(' ')
+        if (command === 'rev-parse --is-inside-work-tree') {
+          if (!cloned) throw new Error('not yet cloned')
+          return 'true\n'
+        }
+        if (command === 'remote') return 'origin\n'
+        if (command === 'config --get remote.origin.url') return 'git@0humanbuilder:example/demo.git\n'
+        if (command === 'branch --show-current') return 'main\n'
+        if (command === 'rev-parse HEAD') return 'abc123\n'
+        if (command === 'status --porcelain=v1 --untracked-files=all') return ''
+        return ''
+      }
+    })
+
+    await expect(service.cloneGitHub('/data/projects.json', 'git@0humanbuilder:example/demo.git', '/work/demo')).resolves.toMatchObject({ remote: 'git@0humanbuilder:example/demo.git' })
+    expect(cloneGitHub).toHaveBeenCalledWith('git@0humanbuilder:example/demo.git', resolve('/work/demo'))
+  })
+
   it('fetches an existing partial clone to recover without repeating clone', async () => {
     let recovered = false
     const fetchGitHub = vi.fn(async () => { recovered = true })

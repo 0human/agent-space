@@ -245,6 +245,7 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
         workflow_version TEXT NOT NULL,
         base_commit TEXT,
         branch TEXT,
+        pull_request_json TEXT,
         workflow_json TEXT NOT NULL,
         project_json TEXT NOT NULL,
         status TEXT NOT NULL,
@@ -257,6 +258,7 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
     const existingRunColumns = new Set(runColumns.map((column) => column.name))
     if (!existingRunColumns.has('base_commit')) await run(db, 'ALTER TABLE runs ADD COLUMN base_commit TEXT')
     if (!existingRunColumns.has('branch')) await run(db, 'ALTER TABLE runs ADD COLUMN branch TEXT')
+    if (!existingRunColumns.has('pull_request_json')) await run(db, 'ALTER TABLE runs ADD COLUMN pull_request_json TEXT')
     await run(db, `
       CREATE TABLE IF NOT EXISTS run_snapshots (
         run_id TEXT PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE,
@@ -390,7 +392,7 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
   async function load(id: string): Promise<StoredRun | null> {
     const row = await get<{
       id: string; project_id: string; workspace_path: string; idea: string; workflow_id: string; workflow_version: string;
-      base_commit: string | null; branch: string | null;
+      base_commit: string | null; branch: string | null; pull_request_json: string | null;
       workflow_json: string; project_json: string; status: WorkflowRunStatus; error: string | null; created_at: string; updated_at: string
     }>(db, 'SELECT * FROM runs WHERE id = ?', [id])
     if (!row) return null
@@ -418,17 +420,19 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
     const decisionRecords = await all<{
       id: string; run_id: string; phase_id: string; step_id: string; execution_id: string; source: DecisionRecord['source']; question: string; answer: string; continuation_json: string; created_at: string
     }>(db, 'SELECT * FROM decision_records WHERE run_id = ? ORDER BY rowid', [id])
+    const project = parseJson<Project>(row.project_json)
     const workflow = parseJson<WorkflowDefinition>(row.workflow_json)
     return {
       id: row.id,
       projectId: row.project_id,
       workspacePath: row.workspace_path,
-      remote: parseJson<Project>(row.project_json).remote,
+      remote: project.remote,
       idea: row.idea,
       workflowId: row.workflow_id,
       workflowVersion: row.workflow_version,
       baseCommit: row.base_commit,
       branch: row.branch,
+      pullRequest: row.pull_request_json ? parseJson<WorkflowRun['pullRequest']>(row.pull_request_json) ?? null : null,
       definition: workflow,
       status: row.status,
       error: row.error,
@@ -463,7 +467,7 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
       })),
       createdAt: row.created_at,
       updatedAt: row.updated_at,
-      project: parseJson<Project>(row.project_json),
+      project,
       workflow
     }
   }
@@ -569,8 +573,8 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
           ? await dependencies.runWorkspaceManager.prepare(project, id)
           : { workspacePath: project.workspacePath, baseCommit: null, branch: null }
         const runProject = { ...project, workspacePath: workspace.workspacePath }
-        await run(db, `INSERT INTO runs (id, project_id, workspace_path, idea, workflow_id, workflow_version, base_commit, branch, workflow_json, project_json, status, error, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
-          id, project.id, workspace.workspacePath, idea, workflow.id, workflow.version, workspace.baseCommit, workspace.branch, json(workflow), json(runProject), 'running', null, createdAt, createdAt
+        await run(db, `INSERT INTO runs (id, project_id, workspace_path, idea, workflow_id, workflow_version, base_commit, branch, pull_request_json, workflow_json, project_json, status, error, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
+          id, project.id, workspace.workspacePath, idea, workflow.id, workflow.version, workspace.baseCommit, workspace.branch, null, json(workflow), json(runProject), 'running', null, createdAt, createdAt
         ])
         const executionId = await insertExecution(id, workflow, 0, 0, 1, 'running', createdAt, { idea })
         const snapshot: RunSnapshot = { phaseIndex: 0, stepIndex: 0, currentStepExecutionId: executionId, pendingQuestion: null, pendingApproval: null, pendingQuestionDetails: null, pendingApprovalDetails: null, blockedBy: null, nextAction: statusNextAction('running') }
@@ -607,6 +611,7 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
         const result = resolveRuntimeEvents(events)
         const declaredApproval = current.workflow.phases[current.snapshot.phaseIndex]?.steps[current.snapshot.stepIndex]?.approvalGate
         const alreadyApproved = current.events.some((event) => event.type === 'approval_approved' && event.data.executionId === executionId)
+        if (result.type === 'completed') await appendArtifacts(runId, executionId, result.artifacts, timestamp)
         if (result.type === 'completed' && declaredApproval && !alreadyApproved) {
           await run(db, 'UPDATE step_executions SET status = ?, finished_at = NULL WHERE id = ?', ['waiting', executionId])
           await updateRunStatus(runId, 'waiting', null, timestamp)
@@ -615,8 +620,7 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
           await appendEvent(runId, 'waiting', { approval: declaredApproval }, timestamp)
           return (await load(runId))!
         }
-        if (result.type === 'completed') await appendArtifacts(runId, executionId, result.artifacts, timestamp)
-        else {
+        if (result.type !== 'completed') {
           const artifacts = events.filter((event): event is Extract<RuntimeEvent, { type: 'artifact_produced' }> => event.type === 'artifact_produced').map((event) => event.artifact)
           await appendArtifacts(runId, executionId, artifacts, timestamp)
         }
@@ -668,6 +672,21 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
 
     async registerArtifact(runId: string, executionId: string, artifact: RuntimeArtifact): Promise<void> {
       await registerArtifact(runId, executionId, artifact)
+    },
+
+    async setPullRequest(runId: string, pullRequest: WorkflowRun['pullRequest']): Promise<StoredRun> {
+      return locked(async () => transaction(async () => {
+        const current = await load(runId)
+        if (!current) throw new Error('找不到 Workflow Run。')
+        const timestamp = now()
+        const comparable = (state: WorkflowRun['pullRequest']): string | null => state ? json({ ...state, updatedAt: null }) : null
+        const previous = comparable(current.pullRequest)
+        const next = comparable(pullRequest)
+        const persisted = pullRequest ? json(pullRequest) : null
+        await run(db, 'UPDATE runs SET pull_request_json = ?, updated_at = ? WHERE id = ?', [persisted, timestamp, runId])
+        if (previous !== next) await appendEvent(runId, 'pull_request_updated', pullRequest ? { number: pullRequest.number, url: pullRequest.url, canMerge: pullRequest.gate.canMerge } : {}, timestamp)
+        return (await load(runId))!
+      }))
     },
 
     async markDeliveryFailed(runId: string, executionId: string, error: string): Promise<void> {

@@ -72,6 +72,44 @@ export interface ArtifactIndex {
   createdAt: string
 }
 
+export interface PullRequestCheck {
+  name: string
+  status: string
+  conclusion: string | null
+  detailsUrl?: string | null
+}
+
+export interface PullRequestReview {
+  author: string
+  state: string
+  submittedAt?: string | null
+}
+
+export interface PullRequestGate {
+  checksSatisfied: boolean
+  reviewsSatisfied: boolean
+  mergeabilitySatisfied: boolean
+  canMerge: boolean
+  reason: string | null
+}
+
+export interface PullRequestState {
+  number: number
+  url: string
+  title: string
+  headBranch: string
+  baseBranch: string
+  headCommit: string
+  checks: PullRequestCheck[]
+  reviews: PullRequestReview[]
+  mergeable: string
+  merged: boolean
+  mergedAt: string | null
+  draft: boolean
+  gate: PullRequestGate
+  updatedAt: string | null
+}
+
 export interface RunSnapshot {
   phaseIndex: number
   stepIndex: number
@@ -116,6 +154,7 @@ export interface WorkflowRun {
   workflowVersion: string
   baseCommit: string | null
   branch: string | null
+  pullRequest?: PullRequestState | null
   definition: WorkflowDefinition
   status: WorkflowRunStatus
   error: string | null

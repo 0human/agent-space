@@ -875,6 +875,12 @@ button:focus-visible {
   overflow-wrap: anywhere;
 }
 
+.delivery-gate { margin: 14px 0 0; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.delivery-gate.is-ready { color: #276544; }
+.delivery-gate.is-blocked { color: #8c382f; }
+.delivery-transfer-notice { margin: 8px 0 0; color: #68726b; font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
+.run-gate-reason { color: #8c382f !important; }
+
 .run-artifacts > p {
   margin: 12px 0 0;
   color: #778178;

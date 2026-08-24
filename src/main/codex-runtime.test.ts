@@ -1,6 +1,7 @@
 // @vitest-environment node
 
 import { describe, expect, it } from 'vitest'
+import { spawnSync } from 'node:child_process'
 
 import { createCodexRuntimeAdapter, parseCodexJsonl } from './codex-runtime'
 
@@ -141,6 +142,110 @@ describe('Codex Runtime Adapter recorded contract', () => {
       execution: { id: 'execution-1', runtimeSessionId: null } as never, skill: null,
       phaseContext: null, inputArtifacts: [], decisionRecords: [], permissionPolicy: { grantedPermissions: ['workspace.read'] }, events: []
     })).resolves.toEqual([expect.objectContaining({ type: 'status_changed', status: 'completed' })])
+  })
+
+  it('blocks force pushes and direct default-branch updates reported by the Runtime', async () => {
+    const adapter = createCodexRuntimeAdapter({
+      runProcess: async () => ({ code: 0, stderr: '', stdout: [
+        JSON.stringify({ type: 'item.completed', item: { type: 'command_execution', command: 'git push --force origin feature/run-1', status: 'completed' } }),
+        '{"type":"turn.completed"}'
+      ].join('\n') })
+    })
+    await expect(adapter.execute({
+      runId: 'run-1', project: { workspacePath: '/work/demo', defaultBranch: 'main' } as never, workspace: { path: '/work/demo' }, idea: 'Protect Git delivery',
+      workflow: { phases: [] } as never, phaseIndex: 0, stepIndex: 0,
+      execution: { id: 'execution-1', runtimeSessionId: null } as never, skill: null,
+      phaseContext: null, inputArtifacts: [], decisionRecords: [], permissionPolicy: { grantedPermissions: ['workspace.read', 'workspace.write'] }, events: []
+    })).resolves.toEqual([expect.objectContaining({ type: 'error', error: 'Permission Policy 阻止 force push。' })])
+  })
+
+  it('blocks default-branch pushes reported with Git global options', async () => {
+    const adapter = createCodexRuntimeAdapter({
+      runProcess: async () => ({ code: 0, stderr: '', stdout: [
+        JSON.stringify({ type: 'item.completed', item: { type: 'command_execution', command: 'git -C /work/demo push origin HEAD:refs/heads/main', status: 'completed' } }),
+        '{"type":"turn.completed"}'
+      ].join('\n') })
+    })
+    await expect(adapter.execute({
+      runId: 'run-1', project: { workspacePath: '/work/demo', defaultBranch: 'main' } as never, workspace: { path: '/work/demo' }, idea: 'Protect Git delivery',
+      workflow: { phases: [] } as never, phaseIndex: 0, stepIndex: 0,
+      execution: { id: 'execution-1', runtimeSessionId: null } as never, skill: null,
+      phaseContext: null, inputArtifacts: [], decisionRecords: [], permissionPolicy: { grantedPermissions: ['workspace.read', 'workspace.write'] }, events: []
+    })).resolves.toEqual([expect.objectContaining({ type: 'error', error: 'Permission Policy 阻止直接更新默认分支。' })])
+  })
+
+  it('blocks GitHub Pull Request mutations reported through an absolute gh path', async () => {
+    const adapter = createCodexRuntimeAdapter({
+      runProcess: async () => ({ code: 0, stderr: '', stdout: [
+        JSON.stringify({ type: 'item.completed', item: { type: 'command_execution', command: '/usr/bin/gh pr merge 42 --repo example/demo', status: 'completed' } }),
+        '{"type":"turn.completed"}'
+      ].join('\n') })
+    })
+    await expect(adapter.execute({
+      runId: 'run-1', project: { workspacePath: '/work/demo', defaultBranch: 'main' } as never, workspace: { path: '/work/demo' }, idea: 'Protect Merge Gate',
+      workflow: { phases: [] } as never, phaseIndex: 0, stepIndex: 0,
+      execution: { id: 'execution-1', runtimeSessionId: null } as never, skill: null,
+      phaseContext: null, inputArtifacts: [], decisionRecords: [], permissionPolicy: { grantedPermissions: ['workspace.read', 'workspace.write'] }, events: []
+    })).resolves.toEqual([expect.objectContaining({ type: 'error', error: 'Permission Policy 阻止绕过 Merge Gate 的 GitHub Pull Request 操作。' })])
+  })
+
+  it('blocks GitHub Pull Request mutations with gh global options before the subcommand', async () => {
+    const adapter = createCodexRuntimeAdapter({
+      runProcess: async () => ({ code: 0, stderr: '', stdout: [
+        JSON.stringify({ type: 'item.completed', item: { type: 'command_execution', command: 'gh --repo example/demo pr merge 42', status: 'completed' } }),
+        '{"type":"turn.completed"}'
+      ].join('\n') })
+    })
+    await expect(adapter.execute({
+      runId: 'run-1', project: { workspacePath: '/work/demo', defaultBranch: 'main' } as never, workspace: { path: '/work/demo' }, idea: 'Protect Merge Gate',
+      workflow: { phases: [] } as never, phaseIndex: 0, stepIndex: 0,
+      execution: { id: 'execution-1', runtimeSessionId: null } as never, skill: null,
+      phaseContext: null, inputArtifacts: [], decisionRecords: [], permissionPolicy: { grantedPermissions: ['workspace.read', 'workspace.write'] }, events: []
+    })).resolves.toEqual([expect.objectContaining({ type: 'error', error: 'Permission Policy 阻止绕过 Merge Gate 的 GitHub Pull Request 操作。' })])
+  })
+
+  it.skipIf(process.platform === 'win32')('rejects forbidden Git pushes before invoking the real Git executable', async () => {
+    const attempts: Array<{ status: number | null; stderr: string }> = []
+    const adapter = createCodexRuntimeAdapter({
+      runProcess: async (_command, _args, options) => {
+        for (const gitArgs of [['push', '--force', 'origin', 'feature/run-1'], ['push', 'origin', 'main']]) {
+          const result = spawnSync('git', gitArgs, { cwd: process.cwd(), env: options.env, encoding: 'utf8' })
+          attempts.push({ status: result.status, stderr: result.stderr })
+        }
+        return { code: 0, stderr: '', stdout: '{"type":"turn.completed"}' }
+      }
+    })
+
+    await adapter.execute({
+      runId: 'run-1', project: { workspacePath: process.cwd(), defaultBranch: 'main' } as never, workspace: { path: process.cwd() }, idea: 'Protect Git delivery',
+      workflow: { phases: [] } as never, phaseIndex: 0, stepIndex: 0,
+      execution: { id: 'execution-1', runtimeSessionId: null } as never, skill: null,
+      phaseContext: null, inputArtifacts: [], decisionRecords: [], permissionPolicy: { grantedPermissions: ['workspace.read', 'workspace.write'] }, events: []
+    })
+
+    expect(attempts).toHaveLength(2)
+    expect(attempts.every((attempt) => attempt.status === 126 && attempt.stderr.includes('Permission Policy 阻止'))).toBe(true)
+  })
+
+  it.skipIf(process.platform === 'win32')('rejects pushes when the Project default branch is unknown', async () => {
+    const attempts: Array<{ status: number | null; stderr: string }> = []
+    const adapter = createCodexRuntimeAdapter({
+      runProcess: async (_command, _args, options) => {
+        const result = spawnSync('git', ['push', 'origin', 'feature/run-1'], { cwd: process.cwd(), env: options.env, encoding: 'utf8' })
+        attempts.push({ status: result.status, stderr: result.stderr })
+        return { code: 0, stderr: '', stdout: '{"type":"turn.completed"}' }
+      }
+    })
+
+    await adapter.execute({
+      runId: 'run-1', project: { workspacePath: process.cwd(), defaultBranch: null } as never, workspace: { path: process.cwd() }, idea: 'Protect Git delivery',
+      workflow: { phases: [] } as never, phaseIndex: 0, stepIndex: 0,
+      execution: { id: 'execution-1', runtimeSessionId: null } as never, skill: null,
+      phaseContext: null, inputArtifacts: [], decisionRecords: [], permissionPolicy: { grantedPermissions: ['workspace.read', 'workspace.write'] }, events: []
+    })
+
+    expect(attempts).toEqual([expect.objectContaining({ status: 126 })])
+    expect(attempts[0]?.stderr).toContain('默认分支未知')
   })
 
   it('preflights the CLI, credentials, fixed Skill, and Data Transfer Notice before execution', async () => {

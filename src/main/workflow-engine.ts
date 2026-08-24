@@ -11,11 +11,23 @@ import type {
 import { createSqliteRunStore } from './workflow-store'
 import { zhCNMain } from '../shared/i18n/zh-CN'
 import { DEFAULT_PROJECT_PERMISSIONS } from '../shared/project'
+import type { RuntimeArtifact } from '../shared/workflow-run'
+
+interface GitDeliveryManager {
+  commitAfterReview(request: { workspacePath: string; runId: string; baseCommit: string | null; ticket: string | null }): Promise<{ commit: string; artifact: RuntimeArtifact }>
+}
+
+function ticketReference(idea: string, artifacts: WorkflowRun['artifacts']): string | null {
+  const direct = idea.match(/(?:#|\/issues\/)(\d+)/i)?.[1]
+  if (direct) return direct
+  return artifacts.map((artifact) => artifact.location ?? '').map((location) => location.match(/\/issues\/(\d+)/i)?.[1]).find(Boolean) ?? null
+}
 
 interface WorkflowEngineDependencies {
   databasePath: string
   runtime: AgentRuntimeAdapter
   runWorkspaceManager?: import('./run-workspace').RunWorkspaceManager
+  gitDeliveryManager?: GitDeliveryManager
   now?: () => string
   createId?: () => string
 }
@@ -85,6 +97,21 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
       }
       if (closed) return
       const updated = await store.recordRuntimeResult(runId, execution.id, events)
+      const reviewStep = step?.id === 'review' || step?.skill?.name === 'code-review' || /review/i.test(step?.name ?? '')
+      if (reviewStep && events.some((event) => event.type === 'status_changed' && event.status === 'completed') && dependencies.gitDeliveryManager) {
+        try {
+          const delivery = await dependencies.gitDeliveryManager.commitAfterReview({
+            workspacePath: updated.workspacePath,
+            runId: updated.id,
+            baseCommit: updated.baseCommit,
+            ticket: ticketReference(updated.idea, updated.artifacts)
+          })
+          await store.registerArtifact(updated.id, execution.id, delivery.artifact)
+        } catch (error) {
+          await store.markDeliveryFailed(updated.id, execution.id, error instanceof Error ? error.message : String(error))
+          return
+        }
+      }
       if (updated.status !== 'running' || updated.snapshot.currentStepExecutionId === execution.id) return
     }
   }

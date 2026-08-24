@@ -157,7 +157,12 @@ export const zhCN = {
     noError: '没有错误。',
     noContext: '当前 Phase 没有额外上下文。',
     noLocation: '未提供位置',
-    projectId: (id: string) => id
+    projectId: (id: string) => id,
+    deliveryTitle: 'Git 交付',
+    baseCommit: 'Base Commit',
+    branch: '功能分支',
+    localDelivery: '本地 Git 交付已完成；Project 没有 remote，不会创建 PR。',
+    remoteDelivery: 'GitHub 交付将在后续 Step 处理。'
   },
   settings: {
     eyebrow: '设置',

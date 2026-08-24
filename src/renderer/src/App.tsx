@@ -334,6 +334,14 @@ function RunBoard({ run, onBack, onPause, onResume, onRetry, onCancel, onAnswer,
         </div>
         {run.error ? <p className="error-message" role="alert">{run.error}</p> : null}
         {error ? <p className="error-message" role="alert">{error}</p> : null}
+        <section className="run-delivery" aria-labelledby="run-delivery-title">
+          <h2 id="run-delivery-title">{copy.run.deliveryTitle}</h2>
+          <dl className="run-delivery-metadata">
+            <div><dt>{copy.run.baseCommit}</dt><dd>{run.baseCommit ?? copy.projectDetail.noCommit}</dd></div>
+            <div><dt>{copy.run.branch}</dt><dd>{run.branch ?? copy.projectDetail.detached}</dd></div>
+          </dl>
+          <p>{run.artifacts.some((artifact) => artifact.type === 'commit') && !run.remote ? copy.run.localDelivery : copy.run.remoteDelivery}</p>
+        </section>
         <div className="run-phases" aria-label={copy.run.runBoardLabel}>
           {run.definition.phases.map((phase, phaseIndex) => (
             <section className={phaseIndex === run.snapshot.phaseIndex ? 'run-phase-column is-current' : 'run-phase-column'} key={phase.id}>

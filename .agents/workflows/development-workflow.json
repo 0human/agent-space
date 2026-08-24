@@ -38,7 +38,7 @@
       "id": "delivery",
       "name": "提交、推送与 PR",
       "goal": "将变更交付到远程仓库。",
-      "steps": [{ "id": "delivery", "name": "创建 PR", "kind": "tool", "adapter": "github.pull-request", "artifacts": ["pull-request"], "approvalGate": "PR 合并确认" }]
+      "steps": [{ "id": "delivery", "name": "创建 PR", "kind": "tool", "adapter": "github.pull-request", "condition": "project.remote.present", "artifacts": ["pull-request"], "approvalGate": "PR 合并确认" }]
     },
     {
       "id": "release",

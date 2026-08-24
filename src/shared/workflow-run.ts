@@ -110,6 +110,7 @@ export interface WorkflowRun {
   id: string
   projectId: string
   workspacePath: string
+  remote: string | null
   idea: string
   workflowId: string
   workflowVersion: string

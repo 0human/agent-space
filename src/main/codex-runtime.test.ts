@@ -27,6 +27,22 @@ describe('Codex Runtime Adapter recorded contract', () => {
     })
   })
 
+  it('keeps verification artifacts inside the Run workspace', async () => {
+    const adapter = createCodexRuntimeAdapter({
+      skillManifests: [{ name: 'code-review', version: '1.0.0', entry: 'review.md', dependencies: [], supportedRuntimes: ['codex'], capabilities: ['review'], requiredPermissions: [] }],
+      skillPackagePath: '/skills',
+      readSkill: async () => 'review',
+      runProcess: async () => ({ code: 0, stdout: [
+        JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'ARTIFACT: ' + JSON.stringify({ type: 'test-result', name: 'typecheck', location: '/work/run-1/.agent-space/typecheck.json' }) } }),
+        JSON.stringify({ type: 'turn.completed' })
+      ].join('\n'), stderr: '' })
+    })
+
+    await expect(adapter.execute({
+      runId: 'run-1', project: {} as never, workspace: { path: '/work/run-1' }, idea: 'test', workflow: { schemaVersion: 1, id: 'w', name: 'w', version: '1.0.0', phases: [{ id: 'p', name: 'p', goal: 'p', steps: [{ id: 'review', name: 'review', kind: 'skill', skill: { name: 'code-review', version: '1.0.0' } }] }] }, phaseIndex: 0, stepIndex: 0, execution: { id: 'e', runId: 'run-1', phaseId: 'p', stepId: 'review', attempt: 1, status: 'running', input: null, skill: { name: 'code-review', version: '1.0.0' }, error: null, output: null, startedAt: null, finishedAt: null }, skill: { name: 'code-review', version: '1.0.0' }, phaseContext: null, inputArtifacts: [], decisionRecords: [], permissionPolicy: { grantedPermissions: [] }, events: []
+    })).resolves.toEqual(expect.arrayContaining([expect.objectContaining({ type: 'artifact_produced', artifact: expect.objectContaining({ type: 'test-result' }) })]))
+  })
+
   it('preserves structured provider errors without exposing raw transcript parsing to the engine', () => {
     const result = parseCodexJsonl('{"type":"error","message":"authentication required"}')
 

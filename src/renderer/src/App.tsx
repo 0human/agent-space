@@ -251,7 +251,14 @@ function ProjectDetail({ project, runs, onBack, onOpenInIde, openError, importWa
             <div className="run-list-items">
               {runs.map((run) => (
                 <button className="run-list-item" type="button" key={run.id} onClick={() => onOpenRun(run)}>
-                  <span><strong>{run.idea}</strong><small>{run.workflowId}@{run.workflowVersion}</small></span>
+                  <span className="run-list-item-copy">
+                    <strong>{run.idea}</strong>
+                    <small>{run.workflowId}@{run.workflowVersion}</small>
+                    <small>{copy.run.runId(run.id)}</small>
+                    <small>{copy.run.currentPhase(run.definition.phases[run.snapshot.phaseIndex]?.name ?? copy.run.phase(run.snapshot.phaseIndex + 1))}</small>
+                    {run.snapshot.blockedBy ? <small className="run-list-blocker">{copy.run.blockedReason(run.snapshot.blockedBy.reason)}</small> : null}
+                    {run.artifacts.length > 0 ? <small>{copy.run.recentArtifact(run.artifacts[run.artifacts.length - 1].name)}</small> : null}
+                  </span>
                   <span className={`run-status is-${run.status}`}>{copy.run.status[run.status]}</span>
                   <ArrowRight aria-hidden="true" />
                 </button>
@@ -309,6 +316,7 @@ function RunBoard({ run, onBack, onPause, onResume, onRetry, onCancel, onAnswer,
   const selectedDecisions = selectedExecution ? (run.decisionRecords ?? []).filter((record) => record.executionId === selectedExecution.id) : []
   const selectedLogs = selectedExecution ? (run.logs ?? []).filter((log) => log.executionId === selectedExecution.id) : []
   const selectedBlocker = selectedExecution && run.snapshot.blockedBy?.executionId === selectedExecution.id ? run.snapshot.blockedBy : null
+  const isMergeConflict = selectedBlocker ? /merge conflict|冲突/i.test(selectedBlocker.reason) : false
   const selectedIsCurrent = selectedExecution?.id === run.snapshot.currentStepExecutionId
   const canPause = run.status === 'running'
   const hasPendingDecision = run.status === 'waiting' && Boolean(run.snapshot.pendingQuestionDetails || run.snapshot.pendingApprovalDetails)
@@ -326,7 +334,7 @@ function RunBoard({ run, onBack, onPause, onResume, onRetry, onCancel, onAnswer,
         <button className="back-action" type="button" onClick={onBack}><ArrowLeft aria-hidden="true" />{copy.run.backAction}</button>
         <div className="run-board-heading">
           <div>
-            <div className="workflow-source-line"><span className={`run-status is-${run.status}`}>{copy.run.status[run.status]}</span><span>{copy.run.projectId(run.projectId)}</span></div>
+            <div className="workflow-source-line"><span className={`run-status is-${run.status}`}>{copy.run.status[run.status]}</span><span>{copy.run.projectId(run.projectId)}</span><span>{copy.run.runId(run.id)}</span></div>
             <h1 id="run-board-title">{run.idea}</h1>
             <p>{run.snapshot.nextAction}</p>
           </div>
@@ -387,7 +395,16 @@ function RunBoard({ run, onBack, onPause, onResume, onRetry, onCancel, onAnswer,
               <h4>{copy.run.artifactsTitle}</h4>{run.artifacts.filter((artifact) => artifact.stepExecutionId === selectedExecution.id).map((artifact) => <div className="run-artifact" key={artifact.id}><strong>{artifact.name}</strong><span>{artifact.type}</span><span>{artifact.location ?? copy.run.noLocation}</span></div>)}{run.artifacts.every((artifact) => artifact.stepExecutionId !== selectedExecution.id) ? <p>{copy.run.noArtifacts}</p> : null}
               <h4>{copy.run.decisionsTitle}</h4>{selectedDecisions.length > 0 ? selectedDecisions.map((decision) => <div className="run-decision-record" key={decision.id}><strong>{decision.question}</strong><span>{decision.answer}</span></div>) : <p>{copy.run.noDecisions}</p>}
               <h4>{copy.run.logsTitle}</h4>{selectedLogs.length > 0 ? <div className="run-detail-logs">{selectedLogs.map((log) => <div key={log.id}><span>{log.type}</span><p>{log.message}</p></div>)}</div> : <p>{copy.run.noLogs}</p>}
-              {selectedBlocker ? <><h4>{copy.run.blockerTitle}</h4><p className="run-detail-error">{selectedBlocker.reason}</p></> : null}
+              {selectedBlocker ? <>
+                <h4>{copy.run.blockerTitle}</h4>
+                <p className="run-detail-error">{selectedBlocker.reason}</p>
+                {run.status === 'blocked' && isMergeConflict ? <div className="run-conflict-entry" role="status">
+                  <strong>{copy.run.conflictResolutionTitle}</strong>
+                  <p>{copy.run.conflictResolutionDescription}</p>
+                  <span>{copy.run.conflictResolutionSkill}</span>
+                  <span>{copy.run.conflictResolutionHuman}</span>
+                </div> : null}
+              </> : null}
               <h4>{copy.run.availableActionsTitle}</h4>
               {selectedIsCurrent || selectedExecution.status === 'skipped' ? <RunActionButtons className="run-detail-actions" canPause={canPause} canResume={canResume} canRetry={selectedExecution.status === 'skipped' || canRetry} canCancel={canCancel} onPause={onPause} onResume={onResume} onRetry={onRetry} onCancel={onCancel} /> : <p>{copy.run.noAvailableActions}</p>}
               <h4>{copy.run.eventsTitle}</h4><div className="run-detail-events">{run.events.filter((event) => event.data.executionId === selectedExecution.id).map((event) => <span key={event.id}>{event.type}</span>)}</div>
@@ -621,6 +638,22 @@ export default function App(): React.JSX.Element {
     if (!selectedProject) return
     void window.appShell.listWorkflowRuns(selectedProject.id).then(setRuns).catch(() => setRuns([]))
   }, [selectedProject])
+
+  useEffect(() => {
+    if (!selectedProject || view !== 'projectDetail') return
+    let disposed = false
+    const refresh = async (): Promise<void> => {
+      try {
+        const current = await window.appShell.listWorkflowRuns(selectedProject.id)
+        if (!disposed) setRuns(current)
+      } catch {
+        if (!disposed) setRuns([])
+      }
+    }
+    const timer = window.setInterval(() => { void refresh() }, 500)
+    void refresh()
+    return () => { disposed = true; window.clearInterval(timer) }
+  }, [view, selectedProject?.id])
 
   useEffect(() => {
     if (view !== 'run' || !selectedRun) return

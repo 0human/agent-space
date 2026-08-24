@@ -199,6 +199,7 @@ function resolveRuntimeEvents(events: RuntimeEvent[]):
   | { type: 'failed'; error: string } {
   const artifacts = events.filter((event): event is Extract<RuntimeEvent, { type: 'artifact_produced' }> => event.type === 'artifact_produced').map((event) => event.artifact)
   const error = events.find((event): event is Extract<RuntimeEvent, { type: 'error' }> => event.type === 'error')
+  if (error && /merge conflict|冲突/i.test(error.error)) return { type: 'blocked', reason: error.error }
   if (error) return { type: 'failed', error: error.error }
   const question = events.find((event): event is Extract<RuntimeEvent, { type: 'question' }> => event.type === 'question')
   if (question) return { type: 'waiting', question: question.question, approval: null }

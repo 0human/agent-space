@@ -44,6 +44,24 @@ describe('GitDeliveryManager public API', () => {
     expect(execGit).toHaveBeenCalledTimes(3)
   })
 
+  it('reconciles a committed idempotency key before retrying local Git side effects', async () => {
+    let committed = false
+    const execGit = vi.fn(async (_workspacePath: string, args: string[]) => {
+      if (args[0] === 'log') return committed ? 'abc123\0agent-space: complete implementation (Idempotency Key: git.commit:run-1)' : ''
+      if (args[0] === 'commit') { committed = true; return '' }
+      if (args[0] === 'rev-parse') return 'abc123\n'
+      return ''
+    })
+    const manager = createGitDeliveryManager({ execGit })
+    const request = { workspacePath: '/work/demo', runId: 'run-1', baseCommit: 'base', ticket: null, idempotencyKey: 'git.commit:run-1' }
+
+    await manager.commitAfterReview(request)
+    const recovered = await manager.commitAfterReview(request)
+
+    expect(recovered.artifact).toMatchObject({ idempotencyKey: 'git.commit:run-1', versionHash: 'abc123' })
+    expect(execGit.mock.calls.filter(([, args]) => args[0] === 'commit')).toHaveLength(1)
+  })
+
   it('pushes the feature branch and reuses the same GitHub PR on retry', async () => {
     const execGit = vi.fn(async (_workspacePath: string, args: string[]) => args[0] === 'rev-parse' ? 'abc123\n' : '')
     const execGitHub = vi.fn()

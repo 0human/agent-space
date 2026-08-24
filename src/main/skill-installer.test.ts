@@ -72,16 +72,39 @@ describe('Skill Package installer', () => {
     const installer = createSkillInstaller({
       rootPath: '/app/skills',
       contentHash: async () => 'a'.repeat(64),
+      writeInstalled: async () => { throw new Error('disk full') },
       makeDirectory: async () => undefined,
       copyDirectory: async () => undefined,
       rename: async () => undefined,
       remove: async (path) => { removed.push(path) },
-      writeInstalled: async () => { throw new Error('disk full') },
       installers: [{ type: 'local-directory', resolve: async () => ({ rootPath: '/source/demo', manifest }) }]
     })
 
     await expect(installer.install({ type: 'local-directory', value: '/source/demo' }, { confirmed: true })).rejects.toThrow('disk full')
     expect(removed.some((path) => path.includes('demo-package@1.0.0'))).toBe(true)
     await expect(installer.listInstalled()).resolves.toEqual([])
+  })
+
+  it('serializes concurrent installs so the same package is copied once', async () => {
+    let copies = 0
+    const installer = createSkillInstaller({
+      rootPath: '/app/skills',
+      contentHash: async () => 'a'.repeat(64),
+      writeInstalled: async () => undefined,
+      makeDirectory: async () => undefined,
+      copyDirectory: async () => { copies += 1 },
+      rename: async () => undefined,
+      remove: async () => undefined,
+      installers: [{ type: 'local-directory', resolve: async () => ({ rootPath: '/source/demo', manifest }) }]
+    })
+
+    const [first, second] = await Promise.all([
+      installer.install({ type: 'local-directory', value: '/source/demo' }, { confirmed: true }),
+      installer.install({ type: 'local-directory', value: '/source/demo' }, { confirmed: true })
+    ])
+
+    expect(first).toMatchObject({ idempotencyKey: expect.stringContaining('skill-package:demo-package') })
+    expect(second).toEqual(first)
+    expect(copies).toBe(1)
   })
 })

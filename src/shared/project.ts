@@ -18,6 +18,9 @@ export interface WorkspaceState {
 
 export interface PermissionPolicy {
   grantedPermissions: string[]
+  allowedPaths?: string[]
+  allowedCommands?: string[]
+  allowedNetworkHosts?: string[]
 }
 
 export interface ProjectDeliveryPolicy {

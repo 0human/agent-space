@@ -5,6 +5,7 @@ import { promisify } from 'node:util'
 
 import type { PermissionPolicy, Project, ProjectReleaseStep, ReleaseOperation, ReleasePlatform } from '../shared/project'
 import type { RuntimeEvent } from '../shared/workflow-run'
+import { isCommandAllowed, isNetworkHostAllowed, isPathAllowed } from './permission-policy'
 
 const execFile = promisify(execFileCallback)
 const SAFE_ENVIRONMENT_KEYS = new Set(['PATH', 'SystemRoot', 'SYSTEMROOT', 'TEMP', 'TMP', 'TMPDIR', 'HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'LANG', 'LC_ALL', 'CI'])
@@ -36,7 +37,17 @@ function workingDirectory(context: ReleaseManagerContext): string {
   const candidate = context.step.cwd ? (isAbsolute(context.step.cwd) ? context.step.cwd : resolve(context.workspacePath, context.step.cwd)) : context.workspacePath
   const relativePath = relative(context.workspacePath, candidate)
   if (relativePath.startsWith('..') || isAbsolute(relativePath)) throw new Error('Release 命令 cwd 必须位于 Run Workspace 内。')
+  if (!isPathAllowed(candidate, context.permissionPolicy.allowedPaths)) throw new Error('Permission Policy 阻止访问 Workspace 目录。')
   return candidate
+}
+
+function networkHostAllowed(target: string | undefined, policy: PermissionPolicy): boolean {
+  if (!policy.allowedNetworkHosts?.length || !target) return true
+  try {
+    return isNetworkHostAllowed(new URL(target).hostname, policy.allowedNetworkHosts)
+  } catch {
+    return false
+  }
 }
 
 async function commandAvailable(command: string): Promise<boolean> {
@@ -76,6 +87,8 @@ export function createDefaultReleaseManager(): ReleaseManager {
         checks.push(`${platformName(context.platform)} 当前 ${context.operation} 使用 Human Step。`)
       } else if (!context.step.command?.trim()) {
         errors.push(`Release Preflight 失败：${platformName(context.platform)} 的 ${context.operation} Tool Step 缺少 command。`)
+      } else if (!isCommandAllowed(context.step.command.trim(), context.permissionPolicy.allowedCommands)) {
+        errors.push(`Permission Policy 阻止执行 command：${context.step.command.trim()}。`)
       } else if (await commandAvailable(context.step.command.trim())) {
         checks.push(`${platformName(context.platform)} ${context.operation} command 可用：${context.step.command.trim()}。`)
       } else {
@@ -89,6 +102,7 @@ export function createDefaultReleaseManager(): ReleaseManager {
       if (context.operation === 'release' && !(context.step.targetEnvironment ?? context.project.release?.targetEnvironment)?.trim()) {
         errors.push('Release Preflight 失败：release 必须声明 targetEnvironment。')
       }
+      if (!networkHostAllowed(context.step.targetEnvironment ?? context.project.release?.targetEnvironment, context.permissionPolicy)) errors.push('Permission Policy 阻止访问网络目标：目标 host 不在允许范围内。')
       const missingPermissions = (context.step.requiredPermissions ?? []).filter((permission) => !context.permissionPolicy.grantedPermissions.includes(permission))
       if (missingPermissions.length > 0) errors.push(`Release Preflight 失败：${context.operation} 权限校验失败，缺少 ${missingPermissions.join(', ')}。`)
       const notice = transferNotice(context)

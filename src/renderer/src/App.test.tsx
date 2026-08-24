@@ -34,7 +34,10 @@ describe('Desktop Shell navigation', () => {
       answerWorkflowQuestion: vi.fn(),
       approveWorkflowApproval: vi.fn(),
       rejectWorkflowApproval: vi.fn(),
-      openWorkflowFile: vi.fn().mockResolvedValue({ ok: true, error: null })
+      openWorkflowFile: vi.fn().mockResolvedValue({ ok: true, error: null }),
+      previewSkillInstall: vi.fn(),
+      installSkill: vi.fn(),
+      listInstalledSkills: vi.fn().mockResolvedValue([])
     }
   })
 

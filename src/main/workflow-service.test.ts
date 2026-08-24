@@ -180,4 +180,37 @@ describe('Workflow service', () => {
     })
     expect(result.errors).toContain('Skill implement 缺少依赖 tdd。')
   })
+
+  it('loads Installed Skill manifests when a Project Workflow is copied after installation', async () => {
+    const installed = [{ name: 'external', version: '1.0.0', entry: 'skills/external/SKILL.md', dependencies: [], supportedRuntimes: ['codex'], capabilities: ['question'], requiredPermissions: ['workspace.read'] }]
+    const service = createWorkflowService({
+      readFile: async () => '',
+      writeFile: async () => undefined,
+      mkdir: async () => undefined,
+      manifests: BUILT_IN_SKILL_MANIFESTS,
+      getManifests: () => [...BUILT_IN_SKILL_MANIFESTS, ...installed]
+    })
+
+    const result = await service.getBuiltIn()
+
+    expect(result.skillManifests).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'external', version: '1.0.0' })]))
+  })
+
+  it('fails Preflight for transitive or ambiguous Skill dependencies before Runtime execution', () => {
+    const manifests = [
+      { name: 'root-skill', version: '1.0.0', entry: 'root.md', dependencies: ['child@1.0.0'], supportedRuntimes: ['codex'], capabilities: [], requiredPermissions: [] },
+      { name: 'child', version: '1.0.0', entry: 'child.md', dependencies: ['missing'], supportedRuntimes: ['codex'], capabilities: [], requiredPermissions: [] },
+      { name: 'child', version: '2.0.0', entry: 'child-v2.md', dependencies: [], supportedRuntimes: ['codex'], capabilities: [], requiredPermissions: [] }
+    ]
+    const transitive = validateWorkflow({
+      schemaVersion: 1, id: 'workflow', name: 'Workflow', version: '1.0.0',
+      phases: [{ id: 'phase', name: 'Phase', goal: 'Goal', steps: [{ id: 'step', name: 'Step', kind: 'skill', skill: { name: 'root-skill', version: '1.0.0' } }] }]
+    }, manifests)
+    expect(transitive.errors).toEqual(expect.arrayContaining([expect.stringContaining('missing')]))
+    const ambiguous = validateWorkflow({
+      schemaVersion: 1, id: 'workflow', name: 'Workflow', version: '1.0.0',
+      phases: [{ id: 'phase', name: 'Phase', goal: 'Goal', steps: [{ id: 'step', name: 'Step', kind: 'skill', skill: { name: 'ambiguous', version: '1.0.0' } }] }]
+    }, [...manifests, { name: 'ambiguous', version: '1.0.0', entry: 'ambiguous.md', dependencies: ['child'], supportedRuntimes: ['codex'], capabilities: [], requiredPermissions: [] }])
+    expect(ambiguous.errors).toEqual(expect.arrayContaining([expect.stringContaining('多个版本')]))
+  })
 })

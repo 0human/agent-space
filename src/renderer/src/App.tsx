@@ -4,6 +4,7 @@ import {
   ArrowRight,
   CheckCircle2,
   Copy,
+  Download,
   FolderClock,
   FolderKanban,
   Pause,
@@ -21,6 +22,8 @@ import {
 
 import type { RuntimeInfo } from '../../shared/app-shell'
 import type { DataTransferNotice, Project } from '../../shared/project'
+import type { InstalledSkillRecord, SkillInstallPreview, SkillSourceType } from '../../shared/skill-package'
+import { summarizeSkillPackage } from '../../shared/skill-package'
 import type { WorkflowView as WorkflowViewModel } from '../../shared/workflow'
 import type { WorkflowPreflightResult, WorkflowRun, WorkflowRunStatus } from '../../shared/workflow-run'
 import { zhCN as copy } from './i18n/zh-CN'
@@ -586,10 +589,48 @@ function WorkflowView({ project, workflow, loading, error, idea, preflight, onBa
 
 function SettingsView(): React.JSX.Element {
   const [runtimeInfo, setRuntimeInfo] = useState<RuntimeInfo | null>(null)
+  const [sourceType, setSourceType] = useState<SkillSourceType>('local-directory')
+  const [sourceValue, setSourceValue] = useState('')
+  const [preview, setPreview] = useState<SkillInstallPreview | null>(null)
+  const [installed, setInstalled] = useState<InstalledSkillRecord[]>([])
+  const [skillError, setSkillError] = useState<string | null>(null)
+  const [loadingSkill, setLoadingSkill] = useState(false)
 
   useEffect(() => {
     void window.appShell.getRuntimeInfo().then(setRuntimeInfo)
+    void window.appShell.listInstalledSkills().then(setInstalled).catch(() => undefined)
   }, [])
+
+  const inspectSkill = async (): Promise<void> => {
+    if (!sourceValue.trim()) return
+    setLoadingSkill(true)
+    setSkillError(null)
+    try {
+      setPreview(await window.appShell.previewSkillInstall({ type: sourceType, value: sourceValue.trim() }))
+    } catch (reason) {
+      setPreview(null)
+      setSkillError(reason instanceof Error ? reason.message : String(reason))
+    } finally {
+      setLoadingSkill(false)
+    }
+  }
+
+  const installSkill = async (): Promise<void> => {
+    if (!preview) return
+    setLoadingSkill(true)
+    setSkillError(null)
+    try {
+      const record = await window.appShell.installSkill(preview.source)
+      if (record) {
+        setInstalled((current) => [record, ...current.filter((item) => item.installedPath !== record.installedPath)])
+        setPreview(null)
+      }
+    } catch (reason) {
+      setSkillError(reason instanceof Error ? reason.message : String(reason))
+    } finally {
+      setLoadingSkill(false)
+    }
+  }
 
   return (
     <main className="content" aria-labelledby="settings-title">
@@ -617,6 +658,46 @@ function SettingsView(): React.JSX.Element {
             <dd>{runtimeInfo?.version ?? copy.settings.loading}</dd>
           </div>
         </dl>
+      </section>
+
+      <section className="settings-section skill-installer" aria-labelledby="skill-installer-heading">
+        <div>
+          <h2 id="skill-installer-heading">Skill Package</h2>
+          <p>从用户指定的来源解析并安装 Skill；安装前会显示来源、固定版本、依赖和权限。</p>
+        </div>
+        <div className="skill-install-form">
+          <label htmlFor="skill-source-type">来源类型</label>
+          <select id="skill-source-type" value={sourceType} onChange={(event) => { setSourceType(event.target.value as SkillSourceType); setPreview(null) }}>
+            <option value="local-directory">本地目录</option>
+            <option value="archive">压缩包</option>
+            <option value="npm">npm</option>
+            <option value="npx">npx</option>
+            <option value="git">Git URL</option>
+          </select>
+          <label htmlFor="skill-source-value">来源地址或路径</label>
+          <input id="skill-source-value" value={sourceValue} onChange={(event) => { setSourceValue(event.target.value); setPreview(null) }} placeholder="/path/to/package 或 https://github.com/..." />
+          <div className="skill-install-actions">
+            <button className="secondary-action" type="button" onClick={() => { void inspectSkill() }} disabled={!sourceValue.trim() || loadingSkill}><ShieldAlert aria-hidden="true" />解析并预览</button>
+            <button className="primary-action" type="button" onClick={() => { void installSkill() }} disabled={!preview || loadingSkill}><Download aria-hidden="true" />确认安装</button>
+          </div>
+        </div>
+        {skillError ? <p className="error-message" role="alert">{skillError}</p> : null}
+        {preview ? <article className="skill-install-preview" aria-label="Skill Package 安装预览">
+          {(() => { const summary = summarizeSkillPackage(preview.manifest); return <>
+          <strong>{preview.manifest.name}@{preview.resolvedVersion}</strong>
+          <span>来源：{preview.source.type} {preview.source.value}</span>
+          <span>Skills：{summary.skills.join(', ')}</span>
+          <span>依赖：{summary.dependencies.join(', ') || '无'}</span>
+          <span>兼容 Runtime：{summary.supportedRuntimes.join(', ') || '无'}</span>
+          <span>权限：{summary.requiredPermissions.join(', ') || '无'}</span>
+          <span>内容 hash：{preview.contentHash}</span>
+          {preview.lifecycleScriptsRisk.map((risk) => <span className="skill-risk" key={risk}>{risk}</span>)}
+          </> })()}
+        </article> : null}
+        <div className="installed-skill-list" aria-label="已安装 Skill">
+          <h3>已安装 Skill</h3>
+          {installed.length > 0 ? installed.map((record) => <div className="installed-skill" key={record.installedPath}><strong>{record.manifest.name}@{record.resolvedVersion}</strong><span>{record.source.type}: {record.source.value}</span><span>{record.contentHash.slice(0, 16)}...</span></div>) : <p>还没有已安装 Skill。</p>}
+        </div>
       </section>
     </main>
   )

@@ -27,7 +27,9 @@ interface CodexRuntimeDependencies {
   command?: string
   runProcess?: (command: string, args: string[], options: ProcessOptions) => Promise<ProcessResult>
   skillManifests?: SkillManifest[]
+  getSkillManifests?: () => SkillManifest[]
   skillPackagePath?: string
+  resolveSkillPackagePath?: (manifest: SkillManifest) => string | null
   readSkill?: (path: string, encoding: 'utf8') => Promise<string>
 }
 
@@ -149,6 +151,11 @@ export function sanitizeSensitiveText(value: string): string {
 
 function isNetworkFailure(value: string): boolean {
   return /(?:network|offline|enotfound|eai_again|timeout|timed out|connection reset|connection refused|could not resolve)/i.test(value)
+}
+
+function skillDependencyReference(value: string): { name: string; version?: string } {
+  const separator = value.lastIndexOf('@')
+  return separator > 0 ? { name: value.slice(0, separator), version: value.slice(separator + 1) } : { name: value }
 }
 
 function parseJsonLine(line: string): Record<string, unknown> | null {
@@ -402,7 +409,7 @@ function forbiddenGitHubCommand(command: string, defaultBranch: string | null | 
 export function createCodexRuntimeAdapter(dependencies: CodexRuntimeDependencies = {}): AgentRuntimeAdapter {
   const runProcess = dependencies.runProcess ?? defaultRunProcess
   const command = dependencies.command ?? 'codex'
-  const manifests = dependencies.skillManifests ?? []
+  const getManifests = dependencies.getSkillManifests ?? (() => dependencies.skillManifests ?? [])
   const readSkill = dependencies.readSkill ?? ((path: string, encoding: 'utf8') => readFile(path, encoding))
 
   async function loadSkillInstructions(manifest: SkillManifest, packagePath: string, visited = new Set<string>()): Promise<string> {
@@ -412,9 +419,14 @@ export function createCodexRuntimeAdapter(dependencies: CodexRuntimeDependencies
     const own = await readSkill(join(packagePath, manifest.entry), 'utf8')
     const dependenciesText: string[] = []
     for (const dependency of manifest.dependencies) {
-      const dependencyManifest = manifests.find((candidate) => candidate.name === dependency)
+      const reference = skillDependencyReference(dependency)
+      const candidates = getManifests().filter((candidate) => candidate.name === reference.name)
+      const dependencyManifest = reference.version
+        ? candidates.find((candidate) => candidate.version === reference.version)
+        : candidates.length === 1 ? candidates[0] : undefined
       if (!dependencyManifest) throw new Error(`固定 Skill 依赖 ${dependency} 不可用。`)
-      dependenciesText.push(await loadSkillInstructions(dependencyManifest, packagePath, visited))
+      const dependencyPackagePath = dependencies.resolveSkillPackagePath?.(dependencyManifest) ?? packagePath
+      dependenciesText.push(await loadSkillInstructions(dependencyManifest, dependencyPackagePath, visited))
     }
     return [own, ...dependenciesText].filter(Boolean).join('\n\n')
   }
@@ -451,19 +463,20 @@ export function createCodexRuntimeAdapter(dependencies: CodexRuntimeDependencies
       } catch (error) {
         errors.push(`Codex 凭据不可用：${error instanceof Error ? error.message : String(error)}`)
       }
-      const manifest = context.skill ? manifests.find((candidate) => candidate.name === context.skill?.name && candidate.version === context.skill?.version) : null
+      const manifest = context.skill ? getManifests().find((candidate) => candidate.name === context.skill?.name && candidate.version === context.skill?.version) : null
       if (!manifest) errors.push(`固定 Skill ${context.skill?.name ?? 'unknown'}@${context.skill?.version ?? 'unknown'} 不可用。`)
       else checks.push(`固定 Skill ${manifest.name}@${manifest.version} 可用。`)
       checks.push(`Data Transfer Notice：External Destination: Codex Agent Runtime；发送 Idea、Phase Context、Artifact、Decision Record；权限：${context.permissionPolicy.grantedPermissions.join(', ') || 'none'}；断网后从持久化 Step Execution 恢复。`)
       return { checks, errors }
     },
     async execute(context): Promise<RuntimeEvent[]> {
-      const skillManifest = manifests.find((manifest) => manifest.name === context.skill?.name && manifest.version === context.skill?.version)
-      if (dependencies.skillManifests && !skillManifest) return [{ type: 'error', error: `固定 Skill ${context.skill?.name ?? 'unknown'}@${context.skill?.version ?? 'unknown'} 不可用。` }]
+      const skillManifest = getManifests().find((manifest) => manifest.name === context.skill?.name && manifest.version === context.skill?.version)
+      if ((dependencies.skillManifests || dependencies.getSkillManifests) && !skillManifest) return [{ type: 'error', error: `固定 Skill ${context.skill?.name ?? 'unknown'}@${context.skill?.version ?? 'unknown'} 不可用。` }]
       let skillInstructions = '(Skill instructions unavailable)'
-      if (skillManifest && dependencies.skillPackagePath) {
+      const packagePath = skillManifest ? (dependencies.resolveSkillPackagePath?.(skillManifest) ?? dependencies.skillPackagePath) : null
+      if (skillManifest && packagePath) {
         try {
-          skillInstructions = await loadSkillInstructions(skillManifest, dependencies.skillPackagePath)
+          skillInstructions = await loadSkillInstructions(skillManifest, packagePath)
         } catch (error) {
           return [{ type: 'error', error: `无法读取固定 Skill：${error instanceof Error ? error.message : String(error)}` }]
         }

@@ -1400,6 +1400,71 @@ button:focus-visible {
   border-top: 1px solid #dfe2dd;
 }
 
+.skill-installer {
+  display: grid;
+  gap: 18px;
+}
+
+.skill-install-form {
+  display: grid;
+  max-width: 680px;
+  gap: 8px;
+}
+
+.skill-install-form input,
+.skill-install-form select {
+  width: 100%;
+  min-height: 40px;
+  padding: 0 10px;
+  color: #28302b;
+  background: #ffffff;
+  border: 1px solid #ccd1cc;
+  border-radius: 6px;
+  font: inherit;
+}
+
+.skill-install-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.skill-install-preview,
+.installed-skill-list {
+  display: grid;
+  max-width: 760px;
+  gap: 7px;
+  padding: 16px;
+  background: #ffffff;
+  border: 1px solid #dfe2dd;
+  border-radius: 6px;
+}
+
+.skill-install-preview span,
+.installed-skill span {
+  color: #667068;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.skill-install-preview .skill-risk {
+  color: #8a4d16;
+  font-weight: 600;
+}
+
+.installed-skill-list h3 {
+  margin: 0 0 4px;
+  font-size: 15px;
+}
+
+.installed-skill {
+  display: grid;
+  gap: 3px;
+  padding-top: 10px;
+  border-top: 1px solid #edf0ec;
+}
+
 .settings-section h2 {
   margin: 0;
   color: #242a26;

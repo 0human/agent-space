@@ -8,6 +8,7 @@ interface WorkflowFileDependencies {
   writeFile: (path: string, data: string, encoding: 'utf8') => Promise<void>
   mkdir: (path: string, options: { recursive: true }) => Promise<void>
   manifests: SkillManifest[]
+  getManifests?: () => SkillManifest[]
 }
 
 function validationError(errors: string[], message: string): void {
@@ -50,6 +51,12 @@ function normalizeWorkflow(value: unknown): WorkflowDefinition {
   }
 }
 
+function dependencyReference(value: string): { name: string; version?: string } {
+  const separator = value.lastIndexOf('@')
+  if (separator > 0) return { name: value.slice(0, separator), version: value.slice(separator + 1) }
+  return { name: value }
+}
+
 export function validateWorkflow(definition: unknown, manifests: SkillManifest[], grantedPermissions?: string[], requireOrigin = false): WorkflowValidationResult {
   const errors: string[] = []
   const warnings: string[] = []
@@ -75,7 +82,38 @@ export function validateWorkflow(definition: unknown, manifests: SkillManifest[]
   }
 
   const manifestByName = new Map(manifests.map((manifest) => [`${manifest.name}@${manifest.version}`, manifest]))
-  const names = new Set(manifests.map((manifest) => manifest.name))
+  const manifestsByName = new Map<string, SkillManifest[]>()
+  for (const manifest of manifests) manifestsByName.set(manifest.name, [...(manifestsByName.get(manifest.name) ?? []), manifest])
+  const dependencyErrors = new Set<string>()
+  const visitedDependencies = new Set<string>()
+  const validateDependencies = (manifest: SkillManifest, rootName: string): void => {
+    const key = `${manifest.name}@${manifest.version}`
+    if (visitedDependencies.has(key)) return
+    visitedDependencies.add(key)
+    for (const dependency of manifest.dependencies) {
+      const reference = dependencyReference(dependency)
+      const candidates = manifestsByName.get(reference.name) ?? []
+      const resolved = reference.version
+        ? candidates.find((candidate) => candidate.version === reference.version)
+        : candidates.length === 1 ? candidates[0] : undefined
+      if (!resolved) {
+        const suffix = candidates.length > 1 && !reference.version ? '（存在多个版本，请声明 name@version）' : ''
+        const message = `Skill ${rootName} 缺少依赖 ${dependency}${suffix}。`
+        if (!dependencyErrors.has(message)) errors.push(message)
+        dependencyErrors.add(message)
+        continue
+      }
+      if (grantedPermissions) {
+        const missingPermissions = resolved.requiredPermissions.filter((permission) => !grantedPermissions.includes(permission))
+        if (missingPermissions.length > 0) {
+          const message = `Skill ${resolved.name} 权限校验失败：缺少 ${missingPermissions.join(', ')}。`
+          if (!dependencyErrors.has(message)) errors.push(message)
+          dependencyErrors.add(message)
+        }
+      }
+      validateDependencies(resolved, rootName)
+    }
+  }
   for (const [phaseIndex, phase] of value.phases.entries()) {
     if (!phase || typeof phase !== 'object') {
       validationError(errors, `phases[${phaseIndex}] 必须是对象。`)
@@ -134,17 +172,12 @@ export function validateWorkflow(definition: unknown, manifests: SkillManifest[]
         const skillValue = skill as Record<string, unknown>
         const name = String(skillValue.name ?? '')
         const version = String(skillValue.version ?? '')
-        if (!names.has(name)) {
+        const manifest = manifestByName.get(`${name}@${version}`)
+        if (!manifest) {
           validationError(errors, `缺少 Skill ${name}。`)
           continue
         }
-        if (!manifestByName.has(`${name}@${version}`)) validationError(errors, `Skill ${name} 版本 ${version} 不可用。`)
-        const manifest = manifestByName.get(`${name}@${version}`)
-        if (manifest) {
-          for (const dependency of manifest.dependencies) {
-            if (!names.has(dependency)) validationError(errors, 'Skill ' + name + ' 缺少依赖 ' + dependency + '。')
-          }
-        }
+        validateDependencies(manifest, name)
         if (manifest && grantedPermissions) {
           const missing = manifest.requiredPermissions.filter((permission) => !grantedPermissions.includes(permission))
           if (missing.length > 0) validationError(errors, `Skill ${name} 权限校验失败：缺少 ${missing.join(', ')}。`)
@@ -173,15 +206,16 @@ function createWorkflowView(value: unknown, source: WorkflowView['source'], path
 }
 
 export function createWorkflowService(dependencies: WorkflowFileDependencies) {
+  const currentManifests = (): SkillManifest[] => dependencies.getManifests?.() ?? dependencies.manifests
   return {
-    manifests: dependencies.manifests,
+    get manifests(): SkillManifest[] { return currentManifests() },
 
     async getBuiltIn(grantedPermissions?: string[]): Promise<WorkflowView> {
-      return createWorkflowView(structuredClone(BUILT_IN_DEVELOPMENT_WORKFLOW), 'built-in', null, dependencies.manifests, grantedPermissions)
+      return createWorkflowView(structuredClone(BUILT_IN_DEVELOPMENT_WORKFLOW), 'built-in', null, currentManifests(), grantedPermissions)
     },
 
     validate(definition: unknown): WorkflowValidationResult {
-      return validateWorkflow(definition, dependencies.manifests)
+      return validateWorkflow(definition, currentManifests())
     },
 
     async copyToProject(workspacePath: string, grantedPermissions: string[]): Promise<WorkflowView> {
@@ -192,7 +226,7 @@ export function createWorkflowService(dependencies: WorkflowFileDependencies) {
         derivedFrom: { id: BUILT_IN_DEVELOPMENT_WORKFLOW.id, version: BUILT_IN_DEVELOPMENT_WORKFLOW.version }
       }
       await dependencies.writeFile(path, JSON.stringify(definition, null, 2), 'utf8')
-      return createWorkflowView(definition, 'project', path, dependencies.manifests, grantedPermissions)
+      return createWorkflowView(definition, 'project', path, currentManifests(), grantedPermissions)
     },
 
     async loadProject(workspacePath: string, grantedPermissions: string[]): Promise<WorkflowView> {
@@ -209,10 +243,10 @@ export function createWorkflowService(dependencies: WorkflowFileDependencies) {
           path,
           validation: { valid: false, errors: ['Workflow File 不是有效的 JSON。'], warnings: [] },
           canStart: false,
-          skillManifests: structuredClone(dependencies.manifests)
+          skillManifests: structuredClone(currentManifests())
         }
       }
-      return createWorkflowView(definition, 'project', path, dependencies.manifests, grantedPermissions)
+      return createWorkflowView(definition, 'project', path, currentManifests(), grantedPermissions)
     },
 
     async startProjectRun(workspacePath: string, grantedPermissions: string[]): Promise<WorkflowStartResult> {

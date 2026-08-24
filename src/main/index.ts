@@ -10,12 +10,14 @@ import { registerProjectHandlers } from './project-handlers'
 import { createDefaultGitExecutor, createProjectService } from './project-service'
 import { createDefaultIdeLauncher } from './ide-launcher'
 import { registerWorkflowHandlers } from './workflow-handlers'
+import { registerSkillHandlers } from './skill-handlers'
+import { createSkillInstaller } from './skill-installer'
 import { createWorkflowService } from './workflow-service'
 import { createWorkflowEngine } from './workflow-engine'
 import { createCodexRuntimeAdapter } from './codex-runtime'
 import { createRunWorkspaceManager } from './run-workspace'
 import { createDefaultGitHubExecutor, createGitDeliveryManager } from './git-delivery'
-import { BUILT_IN_SKILL_MANIFESTS } from '../shared/workflow'
+import { BUILT_IN_SKILL_MANIFESTS, type SkillManifest } from '../shared/workflow'
 
 const currentDirectory = fileURLToPath(new URL('.', import.meta.url))
 const execFile = promisify(execFileCallback)
@@ -86,11 +88,22 @@ const projectService = createProjectService({
   }
 })
 const openInIde = createDefaultIdeLauncher()
+const skillInstaller = createSkillInstaller({ rootPath: join(app.getPath('userData'), 'skill-packages') })
+let availableSkillManifests: SkillManifest[] = [...BUILT_IN_SKILL_MANIFESTS]
+const installedSkillPaths = new Map<string, string>()
+const refreshInstalledSkills = async (): Promise<void> => {
+  const records = await skillInstaller.listInstalled()
+  availableSkillManifests = [...BUILT_IN_SKILL_MANIFESTS, ...records.flatMap((record) => record.manifest.skills)]
+  installedSkillPaths.clear()
+  for (const record of records) for (const manifest of record.manifest.skills) installedSkillPaths.set(`${manifest.name}@${manifest.version}`, record.installedPath)
+}
 const workflowEngine = createWorkflowEngine({
   databasePath: join(app.getPath('userData'), 'workflow-runs.sqlite'),
   runtime: createCodexRuntimeAdapter({
     skillManifests: BUILT_IN_SKILL_MANIFESTS,
-    skillPackagePath: join(currentDirectory, '../../.agents')
+    getSkillManifests: () => availableSkillManifests,
+    skillPackagePath: join(currentDirectory, '../../.agents'),
+    resolveSkillPackagePath: (manifest) => installedSkillPaths.get(`${manifest.name}@${manifest.version}`) ?? join(currentDirectory, '../../.agents')
   }),
   runWorkspaceManager: createRunWorkspaceManager({ execGit: createDefaultGitExecutor() }),
   gitDeliveryManager: createGitDeliveryManager({ execGit: createDefaultGitExecutor(), execGitHub: createDefaultGitHubExecutor() })
@@ -119,11 +132,20 @@ registerWorkflowHandlers({
     mkdir: async (path, options) => {
       await mkdir(path, options)
     },
-    manifests: BUILT_IN_SKILL_MANIFESTS
+    manifests: BUILT_IN_SKILL_MANIFESTS,
+    getManifests: () => availableSkillManifests
   })
 })
 
-app.whenReady().then(() => {
+registerSkillHandlers({
+  handle: (channel, listener) => ipcMain.handle(channel, listener),
+  installer: skillInstaller,
+  dialog: { showMessageBox: (options) => dialog.showMessageBox(options) },
+  onInstalled: refreshInstalledSkills
+})
+
+app.whenReady().then(async () => {
+  await refreshInstalledSkills()
   void workflowEngine.recover()
   openMainWindow()
 

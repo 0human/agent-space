@@ -1,6 +1,7 @@
 import type { GitHubProjectCloneResponse, OpenProjectResult, Project, ProjectImportResult } from './project'
 import type { WorkflowView } from './workflow'
 import type { WorkflowPreflightResult, WorkflowRun, WorkflowRunActionResult } from './workflow-run'
+import type { InstalledSkillRecord, SkillInstallPreview, SkillSource } from './skill-package'
 
 export interface RuntimeInfo {
   platform: NodeJS.Platform
@@ -27,7 +28,10 @@ export const APP_SHELL_CHANNELS = {
   answerWorkflowQuestion: 'workflow-run:answer-question',
   approveWorkflowApproval: 'workflow-run:approve',
   rejectWorkflowApproval: 'workflow-run:reject',
-  openWorkflowFile: 'workflow:open-file'
+  openWorkflowFile: 'workflow:open-file',
+  previewSkillInstall: 'skill:preview-install',
+  installSkill: 'skill:install',
+  listInstalledSkills: 'skill:list-installed'
 } as const
 
 export interface AppShellApi {
@@ -51,4 +55,7 @@ export interface AppShellApi {
   approveWorkflowApproval: (runId: string) => Promise<WorkflowRun>
   rejectWorkflowApproval: (runId: string) => Promise<WorkflowRun>
   openWorkflowFile: (projectId: string) => Promise<OpenProjectResult>
+  previewSkillInstall: (source: SkillSource) => Promise<SkillInstallPreview>
+  installSkill: (source: SkillSource) => Promise<InstalledSkillRecord | null>
+  listInstalledSkills: () => Promise<InstalledSkillRecord[]>
 }

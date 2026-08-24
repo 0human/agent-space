@@ -46,7 +46,7 @@ function networkHostAllowed(target: string | undefined, policy: PermissionPolicy
   try {
     return isNetworkHostAllowed(new URL(target).hostname, policy.allowedNetworkHosts)
   } catch {
-    return !/^https?:\/\//i.test(target)
+    return false
   }
 }
 

@@ -346,7 +346,7 @@ export function createGitDeliveryManager(dependencies: GitDeliveryDependencies) 
     let existingCommit: string | null = null
     if (request.idempotencyKey) {
       try {
-        const log = await dependencies.execGit(request.workspacePath, ['log', '-1', '--format=%H%x00%B'])
+        const log = await dependencies.execGit(request.workspacePath, ['log', '--all', '--format=%H%x00%B', '--grep', `Idempotency Key: ${request.idempotencyKey}`])
         if (log.includes(`Idempotency Key: ${request.idempotencyKey}`)) existingCommit = log.split('\0', 1)[0]?.trim() || null
       } catch {
         // A missing log is equivalent to no previously recorded commit.

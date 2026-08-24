@@ -449,8 +449,20 @@ export function createCodexRuntimeAdapter(dependencies: CodexRuntimeDependencies
 
   function enrichEvents(events: RuntimeEvent[], context: RuntimeExecutionContext): RuntimeEvent[] {
     const networkGithub = context.permissionPolicy.grantedPermissions.includes('network.github')
-    const forbidden = events.find((event) => event.type === 'tool_call' ? forbiddenScopedCommand(event.name, context) ?? forbiddenGitCommand(event.name, context.project.defaultBranch, networkGithub) ?? forbiddenGitHubCommand(event.name, context.project.defaultBranch, networkGithub) : null)
-    if (forbidden && forbidden.type === 'tool_call') return [{ type: 'error', error: forbiddenScopedCommand(forbidden.name, context) ?? forbiddenGitCommand(forbidden.name, context.project.defaultBranch, networkGithub) ?? forbiddenGitHubCommand(forbidden.name, context.project.defaultBranch, networkGithub) ?? 'Permission Policy 阻止 Git 操作。', provider: 'codex', source: 'permission-policy', permissionPolicy: context.permissionPolicy }]
+    let forbidden: Extract<RuntimeEvent, { type: 'tool_call' }> | null = null
+    let reason: string | null = null
+    for (const event of events) {
+      if (event.type !== 'tool_call') continue
+      const candidate = forbiddenScopedCommand(event.name, context) ?? forbiddenGitCommand(event.name, context.project.defaultBranch, networkGithub) ?? forbiddenGitHubCommand(event.name, context.project.defaultBranch, networkGithub)
+      if (candidate) {
+        forbidden = event
+        reason = candidate
+        break
+      }
+    }
+    if (forbidden) {
+      return [{ type: 'error', error: reason ?? 'Permission Policy 阻止 Git 操作。', provider: 'codex', source: 'permission-policy', permissionPolicy: context.permissionPolicy }]
+    }
     return events.filter((event) => event.type !== 'artifact_produced' || isArtifactInsideWorkspace(event.artifact, context.workspace.path)).map((event) => ({
       ...event,
       ...(event.type === 'artifact_produced' && isPublishedWorkflowArtifact(event.artifact) ? { artifact: { ...event.artifact, runId: context.runId } } : {}),

@@ -338,7 +338,7 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
                   errors.push(`GitHub delivery Preflight 失败：${error instanceof Error ? error.message : String(error)}`)
                 }
               }
-              checks.push(`Data Transfer Notice：External Destination: GitHub；Step ${phase.name}/${step.name} 将发送 feature branch、commit、Run ID、ticket，并读取 PR checks/reviews；权限：network.github；断网后从持久化 Pull Request Artifact 恢复。`)
+              checks.push(`Data Transfer Notice：External Destination: GitHub；Step ${phase.name}/${step.name} 将 push feature branch 及 Base Commit，并发送 Run ID、Idempotency Key、ticket；同时读取 PR checks/reviews；权限：network.github；断网后从持久化 Pull Request Artifact 恢复。`)
             }
           }
           if (isReleaseStep(step) && (step.condition !== 'project.release.enabled' || input.project.release?.enabled === true)) {

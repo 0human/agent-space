@@ -1,5 +1,6 @@
 import developmentWorkflow from '../../.agents/workflows/development-workflow.json'
 import skillPackageManifest from '../../.agents/skill-manifest.json'
+import type { ReleaseOperation, ReleasePlatform } from './project'
 
 export type WorkflowSource = 'built-in' | 'project'
 
@@ -22,6 +23,8 @@ export interface WorkflowStep {
   condition?: string
   approvalGate?: string
   adapter?: string
+  operation?: ReleaseOperation
+  platforms?: Partial<Record<ReleasePlatform, { command: string; args?: string[] }>>
 }
 
 export interface WorkflowPhase {

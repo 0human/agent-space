@@ -1,6 +1,7 @@
 import { dirname, join } from 'node:path'
 
 import { BUILT_IN_DEVELOPMENT_WORKFLOW, type SkillManifest, type WorkflowDefinition, type WorkflowStartResult, type WorkflowValidationResult, type WorkflowView } from '../shared/workflow'
+import { RELEASE_OPERATIONS, RELEASE_PLATFORMS } from '../shared/project'
 
 interface WorkflowFileDependencies {
   readFile: (path: string, encoding: 'utf8') => Promise<string>
@@ -107,6 +108,22 @@ export function validateWorkflow(definition: unknown, manifests: SkillManifest[]
       }
       if (stepValue.kind === 'tool' && (typeof stepValue.adapter !== 'string' || !stepValue.adapter)) {
         validationError(errors, `Tool Step ${String(stepValue.id ?? stepIndex)} 缺少 adapter。`)
+      }
+      if (stepValue.adapter === 'project.release' && !RELEASE_OPERATIONS.includes(String(stepValue.operation) as typeof RELEASE_OPERATIONS[number])) {
+        validationError(errors, `Release Tool Step ${String(stepValue.id ?? stepIndex)} 缺少有效 operation。`)
+      }
+      if (stepValue.platforms !== undefined) {
+        if (!stepValue.platforms || typeof stepValue.platforms !== 'object' || Array.isArray(stepValue.platforms)) {
+          validationError(errors, `Tool Step ${String(stepValue.id ?? stepIndex)} 的 platforms 必须是对象。`)
+        } else {
+          for (const [platform, command] of Object.entries(stepValue.platforms as Record<string, unknown>)) {
+            if (!RELEASE_PLATFORMS.includes(platform as typeof RELEASE_PLATFORMS[number]) || !command || typeof command !== 'object' || typeof (command as Record<string, unknown>).command !== 'string' || !(command as Record<string, unknown>).command) {
+              validationError(errors, `Tool Step ${String(stepValue.id ?? stepIndex)} 的 ${platform} 平台 command 无效。`)
+            } else if ((command as Record<string, unknown>).args !== undefined && (!Array.isArray((command as Record<string, unknown>).args) || ((command as Record<string, unknown>).args as unknown[]).some((arg) => typeof arg !== 'string'))) {
+              validationError(errors, `Tool Step ${String(stepValue.id ?? stepIndex)} 的 ${platform} 平台 args 无效。`)
+            }
+          }
+        }
       }
       if (stepValue.kind === 'skill') {
         const skill = stepValue.skill

@@ -174,6 +174,7 @@ export function createProjectService(dependencies: ProjectServiceDependencies) {
       ...state,
       permissionPolicy: existing?.permissionPolicy ?? { grantedPermissions: [...DEFAULT_PROJECT_PERMISSIONS] },
       deliveryPolicy: existing?.deliveryPolicy,
+      release: existing?.release,
       updatedAt: now()
     }
     const next = existing

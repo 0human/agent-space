@@ -14,7 +14,9 @@ import type {
 import type { GitMergeRequest, GitPullRequestRequest, GitPullRequestResult } from './git-delivery'
 import { createSqliteRunStore } from './workflow-store'
 import { zhCNMain } from '../shared/i18n/zh-CN'
-import { DEFAULT_PROJECT_PERMISSIONS, type PermissionPolicy, type ProjectDeliveryPolicy } from '../shared/project'
+import { DEFAULT_PROJECT_PERMISSIONS, RELEASE_OPERATIONS, RELEASE_PLATFORMS, type PermissionPolicy, type ProjectDeliveryPolicy } from '../shared/project'
+import type { ReleaseOperation, ReleasePlatform, ProjectReleaseStep } from '../shared/project'
+import { createDefaultReleaseManager, resolveProjectReleaseStep, type ReleaseManager } from './release-manager'
 
 interface GitDeliveryManager {
   commitAfterReview(request: { workspacePath: string; runId: string; baseCommit: string | null; ticket: string | null }): Promise<{ commit: string; artifact: RuntimeArtifact }>
@@ -34,6 +36,52 @@ function isPullRequestStep(step: WorkflowRun['definition']['phases'][number]['st
   return step?.kind === 'tool' && step.adapter === 'github.pull-request'
 }
 
+function isReleaseStep(step: WorkflowRun['definition']['phases'][number]['steps'][number] | undefined): step is WorkflowRun['definition']['phases'][number]['steps'][number] & { operation: ReleaseOperation } {
+  return step?.kind === 'tool' && step.adapter === 'project.release' && Boolean(step.operation)
+}
+
+function supportedPlatform(platform: NodeJS.Platform): ReleasePlatform | null {
+  return RELEASE_PLATFORMS.includes(platform as ReleasePlatform) ? platform as ReleasePlatform : null
+}
+
+function configuredReleaseStep(project: WorkflowPreflightInput['project'], platform: ReleasePlatform, operation: ReleaseOperation, workflowStep?: { platforms?: Partial<Record<ReleasePlatform, { command: string; args?: string[] }>> }): ProjectReleaseStep | null {
+  const configured = resolveProjectReleaseStep(project, platform, operation)
+  if (configured) return configured
+  const platformCommand = workflowStep?.platforms?.[platform]
+  return platformCommand ? { kind: 'tool', command: platformCommand.command, args: platformCommand.args } : null
+}
+
+function releaseConfigErrors(project: WorkflowPreflightInput['project']): string[] {
+  const release = project.release as unknown
+  if (release === undefined) return []
+  if (!release || typeof release !== 'object' || Array.isArray(release)) return ['Release Preflight 失败：Project release 配置必须是对象。']
+  const value = release as Record<string, unknown>
+  const errors: string[] = []
+  if (typeof value.enabled !== 'boolean') errors.push('Release Preflight 失败：Project release.enabled 必须是 boolean。')
+  if (!value.platforms || typeof value.platforms !== 'object' || Array.isArray(value.platforms)) return [...errors, 'Release Preflight 失败：Project release.platforms 必须是对象。']
+  for (const [platform, operations] of Object.entries(value.platforms as Record<string, unknown>)) {
+    if (!RELEASE_PLATFORMS.includes(platform as ReleasePlatform)) {
+      errors.push(`Release Preflight 失败：不支持的平台 ${platform}。`)
+      continue
+    }
+    if (!operations || typeof operations !== 'object' || Array.isArray(operations)) {
+      errors.push(`Release Preflight 失败：${platform} 平台配置必须是对象。`)
+      continue
+    }
+    for (const [operation, config] of Object.entries(operations as Record<string, unknown>)) {
+      if (!RELEASE_OPERATIONS.includes(operation as ReleaseOperation) || !config || typeof config !== 'object' || Array.isArray(config)) {
+        errors.push(`Release Preflight 失败：${platform}/${operation} 配置无效。`)
+        continue
+      }
+      const step = config as Record<string, unknown>
+      if (!['tool', 'human'].includes(String(step.kind))) errors.push(`Release Preflight 失败：${platform}/${operation} kind 无效。`)
+      if (step.args !== undefined && (!Array.isArray(step.args) || step.args.some((arg) => typeof arg !== 'string'))) errors.push(`Release Preflight 失败：${platform}/${operation} args 无效。`)
+      if (step.requiredPermissions !== undefined && (!Array.isArray(step.requiredPermissions) || step.requiredPermissions.some((permission) => typeof permission !== 'string'))) errors.push(`Release Preflight 失败：${platform}/${operation} requiredPermissions 无效。`)
+    }
+  }
+  return errors
+}
+
 function deliveryGateError(input: WorkflowPreflightInput): string | null {
   if (!input.project.remote) return null
   const missing = input.workflow.definition.phases
@@ -51,6 +99,8 @@ interface WorkflowEngineDependencies {
   runtime: AgentRuntimeAdapter
   runWorkspaceManager?: import('./run-workspace').RunWorkspaceManager
   gitDeliveryManager?: GitDeliveryManager
+  releaseManager?: ReleaseManager
+  platform?: NodeJS.Platform
   now?: () => string
   createId?: () => string
 }
@@ -74,6 +124,8 @@ export interface WorkflowEngine {
 
 export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): WorkflowEngine {
   const store = createSqliteRunStore(dependencies)
+  const releaseManager = dependencies.releaseManager ?? createDefaultReleaseManager()
+  const platform = supportedPlatform(dependencies.platform ?? process.platform)
   const active = new Map<string, Promise<void>>()
   let closed = false
 
@@ -86,6 +138,7 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
       const step = run.workflow.phases[run.snapshot.phaseIndex]?.steps[run.snapshot.stepIndex]
       const alreadyApproved = run.events.some((event) => event.type === 'approval_approved' && event.data.executionId === execution.id)
       const pullRequestStep = isPullRequestStep(step)
+      const releaseStep = isReleaseStep(step)
       if (step?.approvalGate && !alreadyApproved && !pullRequestStep) {
         await store.requestApproval(runId, execution.id, step.approvalGate)
         return
@@ -154,6 +207,10 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
             { type: 'artifact_produced', artifact: delivery.artifact, source: 'github.pull-request' },
             { type: 'status_changed', status: 'completed', source: 'github.pull-request' }
           ]
+        } else if (releaseStep && platform) {
+          const configured = configuredReleaseStep(run.project, platform, step.operation, step)
+          if (!configured) throw new Error(`Release ${step.operation} 配置不可用：当前平台没有适配。`)
+          events = await releaseManager.execute({ project: run.project, workspacePath: run.workspacePath, platform, operation: step.operation, step: configured, input: execution.input ?? {}, permissionPolicy: run.project.permissionPolicy ?? { grantedPermissions: [...DEFAULT_PROJECT_PERMISSIONS] } })
         } else {
           events = await dependencies.runtime.execute(context)
         }
@@ -216,6 +273,7 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
       else checks.push(zhCNMain.workflowRun.workflowValid)
       if (!input.idea.trim()) errors.push(zhCNMain.workflowRun.ideaRequired)
       else checks.push(zhCNMain.workflowRun.ideaFilled)
+      errors.push(...releaseConfigErrors(input.project))
       for (const phase of input.workflow.definition.phases) {
         for (const step of phase.steps) {
           if (isPullRequestStep(step) && input.project.remote) {
@@ -234,6 +292,21 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
                 }
               }
               checks.push(`Data Transfer Notice：External Destination: GitHub；Step ${phase.name}/${step.name} 将发送 feature branch、commit、Run ID 并读取 PR checks/reviews；权限：network.github；断网后从持久化 Pull Request Artifact 恢复。`)
+            }
+          }
+          if (isReleaseStep(step) && (step.condition !== 'project.release.enabled' || input.project.release?.enabled === true)) {
+            if (!platform) {
+              errors.push(`Release Preflight 失败：当前平台 ${dependencies.platform ?? process.platform} 不受支持。`)
+              continue
+            }
+            const configured = configuredReleaseStep(input.project, platform, step.operation, step)
+            if (!configured) {
+              errors.push(`Release Preflight 失败：${platform} 缺少 ${step.operation} 适配。`)
+            } else {
+              if (step.operation === 'release' && !step.approvalGate) errors.push('Release Step 必须声明 Approval Gate。')
+              const result = await releaseManager.preflight({ project: input.project, workspacePath: input.project.workspacePath, platform, operation: step.operation, step: configured, input: {}, permissionPolicy: input.project.permissionPolicy ?? { grantedPermissions: [...DEFAULT_PROJECT_PERMISSIONS] } })
+              checks.push(...result.checks)
+              errors.push(...result.errors)
             }
           }
           if (!step.skill) continue
@@ -255,10 +328,17 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
     },
 
     async startRun(input): Promise<WorkflowRun> {
-      const preflight = input.preflight ?? await this.preflight(input)
+      const preflight = await this.preflight(input)
       if (!preflight.passed) throw new Error(preflight.errors.join(' '))
       const missingDeliveryGate = deliveryGateError(input)
       if (missingDeliveryGate) throw new Error(missingDeliveryGate)
+      if (platform) {
+        for (const step of input.workflow.definition.phases.flatMap((phase) => phase.steps)) {
+          if (!isReleaseStep(step) || (step.condition === 'project.release.enabled' && input.project.release?.enabled !== true)) continue
+          if (!configuredReleaseStep(input.project, platform, step.operation, step)) throw new Error(`Release Preflight 失败：${platform} 缺少 ${step.operation} 适配。`)
+          if (step.operation === 'release' && !step.approvalGate) throw new Error('Release Step 必须声明 Approval Gate。')
+        }
+      }
       const run = await store.createRun({ id: (dependencies.createId ?? randomUUID)(), project: input.project, workflow: input.workflow.definition, workflowSource: { source: input.workflow.source, path: input.workflow.path }, idea: input.idea.trim(), now: (dependencies.now ?? (() => new Date().toISOString()))() })
       ensureRunning(run.id)
       return run

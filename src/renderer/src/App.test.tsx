@@ -335,6 +335,41 @@ describe('Desktop Shell navigation', () => {
     expect(window.appShell.startWorkflowRun).toHaveBeenCalledWith('project-1', 'Build durable runs')
   })
 
+  it('shows parallel Run phase, blocker, recent Artifact, and Run ID in Project Overview', async () => {
+    const user = userEvent.setup()
+    const project = {
+      id: 'project-1', name: 'demo', workspacePath: '/work/demo', workspaceAvailable: true,
+      remote: null, currentBranch: 'main', head: 'abc123', defaultBranch: 'main', isGreenfield: false,
+      dirty: false, dirtySummary: { staged: 0, unstaged: 0, untracked: 0, files: [] },
+      updatedAt: '2026-08-18T00:00:00.000Z'
+    }
+    const run = {
+      id: 'run-parallel-1', projectId: project.id, workspacePath: '/work/demo-agent-space-run-parallel-1',
+      remote: null, idea: 'Parallel implementation', workflowId: BUILT_IN_DEVELOPMENT_WORKFLOW.id,
+      workflowVersion: BUILT_IN_DEVELOPMENT_WORKFLOW.version, baseCommit: 'abc123', branch: 'main/agent-space/run-parallel-1',
+      definition: BUILT_IN_DEVELOPMENT_WORKFLOW, status: 'blocked' as const, error: 'Merge conflict detected.',
+      snapshot: {
+        phaseIndex: 3, stepIndex: 0, currentStepExecutionId: 'execution-1', pendingQuestion: null,
+        pendingApproval: null, pendingQuestionDetails: null, pendingApprovalDetails: null,
+        blockedBy: { phaseIndex: 3, stepIndex: 0, executionId: 'execution-1', reason: 'Merge conflict detected.' },
+        nextAction: 'Workflow Run 已 blocked，需要处理阻塞原因。'
+      },
+      stepExecutions: [], events: [], logs: [], phaseContexts: [], decisionRecords: [],
+      artifacts: [{ id: 'artifact-1', runId: 'run-parallel-1', stepExecutionId: 'execution-1', type: 'review-report', name: 'review.md', location: '/work/demo-agent-space-run-parallel-1/review.md', versionHash: null, status: 'available', createdAt: '2026-08-18T00:00:00.000Z' }],
+      createdAt: '2026-08-18T00:00:00.000Z', updatedAt: '2026-08-18T00:00:00.000Z'
+    }
+    window.appShell.listProjects = vi.fn().mockResolvedValue([project])
+    window.appShell.listWorkflowRuns = vi.fn().mockResolvedValue([run])
+
+    render(<App />)
+    await user.click(await screen.findByRole('button', { name: /demo/ }))
+
+    expect(screen.getByText('Run ID: run-parallel-1')).toBeVisible()
+    expect(screen.getByText('当前 Phase：实现')).toBeVisible()
+    expect(screen.getByText('阻塞：Merge conflict detected.')).toBeVisible()
+    expect(screen.getByText('最近 Artifact：review.md')).toBeVisible()
+  })
+
   it('shows persisted context, decisions, logs, blockers, and allowed operations for a Step card', async () => {
     const user = userEvent.setup()
     const project = {
@@ -349,17 +384,17 @@ describe('Desktop Shell navigation', () => {
       idea: '这是一个用于验证窄窗口不会重叠的非常长的中文 Workflow Run 标题',
       workflowId: BUILT_IN_DEVELOPMENT_WORKFLOW.id, workflowVersion: BUILT_IN_DEVELOPMENT_WORKFLOW.version,
       definition: BUILT_IN_DEVELOPMENT_WORKFLOW, status: 'blocked' as const,
-      error: 'Runtime 报告当前 Step blocked。',
+      error: 'Merge conflict detected.',
       snapshot: {
         phaseIndex: 0, stepIndex: 0, currentStepExecutionId: 'execution-1',
         pendingQuestion: null, pendingApproval: null, pendingQuestionDetails: null, pendingApprovalDetails: null,
-        blockedBy: { phaseIndex: 0, stepIndex: 0, executionId: 'execution-1', reason: '等待外部依赖恢复。' },
+        blockedBy: { phaseIndex: 0, stepIndex: 0, executionId: 'execution-1', reason: 'Merge conflict detected.' },
         nextAction: 'Workflow Run 已 blocked，需要处理阻塞原因。'
       },
       stepExecutions: [{
         id: 'execution-1', runId: 'run-1', phaseId: 'discovery', stepId: 'discover', attempt: 1,
         status: 'blocked' as const, input: { idea: '测试' }, skill: { name: 'grill-with-docs', version: '1.0.0' },
-        error: 'Runtime 报告当前 Step blocked。', output: null, startedAt: '2026-08-18T00:00:00.000Z', finishedAt: null
+        error: 'Merge conflict detected.', output: null, startedAt: '2026-08-18T00:00:00.000Z', finishedAt: null
       }],
       events: [],
       logs: [{ id: 1, runId: 'run-1', executionId: 'execution-1', type: 'text_delta', message: '已读取当前领域文档。', data: { type: 'text_delta' }, createdAt: '2026-08-18T00:00:00.000Z' }],
@@ -383,7 +418,9 @@ describe('Desktop Shell navigation', () => {
     expect(screen.getByText('优先保证什么？')).toBeVisible()
     expect(screen.getByText('优先保证可恢复性。')).toBeVisible()
     expect(screen.getByText('已读取当前领域文档。')).toBeVisible()
-    expect(screen.getAllByText('等待外部依赖恢复。').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('Merge conflict detected.').length).toBeGreaterThan(0)
+    expect(screen.getByText('resolving-merge-conflicts')).toBeVisible()
+    expect(screen.getByText('Human Step：确认冲突解决结果后继续 Run')).toBeVisible()
     expect(screen.getByRole('heading', { name: '可用操作' })).toBeVisible()
     expect(screen.getAllByRole('button', { name: '继续' }).at(-1)).toBeEnabled()
     expect(screen.getAllByRole('button', { name: '取消 Run' }).at(-1)).toBeEnabled()

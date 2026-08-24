@@ -566,6 +566,14 @@ button:focus-visible {
   gap: 4px;
 }
 
+.run-list-item > span.run-list-item-copy {
+  gap: 3px;
+}
+
+.run-list-item-copy .run-list-blocker {
+  color: #9a4b38;
+}
+
 .run-list-item strong,
 .run-list-item small {
   overflow-wrap: anywhere;
@@ -950,6 +958,28 @@ button:focus-visible {
 .run-detail-status { color: #276544 !important; margin-top: 6px !important; }
 .run-detail-error { color: #8c382f !important; margin-top: 16px !important; }
 .run-detail-muted { color: #89928b !important; margin-top: 16px !important; }
+
+.run-conflict-entry {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+  padding: 12px;
+  color: #69402f;
+  background: #fff4ec;
+  border: 1px solid #eccdbd;
+  border-radius: 6px;
+}
+
+.run-conflict-entry p {
+  margin: 0;
+  color: #69402f;
+}
+
+.run-conflict-entry span {
+  color: #8b4f39;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
 
 .run-details pre {
   max-width: 100%;

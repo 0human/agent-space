@@ -25,19 +25,21 @@ export function createRunWorkspaceManager(dependencies: RunWorkspaceManagerDepen
 
   return {
     async prepare(project, runId): Promise<RunWorkspacePreparation> {
-      if (!project.head || project.isGreenfield) {
-        return { workspacePath: project.workspacePath, baseCommit: project.head, branch: null }
-      }
-
       const workspacePath = join(dirname(project.workspacePath), `${basename(project.workspacePath)}-agent-space-${runId}`)
       await createDirectory(dirname(workspacePath), { recursive: true })
-      if (project.currentBranch) {
-        const branch = `${project.currentBranch}/agent-space/${runId}`
-        await dependencies.execGit(project.workspacePath, ['worktree', 'add', '-b', branch, workspacePath, project.head])
-        return { workspacePath, baseCommit: project.head, branch }
+      if (!project.head || project.isGreenfield) {
+        await createDirectory(workspacePath, { recursive: true })
+        const branch = `agent-space/${runId}`
+        await dependencies.execGit(workspacePath, ['init'])
+        await dependencies.execGit(workspacePath, ['checkout', '-b', branch])
+        await dependencies.execGit(workspacePath, ['-c', 'user.name=Agent Space', '-c', 'user.email=agent-space@local', 'commit', '--allow-empty', '-m', `Create base for ${runId}`])
+        const baseCommit = (await dependencies.execGit(workspacePath, ['rev-parse', 'HEAD'])).trim() || null
+        return { workspacePath, baseCommit, branch }
       }
-      await dependencies.execGit(project.workspacePath, ['worktree', 'add', '--detach', workspacePath, project.head])
-      return { workspacePath, baseCommit: project.head, branch: null }
+
+      const branch = project.currentBranch ? `${project.currentBranch}/agent-space/${runId}` : `agent-space/${runId}`
+      await dependencies.execGit(project.workspacePath, ['worktree', 'add', '-b', branch, workspacePath, project.head])
+      return { workspacePath, baseCommit: project.head, branch }
     }
   }
 }

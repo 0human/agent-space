@@ -125,6 +125,55 @@ describe('WorkflowEngine public API', () => {
     })
   })
 
+  it('runs multiple Runs for one Project in isolated workspaces', async () => {
+    directory = await mkdtemp(join(tmpdir(), 'agent-space-run-'))
+    const runtime = new FakeRuntime()
+    const runWorkspaceManager = {
+      prepare: vi.fn(async (_project: Project, runId: string) => ({
+        workspacePath: `/work/demo-agent-space-${runId}`,
+        baseCommit: 'abc123',
+        branch: `main/agent-space/${runId}`
+      }))
+    }
+    engine = createWorkflowEngine({ databasePath: join(directory, 'runs.sqlite'), runtime, runWorkspaceManager })
+
+    const first = await engine.startRun({ project, workflow, idea: 'First parallel change #11' })
+    const second = await engine.startRun({ project, workflow, idea: 'Second parallel change #11' })
+
+    await vi.waitFor(() => expect(runtime.contexts).toHaveLength(2))
+    expect(first.id).not.toBe(second.id)
+    expect(first.workspacePath).not.toBe(second.workspacePath)
+    expect(first.branch).not.toBe(second.branch)
+    expect(runtime.contexts.map((context) => context.workspace.path)).toEqual(expect.arrayContaining([
+      `/work/demo-agent-space-${first.id}`,
+      `/work/demo-agent-space-${second.id}`
+    ]))
+
+    runtime.finish([{ type: 'status_changed', status: 'completed' }])
+    runtime.finish([{ type: 'status_changed', status: 'completed' }])
+    await Promise.all([engine.waitForIdle(first.id), engine.waitForIdle(second.id)])
+
+    await expect(engine.listRuns(project.id)).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: first.id, projectId: project.id, baseCommit: 'abc123', branch: `main/agent-space/${first.id}` }),
+      expect.objectContaining({ id: second.id, projectId: project.id, baseCommit: 'abc123', branch: `main/agent-space/${second.id}` })
+    ]))
+  })
+
+  it('blocks a Run when Runtime reports a merge conflict', async () => {
+    directory = await mkdtemp(join(tmpdir(), 'agent-space-run-'))
+    const runtime = new FakeRuntime()
+    engine = createWorkflowEngine({ databasePath: join(directory, 'runs.sqlite'), runtime })
+
+    const run = await engine.startRun({ project, workflow, idea: 'Resolve parallel conflict #11' })
+    await vi.waitFor(() => expect(runtime.calls).toHaveLength(1))
+    runtime.finish([{ type: 'error', error: 'Merge conflict detected while applying branch.' }])
+
+    await expect(engine.waitForIdle(run.id)).resolves.toMatchObject({
+      status: 'blocked',
+      snapshot: { blockedBy: { reason: 'Merge conflict detected while applying branch.' } }
+    })
+  })
+
   it('runs Automatic Review before committing the isolated implementation workspace', async () => {
     directory = await mkdtemp(join(tmpdir(), 'agent-space-run-'))
     const runtime = new FakeRuntime()

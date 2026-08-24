@@ -10,6 +10,7 @@ export interface WorkflowEvent {
   runId: string
   type: string
   data: Record<string, unknown>
+  idempotencyKey?: string | null
   createdAt: string
 }
 
@@ -20,6 +21,7 @@ export interface WorkflowLog {
   type: WorkflowLogType
   message: string
   data: RuntimeEvent
+  idempotencyKey?: string | null
   createdAt: string
 }
 
@@ -50,6 +52,7 @@ export interface StepExecution {
   phaseId: string
   stepId: string
   attempt: number
+  idempotencyKey?: string
   status: StepExecutionStatus
   input: Record<string, unknown> | null
   skill: { name: string; version: string } | null
@@ -69,6 +72,7 @@ export interface ArtifactIndex {
   location: string | null
   versionHash: string | null
   status: string
+  idempotencyKey?: string | null
   createdAt: string
 }
 
@@ -201,6 +205,7 @@ export interface RuntimeArtifact {
   location?: string | null
   versionHash?: string | null
   status?: string
+  idempotencyKey?: string | null
 }
 
 export type RuntimeEvent =
@@ -209,10 +214,11 @@ export type RuntimeEvent =
   | ({ type: 'question'; question: string } & RuntimeEventMetadata)
   | ({ type: 'approval_required'; approval: string } & RuntimeEventMetadata)
   | ({ type: 'artifact_produced'; artifact: RuntimeArtifact } & RuntimeEventMetadata)
-  | ({ type: 'status_changed'; status: 'running' | 'completed' | 'blocked' } & RuntimeEventMetadata)
+  | ({ type: 'status_changed'; status: 'running' | 'completed' | 'blocked'; reason?: string } & RuntimeEventMetadata)
   | ({ type: 'error'; error: string } & RuntimeEventMetadata)
 
 export interface RuntimeEventMetadata {
+  idempotencyKey?: string
   sessionId?: string
   provider?: string
   source?: string

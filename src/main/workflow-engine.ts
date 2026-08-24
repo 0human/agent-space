@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { isPathAllowed } from './permission-policy'
 
 import type {
   AgentRuntimeAdapter,
@@ -19,7 +20,7 @@ import type { ReleaseOperation, ReleasePlatform, ProjectReleaseStep } from '../s
 import { createDefaultReleaseManager, resolveProjectReleaseStep, type ReleaseManager } from './release-manager'
 
 interface GitDeliveryManager {
-  commitAfterReview(request: { workspacePath: string; runId: string; baseCommit: string | null; ticket: string | null }): Promise<{ commit: string; artifact: RuntimeArtifact }>
+  commitAfterReview(request: { workspacePath: string; runId: string; baseCommit: string | null; ticket: string | null; idempotencyKey?: string }): Promise<{ commit: string; artifact: RuntimeArtifact }>
   deliverPullRequest?: (request: GitPullRequestRequest) => Promise<GitPullRequestResult>
   mergePullRequest?: (request: GitMergeRequest) => Promise<GitPullRequestResult>
   refreshPullRequest?: (workspacePath: string, remote: string, number: number, policy?: ProjectDeliveryPolicy, permissionPolicy?: PermissionPolicy) => Promise<PullRequestState>
@@ -90,8 +91,29 @@ function deliveryGateError(input: WorkflowPreflightInput): string | null {
   return missing ? 'GitHub delivery Step 必须声明 Merge Gate。' : null
 }
 
+function workspaceAllowed(project: WorkflowPreflightInput['project']): boolean {
+  return isPathAllowed(project.workspacePath, project.permissionPolicy?.allowedPaths)
+}
+
 function verifiedCommit(run: Pick<WorkflowRun, 'artifacts'> | null): string | null {
   return run?.artifacts.find((artifact) => artifact.type === 'commit' && artifact.versionHash)?.versionHash ?? null
+}
+
+function transientNetworkError(value: string): boolean {
+  return /(network|offline|timed? ?out|timeout|econnreset|econnrefused|enetunreach|eai_again|could not resolve host|unable to access|connection refused|connection reset|断网|网络不可用|连接失败)/i.test(value)
+}
+
+function transientNetworkCode(error: unknown): boolean {
+  return Boolean(error && typeof error === 'object' && 'code' in error && typeof error.code === 'string' && /^(?:EAI_AGAIN|ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENETUNREACH|EHOSTUNREACH|ENETDOWN|ERR_NETWORK)$/i.test(error.code))
+}
+
+function normalizeExternalFailure(events: RuntimeEvent[]): RuntimeEvent[] {
+  const error = events.find((event): event is Extract<RuntimeEvent, { type: 'error' }> => event.type === 'error')
+  if (!error || !transientNetworkError(error.error)) return events
+  return [
+    ...events.filter((event) => event.type !== 'error'),
+    { type: 'status_changed', status: 'blocked', reason: `网络暂时不可用：${error.error}`, source: 'network-retry' }
+  ]
 }
 
 interface WorkflowEngineDependencies {
@@ -182,7 +204,8 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
             title: `Agent Space: ${run.idea.slice(0, 72)}`,
             permissionPolicy: run.project.permissionPolicy ?? { grantedPermissions: [] },
             deliveryPolicy: run.project.deliveryPolicy,
-            pullRequestNumber: run.pullRequest?.number ?? null
+            pullRequestNumber: run.pullRequest?.number ?? null,
+            idempotencyKey: `github.pull-request:${run.id}`
           }
           delivery = alreadyApproved
             ? await dependencies.gitDeliveryManager.mergePullRequest?.({
@@ -215,8 +238,12 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
           events = await dependencies.runtime.execute(context)
         }
       } catch (error) {
-        events = [{ type: 'error' as const, error: error instanceof Error ? error.message : String(error) }]
+        const message = error instanceof Error ? error.message : String(error)
+        events = transientNetworkError(message) || transientNetworkCode(error)
+          ? [{ type: 'status_changed', status: 'blocked', reason: `网络暂时不可用：${message}`, source: 'network-retry' }]
+          : [{ type: 'error' as const, error: message }]
       }
+      events = normalizeExternalFailure(events)
       if (closed) return
       let updated = await store.recordRuntimeResult(runId, execution.id, events)
       if (delivery) updated = await store.setPullRequest(runId, delivery.pullRequest)
@@ -227,7 +254,8 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
             workspacePath: updated.workspacePath,
             runId: updated.id,
             baseCommit: updated.baseCommit,
-            ticket: ticketReference(updated.idea, updated.artifacts)
+            ticket: ticketReference(updated.idea, updated.artifacts),
+            idempotencyKey: `git.commit:${updated.id}`
           })
           await store.registerArtifact(updated.id, execution.id, delivery.artifact)
         } catch (error) {
@@ -255,6 +283,24 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
     }
   }
 
+  async function reconcileCommitArtifacts(run: Awaited<ReturnType<typeof store.getRun>>): Promise<void> {
+    if (!run || !dependencies.gitDeliveryManager) return
+    for (const execution of run.stepExecutions.filter((candidate) => candidate.status === 'completed')) {
+      const phase = run.definition.phases.find((candidate) => candidate.id === execution.phaseId)
+      const step = phase?.steps.find((candidate) => candidate.id === execution.stepId)
+      const reviewStep = step?.id === 'review' || step?.skill?.name === 'code-review' || /review/i.test(step?.name ?? '')
+      if (!reviewStep || run.artifacts.some((artifact) => artifact.type === 'commit' && artifact.stepExecutionId === execution.id)) continue
+      const delivery = await dependencies.gitDeliveryManager.commitAfterReview({
+        workspacePath: run.workspacePath,
+        runId: run.id,
+        baseCommit: run.baseCommit,
+        ticket: ticketReference(run.idea, run.artifacts),
+        idempotencyKey: `git.commit:${run.id}`
+      })
+      await store.registerArtifact(run.id, execution.id, delivery.artifact)
+    }
+  }
+
   function ensureRunning(runId: string): void {
     if (active.has(runId)) return
     const promise = execute(runId).finally(() => {
@@ -269,6 +315,7 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
       const errors: string[] = []
       if (input.project.workspaceAvailable === false) errors.push(zhCNMain.workflowRun.workspaceUnavailable)
       else checks.push(zhCNMain.workflowRun.workspaceAvailable)
+      if (!workspaceAllowed(input.project)) errors.push('Permission Policy 阻止访问 Project Workspace 目录。')
       if (!input.workflow.canStart || !input.workflow.validation.valid) errors.push(zhCNMain.workflowRun.workflowInvalid(input.workflow.validation.errors.join(' ')))
       else checks.push(zhCNMain.workflowRun.workflowValid)
       if (!input.idea.trim()) errors.push(zhCNMain.workflowRun.ideaRequired)
@@ -291,7 +338,7 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
                   errors.push(`GitHub delivery Preflight 失败：${error instanceof Error ? error.message : String(error)}`)
                 }
               }
-              checks.push(`Data Transfer Notice：External Destination: GitHub；Step ${phase.name}/${step.name} 将发送 feature branch、commit、Run ID 并读取 PR checks/reviews；权限：network.github；断网后从持久化 Pull Request Artifact 恢复。`)
+              checks.push(`Data Transfer Notice：External Destination: GitHub；Step ${phase.name}/${step.name} 将发送 feature branch、commit、Run ID、ticket，并读取 PR checks/reviews；权限：network.github；断网后从持久化 Pull Request Artifact 恢复。`)
             }
           }
           if (isReleaseStep(step) && (step.condition !== 'project.release.enabled' || input.project.release?.enabled === true)) {
@@ -311,7 +358,7 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
           }
           if (!step.skill) continue
           const manifest = input.workflow.skillManifests.find((candidate) => candidate.name === step.skill?.name && candidate.version === step.skill?.version)
-          if (manifest?.requiredPermissions.includes('network.github')) checks.push(`Data Transfer Notice：External Destination: GitHub；Step ${phase.name}/${step.name} 将发送规格、tickets、blocking edges 和 Workflow Run ID；权限：network.github；断网后从持久化 Step Execution 恢复。`)
+          if (manifest?.requiredPermissions.includes('network.github')) checks.push(`Data Transfer Notice：External Destination: GitHub；Step ${phase.name}/${step.name} 将发送 Idea、Phase Context、声明的输入 Artifact、Decision Record 和 Skill 请求的 GitHub Artifact；权限：network.github；断网后从持久化 Step Execution 恢复。`)
         }
       }
       const firstStep = input.workflow.definition.phases[0]?.steps[0]
@@ -399,6 +446,7 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
 
     async recover() {
       for (const run of await store.recoverableRuns()) {
+        await reconcileCommitArtifacts(run)
         if (run.status === 'running') ensureRunning(run.id)
       }
     },

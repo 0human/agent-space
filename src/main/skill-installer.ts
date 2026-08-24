@@ -214,6 +214,7 @@ export function createSkillInstaller(dependencies: SkillInstallerDependencies) {
   const packageDirectory = join(dependencies.rootPath, 'packages')
   const installers = new Map((dependencies.installers ?? createDefaultSkillInstallers()).map((installer) => [installer.type, installer]))
   let records: InstalledSkillRecord[] | null = null
+  let installOperation = Promise.resolve()
 
   const load = async (): Promise<InstalledSkillRecord[]> => {
     if (records) return records
@@ -246,13 +247,15 @@ export function createSkillInstaller(dependencies: SkillInstallerDependencies) {
     const installer = installers.get(source.type)
     if (!installer) throw new Error(`没有可用的 Skill Source installer：${source.type}。`)
     const resolved = await installer.resolve(source)
+    const resolvedHash = await hash(resolved.rootPath)
     const preview: SkillInstallPreview = {
       source,
       manifest: resolved.manifest,
       resolvedVersion: resolved.resolvedVersion ?? resolved.manifest.version,
-      contentHash: await hash(resolved.rootPath),
+      contentHash: resolvedHash,
       lifecycleScriptsRisk: detectLifecycleScriptsRisk(source, resolved.lifecycleScripts ?? []),
-      warnings: []
+      warnings: [],
+      idempotencyKey: `skill-package:${resolved.manifest.name}:${resolved.resolvedVersion ?? resolved.manifest.version}:${resolvedHash}`
     }
     return { preview, packagePath: resolved.rootPath, cleanup: resolved.cleanup ?? (async () => undefined) }
   }
@@ -266,6 +269,10 @@ export function createSkillInstaller(dependencies: SkillInstallerDependencies) {
 
     async install(source: SkillSource, options: SkillInstallOptions = {}): Promise<InstalledSkillRecord | null> {
       const resolved = await resolveSource(source)
+      const previous = installOperation
+      let release!: () => void
+      installOperation = new Promise<void>((resolve) => { release = resolve })
+      await previous
       try {
         const confirmed = options.confirmed === true || (options.confirm ? await options.confirm(resolved.preview) : false)
         if (!confirmed) return null
@@ -276,17 +283,27 @@ export function createSkillInstaller(dependencies: SkillInstallerDependencies) {
         const safeName = `${resolved.preview.manifest.name}@${resolved.preview.resolvedVersion}`.replace(/[^a-zA-Z0-9._@+-]/g, '_')
         const finalPath = join(packageDirectory, `${safeName}-${resolved.preview.contentHash.slice(0, 12)}`)
         const stagingPath = `${finalPath}.staging-${Date.now()}`
+        let alreadyInstalled = false
         try {
-          await copyDirectory(resolved.packagePath, stagingPath)
-        } catch (error) {
-          await remove(stagingPath).catch(() => undefined)
-          throw error
+          await access(finalPath, constants.R_OK)
+          alreadyInstalled = await hash(finalPath) === resolved.preview.contentHash
+        } catch {
+          alreadyInstalled = false
         }
-        try {
-          await move(stagingPath, finalPath)
-        } catch (error) {
-          await remove(stagingPath).catch(() => undefined)
-          throw error
+        if (!alreadyInstalled) {
+          try {
+            await copyDirectory(resolved.packagePath, stagingPath)
+          } catch (error) {
+            await remove(stagingPath).catch(() => undefined)
+            throw error
+          }
+          try {
+            await remove(finalPath).catch(() => undefined)
+            await move(stagingPath, finalPath)
+          } catch (error) {
+            await remove(stagingPath).catch(() => undefined)
+            throw error
+          }
         }
         const record: InstalledSkillRecord = { ...resolved.preview, installedPath: finalPath, installedAt: now() }
         current.push(record)
@@ -300,6 +317,7 @@ export function createSkillInstaller(dependencies: SkillInstallerDependencies) {
         records = current
         return record
       } finally {
+        release()
         await resolved.cleanup().catch(() => undefined)
       }
     },

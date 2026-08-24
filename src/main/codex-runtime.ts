@@ -6,6 +6,7 @@ import { basename, delimiter, join, normalize, relative, resolve } from 'node:pa
 
 import type { AgentRuntimeAdapter, RuntimeArtifact, RuntimeEvent, RuntimeExecutionContext, RuntimePreflightContext, RuntimePreflightResult } from '../shared/workflow-run'
 import type { SkillManifest } from '../shared/workflow'
+import { isCommandAllowed, isNetworkHostAllowed, isPathAllowed } from './permission-policy'
 
 interface CodexJsonlResult {
   sessionId?: string
@@ -406,6 +407,21 @@ function forbiddenGitHubCommand(command: string, defaultBranch: string | null | 
   return networkGithub ? null : 'Permission Policy 阻止 GitHub 操作：缺少 network.github 权限。'
 }
 
+function forbiddenScopedCommand(command: string, context: RuntimeExecutionContext): string | null {
+  if (!isCommandAllowed(command.trim().split(/\s+/, 1)[0]?.split(/[\\/]/).at(-1) ?? '', context.permissionPolicy.allowedCommands)) return 'Permission Policy 阻止执行未允许的 command。'
+  if (!isPathAllowed(context.workspace.path, context.permissionPolicy.allowedPaths)) return 'Permission Policy 阻止访问未允许的 Workspace 目录。'
+  if (context.permissionPolicy.allowedNetworkHosts?.length) {
+    for (const value of command.match(/https?:\/\/[^\s'"`]+/gi) ?? []) {
+      try {
+        if (!isNetworkHostAllowed(new URL(value).hostname, context.permissionPolicy.allowedNetworkHosts)) return 'Permission Policy 阻止访问未允许的网络目标。'
+      } catch {
+        return 'Permission Policy 阻止访问无效的网络目标。'
+      }
+    }
+  }
+  return null
+}
+
 export function createCodexRuntimeAdapter(dependencies: CodexRuntimeDependencies = {}): AgentRuntimeAdapter {
   const runProcess = dependencies.runProcess ?? defaultRunProcess
   const command = dependencies.command ?? 'codex'
@@ -433,8 +449,8 @@ export function createCodexRuntimeAdapter(dependencies: CodexRuntimeDependencies
 
   function enrichEvents(events: RuntimeEvent[], context: RuntimeExecutionContext): RuntimeEvent[] {
     const networkGithub = context.permissionPolicy.grantedPermissions.includes('network.github')
-    const forbidden = events.find((event) => event.type === 'tool_call' ? forbiddenGitCommand(event.name, context.project.defaultBranch, networkGithub) ?? forbiddenGitHubCommand(event.name, context.project.defaultBranch, networkGithub) : null)
-    if (forbidden && forbidden.type === 'tool_call') return [{ type: 'error', error: forbiddenGitCommand(forbidden.name, context.project.defaultBranch, networkGithub) ?? forbiddenGitHubCommand(forbidden.name, context.project.defaultBranch, networkGithub) ?? 'Permission Policy 阻止 Git 操作。', provider: 'codex', source: 'permission-policy', permissionPolicy: context.permissionPolicy }]
+    const forbidden = events.find((event) => event.type === 'tool_call' ? forbiddenScopedCommand(event.name, context) ?? forbiddenGitCommand(event.name, context.project.defaultBranch, networkGithub) ?? forbiddenGitHubCommand(event.name, context.project.defaultBranch, networkGithub) : null)
+    if (forbidden && forbidden.type === 'tool_call') return [{ type: 'error', error: forbiddenScopedCommand(forbidden.name, context) ?? forbiddenGitCommand(forbidden.name, context.project.defaultBranch, networkGithub) ?? forbiddenGitHubCommand(forbidden.name, context.project.defaultBranch, networkGithub) ?? 'Permission Policy 阻止 Git 操作。', provider: 'codex', source: 'permission-policy', permissionPolicy: context.permissionPolicy }]
     return events.filter((event) => event.type !== 'artifact_produced' || isArtifactInsideWorkspace(event.artifact, context.workspace.path)).map((event) => ({
       ...event,
       ...(event.type === 'artifact_produced' && isPublishedWorkflowArtifact(event.artifact) ? { artifact: { ...event.artifact, runId: context.runId } } : {}),

@@ -3,6 +3,7 @@ import { promisify } from 'node:util'
 
 import type { PermissionPolicy, ProjectDeliveryPolicy } from '../shared/project'
 import type { PullRequestCheck, PullRequestGate, PullRequestReview, PullRequestState, RuntimeArtifact } from '../shared/workflow-run'
+import { isNetworkHostAllowed } from './permission-policy'
 
 const execFile = promisify(execFileCallback)
 const GITHUB_PERMISSION = 'network.github'
@@ -13,6 +14,7 @@ export interface GitCommitRequest {
   runId: string
   baseCommit: string | null
   ticket: string | null
+  idempotencyKey?: string
 }
 
 export interface GitCommitResult {
@@ -32,6 +34,7 @@ export interface GitPullRequestRequest {
   permissionPolicy: PermissionPolicy
   deliveryPolicy?: ProjectDeliveryPolicy
   pullRequestNumber?: number | null
+  idempotencyKey?: string
 }
 
 export interface GitPullRequestResult {
@@ -129,6 +132,12 @@ export async function resolveGitHubRepository(remote: string, resolveSshHost = d
 
 function requirePermission(policy: PermissionPolicy, permission = GITHUB_PERMISSION): void {
   if (!policy.grantedPermissions.includes(permission)) throw new Error(`Permission Policy 阻止 GitHub 操作：缺少 ${permission}。`)
+}
+
+function requireNetworkHost(policy: PermissionPolicy, remote: string): void {
+  if (!policy.allowedNetworkHosts?.length) return
+  const host = new URL(remote.startsWith('git@') ? `ssh://${remote.replace(':', '/')}` : remote).hostname.toLowerCase()
+  if (!isNetworkHostAllowed(host, policy.allowedNetworkHosts)) throw new Error(`Permission Policy 阻止 GitHub 操作：${host} 不在允许网络范围内。`)
 }
 
 function normalizeBranchRef(value: string): string {
@@ -256,7 +265,8 @@ function pullRequestArtifact(runId: string, pullRequest: PullRequestState): Runt
     runId,
     location: pullRequest.url,
     versionHash: pullRequest.headCommit,
-    status: pullRequest.merged ? 'merged' : pullRequest.gate.canMerge ? 'ready' : 'pending'
+    status: pullRequest.merged ? 'merged' : pullRequest.gate.canMerge ? 'ready' : 'pending',
+    idempotencyKey: `github.pull-request:${runId}`
   }
 }
 
@@ -265,12 +275,12 @@ function pullRequestViewArgs(repo: string, number: number): string[] {
 }
 
 function pullRequestBody(request: GitPullRequestRequest): string {
-  return `Run ID: ${safeLabel(request.runId)}\nTicket: #${safeLabel(request.ticket)}\nBase Commit: ${safeLabel(request.commit)}`
+  return `Run ID: ${safeLabel(request.runId)}\nIdempotency Key: ${safeLabel(request.idempotencyKey ?? `github.pull-request:${request.runId}`)}\nTicket: #${safeLabel(request.ticket)}\nBase Commit: ${safeLabel(request.commit)}`
 }
 
 function isRunPullRequest(candidate: GitHubPullRequestListCandidate, request: GitPullRequestRequest): boolean {
-  const expected = `Run ID: ${safeLabel(request.runId)}`
-  return candidate.body?.split(/\r?\n/).some((line) => line.trim() === expected) ?? false
+  const expected = [`Run ID: ${safeLabel(request.runId)}`, `Idempotency Key: ${safeLabel(request.idempotencyKey ?? `github.pull-request:${request.runId}`)}`]
+  return candidate.body?.split(/\r?\n/).some((line) => expected.includes(line.trim())) ?? false
 }
 
 function selectPullRequestNumber(candidates: GitHubPullRequestListCandidate[], request: GitPullRequestRequest): number | undefined {
@@ -315,7 +325,10 @@ export function createGitDeliveryManager(dependencies: GitDeliveryDependencies) 
 
   async function readPullRequest(workspacePath: string, remote: string, number: number, policy?: ProjectDeliveryPolicy, permissionPolicy?: PermissionPolicy): Promise<PullRequestState> {
     if (!execGitHub) throw new Error('GitHub CLI 不可用。')
-    if (permissionPolicy) requirePermission(permissionPolicy)
+    if (permissionPolicy) {
+      requirePermission(permissionPolicy)
+      requireNetworkHost(permissionPolicy, remote)
+    }
     const repo = await resolveGitHubRepository(remote, resolveSshHost)
     const payload = parseJson<GitHubPullRequestPayload>(await execGitHub(workspacePath, pullRequestViewArgs(repo, number)))
     const pullRequest = toPullRequestState(payload, policy)
@@ -330,10 +343,27 @@ export function createGitDeliveryManager(dependencies: GitDeliveryDependencies) 
   }
 
   async function commitAfterReview(request: GitCommitRequest): Promise<GitCommitResult> {
+    let existingCommit: string | null = null
+    if (request.idempotencyKey) {
+      try {
+        const log = await dependencies.execGit(request.workspacePath, ['log', '-1', '--format=%H%x00%B'])
+        if (log.includes(`Idempotency Key: ${request.idempotencyKey}`)) existingCommit = log.split('\0', 1)[0]?.trim() || null
+      } catch {
+        // A missing log is equivalent to no previously recorded commit.
+      }
+    }
+    if (existingCommit) return {
+      commit: existingCommit,
+      artifact: {
+        type: 'commit', name: 'commit', runId: request.runId,
+        location: `${request.workspacePath}@${existingCommit}`, versionHash: existingCommit, status: 'available', idempotencyKey: request.idempotencyKey
+      }
+    }
     await dependencies.execGit(request.workspacePath, ['add', '-A'])
     try {
+      const suffix = request.idempotencyKey ? `, Idempotency Key: ${request.idempotencyKey}` : ''
       await dependencies.execGit(request.workspacePath, [
-        'commit', '-m', `agent-space: complete implementation for #${safeLabel(request.ticket)} (Run ${safeLabel(request.runId)}, base ${safeLabel(request.baseCommit)})`
+        'commit', '-m', `agent-space: complete implementation for #${safeLabel(request.ticket)} (Run ${safeLabel(request.runId)}, base ${safeLabel(request.baseCommit)}${suffix})`
       ])
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
@@ -349,7 +379,8 @@ export function createGitDeliveryManager(dependencies: GitDeliveryDependencies) 
         runId: request.runId,
         location: `${request.workspacePath}@${commit}`,
         versionHash: commit,
-        status: 'available'
+        status: 'available',
+        ...(request.idempotencyKey ? { idempotencyKey: request.idempotencyKey } : {})
       }
     }
   }
@@ -357,6 +388,7 @@ export function createGitDeliveryManager(dependencies: GitDeliveryDependencies) 
   async function deliverPullRequest(request: GitPullRequestRequest): Promise<GitPullRequestResult> {
     if (!execGitHub) throw new Error('GitHub CLI 不可用。')
     requirePermission(request.permissionPolicy)
+    requireNetworkHost(request.permissionPolicy, request.remote)
     validateBranch(request.branch, request.defaultBranch)
     if (!request.commit.trim()) throw new Error('Permission Policy 阻止创建 PR：未验证本地 commit。')
     const headCommit = (await dependencies.execGit(request.workspacePath, ['rev-parse', 'HEAD'])).trim()
@@ -364,16 +396,17 @@ export function createGitDeliveryManager(dependencies: GitDeliveryDependencies) 
     const repo = await resolveGitHubRepository(request.remote, resolveSshHost)
     const branch = normalizeBranchRef(request.branch)
     const defaultBranch = normalizeBranchRef(request.defaultBranch)
-    await dependencies.execGit(request.workspacePath, ['push', '--set-upstream', request.remote, branch])
 
     let number = request.pullRequestNumber ?? undefined
+    let persisted: PullRequestState | null = null
     if (number) {
-      const persisted = await readPullRequest(request.workspacePath, request.remote, number, request.deliveryPolicy)
+      persisted = await readPullRequest(request.workspacePath, request.remote, number, request.deliveryPolicy, request.permissionPolicy)
       validatePullRequestIdentity(persisted, request)
     } else {
       const listed = parseJson<GitHubPullRequestListCandidate[]>(await execGitHub(request.workspacePath, ['pr', 'list', '--repo', repo, '--head', branch, '--state', 'all', '--limit', '1000', '--json', 'number,url,headRefName,baseRefName,state,body,createdAt']))
       number = selectPullRequestNumber(listed, request)
     }
+    if (!persisted || persisted.headCommit !== request.commit.trim()) await dependencies.execGit(request.workspacePath, ['push', '--set-upstream', request.remote, branch])
     if (!number) {
       const output = await execGitHub(request.workspacePath, [
         'pr', 'create', '--repo', repo, '--base', defaultBranch, '--head', branch,
@@ -393,6 +426,7 @@ export function createGitDeliveryManager(dependencies: GitDeliveryDependencies) 
   async function mergePullRequest(request: GitMergeRequest): Promise<GitPullRequestResult> {
     if (!execGitHub) throw new Error('GitHub CLI 不可用。')
     requirePermission(request.permissionPolicy)
+    requireNetworkHost(request.permissionPolicy, request.remote)
     validateBranch(request.pullRequest.headBranch, request.defaultBranch)
     if (normalizeBranchRef(request.pullRequest.baseBranch) !== normalizeBranchRef(request.defaultBranch)) throw new Error('Permission Policy 阻止合并到非默认目标分支。')
     if (!request.pullRequest.headCommit.trim()) throw new Error('Merge Gate 无法验证：缺少已验证 head commit。')

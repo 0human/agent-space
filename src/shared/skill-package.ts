@@ -28,11 +28,13 @@ export interface SkillInstallPreview {
   contentHash: string
   lifecycleScriptsRisk: string[]
   warnings: string[]
+  idempotencyKey?: string
 }
 
 export interface InstalledSkillRecord extends SkillInstallPreview {
   installedPath: string
   installedAt: string
+  idempotencyKey?: string
 }
 
 export interface SkillPackageSummary {

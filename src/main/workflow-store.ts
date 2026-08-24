@@ -207,7 +207,7 @@ function resolveRuntimeEvents(events: RuntimeEvent[]):
   const approval = events.find((event): event is Extract<RuntimeEvent, { type: 'approval_required' }> => event.type === 'approval_required')
   if (approval) return { type: 'waiting', question: null, approval: approval.approval }
   const blocked = events.find((event): event is Extract<RuntimeEvent, { type: 'status_changed' }> => event.type === 'status_changed' && event.status === 'blocked')
-  if (blocked) return { type: 'blocked', reason: zhCNMain.workflowRun.runtimeBlocked }
+  if (blocked) return { type: 'blocked', reason: blocked.reason ?? zhCNMain.workflowRun.runtimeBlocked }
   const status = events.find((event): event is Extract<RuntimeEvent, { type: 'status_changed' }> => event.type === 'status_changed')
   if (!status || status.status !== 'completed') return { type: 'failed', error: zhCNMain.workflowRun.runtimeInvalid }
   const toolCall = events.find((event): event is Extract<RuntimeEvent, { type: 'tool_call' }> => event.type === 'tool_call')
@@ -288,6 +288,7 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
         phase_id TEXT NOT NULL,
         step_id TEXT NOT NULL,
         attempt INTEGER NOT NULL,
+        idempotency_key TEXT,
         status TEXT NOT NULL,
         input_json TEXT NOT NULL,
         skill_name TEXT,
@@ -303,6 +304,7 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
     const executionColumns = await all<{ name: string }>(db, 'PRAGMA table_info(step_executions)')
     const existingExecutionColumns = new Set(executionColumns.map((column) => column.name))
     if (!existingExecutionColumns.has('input_json')) await run(db, "ALTER TABLE step_executions ADD COLUMN input_json TEXT NOT NULL DEFAULT '{}'")
+    if (!existingExecutionColumns.has('idempotency_key')) await run(db, 'ALTER TABLE step_executions ADD COLUMN idempotency_key TEXT')
     if (!existingExecutionColumns.has('skill_name')) await run(db, 'ALTER TABLE step_executions ADD COLUMN skill_name TEXT')
     if (!existingExecutionColumns.has('skill_version')) await run(db, 'ALTER TABLE step_executions ADD COLUMN skill_version TEXT')
     if (!existingExecutionColumns.has('runtime_session_id')) await run(db, 'ALTER TABLE step_executions ADD COLUMN runtime_session_id TEXT')
@@ -311,10 +313,13 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
         type TEXT NOT NULL,
+        idempotency_key TEXT,
         data_json TEXT NOT NULL,
         created_at TEXT NOT NULL
       )
     `)
+    const eventColumns = await all<{ name: string }>(db, 'PRAGMA table_info(workflow_events)')
+    if (!new Set(eventColumns.map((column) => column.name)).has('idempotency_key')) await run(db, 'ALTER TABLE workflow_events ADD COLUMN idempotency_key TEXT')
     await run(db, `
       CREATE TABLE IF NOT EXISTS artifacts (
         id TEXT PRIMARY KEY,
@@ -325,9 +330,13 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
         location TEXT,
         version_hash TEXT,
         status TEXT NOT NULL,
+        idempotency_key TEXT,
         created_at TEXT NOT NULL
       )
     `)
+    const artifactColumns = await all<{ name: string }>(db, 'PRAGMA table_info(artifacts)')
+    if (!new Set(artifactColumns.map((column) => column.name)).has('idempotency_key')) await run(db, 'ALTER TABLE artifacts ADD COLUMN idempotency_key TEXT')
+    await run(db, 'CREATE UNIQUE INDEX IF NOT EXISTS artifacts_run_idempotency_key ON artifacts(run_id, idempotency_key) WHERE idempotency_key IS NOT NULL')
     await run(db, `
       CREATE TABLE IF NOT EXISTS workflow_logs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -336,9 +345,14 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
         type TEXT NOT NULL,
         message TEXT NOT NULL,
         data_json TEXT NOT NULL,
+        idempotency_key TEXT,
         created_at TEXT NOT NULL
       )
     `)
+    const logColumns = await all<{ name: string }>(db, 'PRAGMA table_info(workflow_logs)')
+    if (!new Set(logColumns.map((column) => column.name)).has('idempotency_key')) await run(db, 'ALTER TABLE workflow_logs ADD COLUMN idempotency_key TEXT')
+    await run(db, 'CREATE UNIQUE INDEX IF NOT EXISTS workflow_events_run_idempotency_key ON workflow_events(run_id, idempotency_key) WHERE idempotency_key IS NOT NULL')
+    await run(db, 'CREATE UNIQUE INDEX IF NOT EXISTS workflow_logs_run_idempotency_key ON workflow_logs(run_id, idempotency_key) WHERE idempotency_key IS NOT NULL')
     await run(db, `
       CREATE TABLE IF NOT EXISTS phase_contexts (
         id TEXT PRIMARY KEY,
@@ -406,17 +420,17 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
     }>(db, 'SELECT * FROM run_snapshots WHERE run_id = ?', [id])
     if (!snapshotRow) throw new Error(`Run Snapshot missing for ${id}`)
     const executions = await all<{
-      id: string; run_id: string; phase_id: string; step_id: string; attempt: number; status: StepExecutionStatus; input_json: string;
+      id: string; run_id: string; phase_id: string; step_id: string; attempt: number; idempotency_key: string | null; status: StepExecutionStatus; input_json: string;
       skill_name: string | null; skill_version: string | null; runtime_session_id: string | null;
       error: string | null; output_json: string | null; started_at: string | null; finished_at: string | null
     }>(db, 'SELECT * FROM step_executions WHERE run_id = ? ORDER BY rowid', [id])
-    const events = await all<{ id: number; run_id: string; type: string; data_json: string; created_at: string }>(db, 'SELECT * FROM workflow_events WHERE run_id = ? ORDER BY id', [id])
+    const events = await all<{ id: number; run_id: string; type: string; idempotency_key: string | null; data_json: string; created_at: string }>(db, 'SELECT * FROM workflow_events WHERE run_id = ? ORDER BY id', [id])
     const artifacts = await all<{
       id: string; run_id: string; step_execution_id: string; type: string; name: string; location: string | null;
-      version_hash: string | null; status: string; created_at: string
+      version_hash: string | null; status: string; idempotency_key: string | null; created_at: string
     }>(db, 'SELECT * FROM artifacts WHERE run_id = ? ORDER BY rowid', [id])
     const logs = await all<{
-      id: number; run_id: string; execution_id: string; type: WorkflowLog['type']; message: string; data_json: string; created_at: string
+      id: number; run_id: string; execution_id: string; type: WorkflowLog['type']; message: string; data_json: string; idempotency_key: string | null; created_at: string
     }>(db, 'SELECT * FROM workflow_logs WHERE run_id = ? ORDER BY id', [id])
     const phaseContexts = await all<{
       id: string; run_id: string; phase_id: string; content: string; updated_at: string
@@ -454,20 +468,20 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
       },
       stepExecutions: executions.map((execution) => ({
         id: execution.id, runId: execution.run_id, phaseId: execution.phase_id, stepId: execution.step_id,
-        attempt: execution.attempt, status: execution.status, input: parseJson<Record<string, unknown>>(execution.input_json),
+        attempt: execution.attempt, idempotencyKey: execution.idempotency_key ?? `${execution.run_id}:${execution.phase_id}:${execution.step_id}:attempt-${execution.attempt}`, status: execution.status, input: parseJson<Record<string, unknown>>(execution.input_json),
         skill: execution.skill_name && execution.skill_version ? { name: execution.skill_name, version: execution.skill_version } : null,
         runtimeSessionId: execution.runtime_session_id,
         error: execution.error,
         output: execution.output_json ? parseJson<Record<string, unknown>>(execution.output_json) : null,
         startedAt: execution.started_at, finishedAt: execution.finished_at
       })),
-      events: events.map((event) => ({ id: event.id, runId: event.run_id, type: event.type, data: parseJson(event.data_json), createdAt: event.created_at })),
-      logs: logs.map((log): WorkflowLog => ({ id: log.id, runId: log.run_id, executionId: log.execution_id, type: log.type, message: log.message, data: parseJson(log.data_json), createdAt: log.created_at })),
+      events: events.map((event) => ({ id: event.id, runId: event.run_id, type: event.type, data: parseJson(event.data_json), idempotencyKey: event.idempotency_key, createdAt: event.created_at })),
+      logs: logs.map((log): WorkflowLog => ({ id: log.id, runId: log.run_id, executionId: log.execution_id, type: log.type, message: log.message, data: parseJson(log.data_json), idempotencyKey: log.idempotency_key, createdAt: log.created_at })),
       phaseContexts: phaseContexts.map((context): PhaseContext => ({ id: context.id, runId: context.run_id, phaseId: context.phase_id, content: context.content, updatedAt: context.updated_at })),
       decisionRecords: decisionRecords.map((record): DecisionRecord => ({ id: record.id, runId: record.run_id, phaseId: record.phase_id, stepId: record.step_id, executionId: record.execution_id, source: record.source, question: record.question, answer: record.answer, continuation: parseJson(record.continuation_json), createdAt: record.created_at })),
       artifacts: artifacts.map((artifact) => ({
         id: artifact.id, runId: artifact.run_id, stepExecutionId: artifact.step_execution_id, type: artifact.type,
-        name: artifact.name, location: artifact.location, versionHash: artifact.version_hash, status: artifact.status,
+        name: artifact.name, location: artifact.location, versionHash: artifact.version_hash, status: artifact.status, idempotencyKey: artifact.idempotency_key,
         createdAt: artifact.created_at
       })),
       createdAt: row.created_at,
@@ -477,14 +491,16 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
     }
   }
 
-  async function appendEvent(runId: string, type: string, data: Record<string, unknown>, createdAt: string): Promise<void> {
-    await run(db, 'INSERT INTO workflow_events (run_id, type, data_json, created_at) VALUES (?, ?, ?, ?)', [runId, type, json(data), createdAt])
+  async function appendEvent(runId: string, type: string, data: Record<string, unknown>, createdAt: string, idempotencyKey?: string): Promise<void> {
+    const key = idempotencyKey ?? (typeof data.idempotencyKey === 'string' ? data.idempotencyKey : `event:${runId}:${type}:${json(data)}`)
+    await run(db, 'INSERT INTO workflow_events (run_id, type, idempotency_key, data_json, created_at) SELECT ?, ?, ?, ?, ? WHERE ? IS NULL OR NOT EXISTS (SELECT 1 FROM workflow_events WHERE run_id = ? AND idempotency_key = ?)', [runId, type, key, json(data), createdAt, key, runId, key])
   }
 
   async function appendRuntimeRecords(current: StoredRun, executionId: string, events: RuntimeEvent[], createdAt: string): Promise<void> {
-    for (const event of events) {
-      await run(db, 'INSERT INTO workflow_logs (run_id, execution_id, type, message, data_json, created_at) VALUES (?, ?, ?, ?, ?, ?)', [
-        current.id, executionId, event.type, runtimeLogMessage(event), json(event), createdAt
+    for (const [index, event] of events.entries()) {
+      const idempotencyKey = event.idempotencyKey ?? `${executionId}:runtime:${index}:${createdAt}`
+      await run(db, 'INSERT INTO workflow_logs (run_id, execution_id, type, message, data_json, idempotency_key, created_at) SELECT ?, ?, ?, ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM workflow_logs WHERE run_id = ? AND idempotency_key = ?)', [
+        current.id, executionId, event.type, runtimeLogMessage(event), json(event), idempotencyKey, createdAt, current.id, idempotencyKey
       ])
     }
 
@@ -512,15 +528,16 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
     for (const artifact of artifacts) {
       const externalWorkflowArtifact = ['specification', 'ticket', 'tickets', 'decision-record'].includes(artifact.type) && /^https:\/\/github\.com\//i.test(artifact.location ?? '')
       if (externalWorkflowArtifact && artifact.runId !== runId) continue
-      const existing = await get<{ id: string }>(db, 'SELECT id FROM artifacts WHERE run_id = ? AND name = ? AND location IS ?', [runId, artifact.name, artifact.location ?? null])
+      const idempotencyKey = artifact.idempotencyKey ?? `artifact:${runId}:${artifact.type}:${artifact.name}:${artifact.location ?? ''}`
+      const existing = await get<{ id: string }>(db, 'SELECT id FROM artifacts WHERE run_id = ? AND (idempotency_key = ? OR (idempotency_key IS NULL AND name = ? AND location IS ?)) LIMIT 1', [runId, idempotencyKey, artifact.name, artifact.location ?? null])
       if (existing) {
-        await run(db, 'UPDATE artifacts SET type = ?, step_execution_id = ?, version_hash = ?, status = ? WHERE id = ?', [
-          artifact.type, executionId, artifact.versionHash ?? null, artifact.status ?? 'available', existing.id
+        await run(db, 'UPDATE artifacts SET type = ?, step_execution_id = ?, name = ?, location = ?, version_hash = ?, status = ?, idempotency_key = ? WHERE id = ?', [
+          artifact.type, executionId, artifact.name, artifact.location ?? null, artifact.versionHash ?? null, artifact.status ?? 'available', idempotencyKey, existing.id
         ])
         continue
       }
-      await run(db, 'INSERT INTO artifacts (id, run_id, step_execution_id, type, name, location, version_hash, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', [
-        createId(), runId, executionId, artifact.type, artifact.name, artifact.location ?? null, artifact.versionHash ?? null, artifact.status ?? 'available', createdAt
+      await run(db, 'INSERT INTO artifacts (id, run_id, step_execution_id, type, name, location, version_hash, status, idempotency_key, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', [
+        createId(), runId, executionId, artifact.type, artifact.name, artifact.location ?? null, artifact.versionHash ?? null, artifact.status ?? 'available', idempotencyKey, createdAt
       ])
     }
   }
@@ -565,7 +582,7 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
     const step = workflow.phases[phaseIndex]?.steps[stepIndex]
     if (!step) throw new Error('Workflow Step 不存在。')
     const id = createId()
-    await run(db, `INSERT INTO step_executions (id, run_id, phase_id, step_id, attempt, status, input_json, skill_name, skill_version, runtime_session_id, started_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [id, runId, workflow.phases[phaseIndex].id, step.id, attempt, status, json(input), step.skill?.name ?? null, step.skill?.version ?? null, null, createdAt])
+    await run(db, `INSERT INTO step_executions (id, run_id, phase_id, step_id, attempt, idempotency_key, status, input_json, skill_name, skill_version, runtime_session_id, started_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [id, runId, workflow.phases[phaseIndex].id, step.id, attempt, `${runId}:${workflow.phases[phaseIndex].id}:${step.id}:attempt-${attempt}`, status, json(input), step.skill?.name ?? null, step.skill?.version ?? null, null, createdAt])
     return id
   }
 
@@ -643,7 +660,7 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
           await updateSnapshot(runId, snapshot)
           await appendEvent(runId, result.type, result.type === 'waiting'
             ? { ...(result.question ? { question: result.question } : {}), ...(result.approval ? { approval: result.approval } : {}) }
-            : { reason: error, ...(result.type === 'blocked' ? { executionId } : {}) }, timestamp)
+            : { executionId, reason: error }, timestamp, `event:${runId}:${result.type}:${executionId}`)
           return (await load(runId))!
         }
 
@@ -810,7 +827,7 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
 
     async recoverableRuns(): Promise<StoredRun[]> {
       return locked(async () => {
-        const rows = await all<{ id: string }>(db, "SELECT id FROM runs WHERE status IN ('running', 'waiting', 'blocked') ORDER BY updated_at", [])
+        const rows = await all<{ id: string }>(db, "SELECT id FROM runs WHERE status IN ('running', 'waiting', 'blocked', 'completed') ORDER BY updated_at", [])
         const runs: StoredRun[] = []
         for (const row of rows) {
           const stored = await load(row.id)

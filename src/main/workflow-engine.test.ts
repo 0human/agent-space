@@ -526,6 +526,71 @@ describe('WorkflowEngine public API', () => {
     expect(preflightPullRequest).toHaveBeenCalledWith(remoteProject.workspacePath, remoteProject.remote)
   })
 
+  it('blocks a delivery Step on a transient network failure and resumes the same Step Execution', async () => {
+    directory = await mkdtemp(join(tmpdir(), 'agent-space-run-'))
+    const remoteProject: Project = {
+      ...project,
+      remote: 'https://github.com/example/demo.git',
+      permissionPolicy: { grantedPermissions: ['workspace.read', 'workspace.write', 'git.commit', 'network.github'] }
+    }
+    const deliveryWorkflow: WorkflowView = {
+      ...workflow,
+      definition: {
+        ...workflow.definition,
+        phases: [{ ...workflow.definition.phases[0], steps: [{ id: 'delivery', name: '创建 PR', kind: 'tool', adapter: 'github.pull-request', approvalGate: 'PR 合并确认' }] }]
+      }
+    }
+    const deliverPullRequest = vi.fn()
+      .mockRejectedValueOnce(new Error('GitHub network unavailable: ECONNRESET'))
+      .mockResolvedValueOnce({
+        pullRequest: {
+          number: 51, url: 'https://github.com/example/demo/pull/51', title: 'Delivery', headBranch: 'agent-space/run-1', baseBranch: 'main', headCommit: 'commit-1',
+          checks: [{ name: 'CI', status: 'COMPLETED', conclusion: 'SUCCESS' }], reviews: [{ author: 'reviewer', state: 'APPROVED' }], mergeable: 'MERGEABLE', merged: false, mergedAt: null, draft: false,
+          gate: { checksSatisfied: true, reviewsSatisfied: true, mergeabilitySatisfied: true, canMerge: true, reason: null }, updatedAt: null
+        },
+        artifact: { type: 'pull-request', name: 'PR #51', runId: 'run-1', location: 'https://github.com/example/demo/pull/51', versionHash: 'commit-1', status: 'ready' }
+      })
+    const refreshPullRequest = vi.fn().mockResolvedValue(null)
+    engine = createWorkflowEngine({
+      databasePath: join(directory, 'runs.sqlite'),
+      runtime: createFakeRuntimeAdapter(0),
+      gitDeliveryManager: { commitAfterReview: vi.fn(), deliverPullRequest, refreshPullRequest, preflightPullRequest: vi.fn().mockResolvedValue(undefined) }
+    })
+
+    const run = await engine.startRun({ project: remoteProject, workflow: deliveryWorkflow, idea: 'Retry network delivery' })
+    const blocked = await engine.waitForIdle(run.id)
+    const executionId = blocked.snapshot.currentStepExecutionId
+    expect(blocked).toMatchObject({ status: 'blocked', snapshot: { blockedBy: expect.objectContaining({ executionId, reason: expect.stringContaining('网络') }) } })
+
+    const resumed = await engine.resumeRun(run.id)
+    expect(resumed.snapshot.currentStepExecutionId).toBe(executionId)
+    await expect(engine.waitForIdle(run.id)).resolves.toMatchObject({ status: 'waiting', pullRequest: { number: 51 } })
+    expect(deliverPullRequest).toHaveBeenCalledTimes(2)
+  })
+
+  it('deduplicates an Artifact by its explicit idempotency key across a retry', async () => {
+    directory = await mkdtemp(join(tmpdir(), 'agent-space-run-'))
+    const runtime = new FakeRuntime()
+    engine = createWorkflowEngine({ databasePath: join(directory, 'runs.sqlite'), runtime })
+    const run = await engine.startRun({ project, workflow, idea: 'Retry an artifact registration' })
+    await vi.waitFor(() => expect(runtime.calls).toHaveLength(1))
+    runtime.finish([
+      { type: 'artifact_produced', artifact: { type: 'document', name: 'first-location', location: '/tmp/first', idempotencyKey: 'artifact:run-1:spec' } },
+      { type: 'error', error: 'temporary validation error' }
+    ])
+    await expect(engine.waitForIdle(run.id)).resolves.toMatchObject({ status: 'failed', artifacts: [expect.objectContaining({ idempotencyKey: 'artifact:run-1:spec' })] })
+    await engine.retryStep(run.id)
+    await vi.waitFor(() => expect(runtime.calls).toHaveLength(2))
+    runtime.finish([
+      { type: 'artifact_produced', artifact: { type: 'document', name: 'second-location', location: '/tmp/second', idempotencyKey: 'artifact:run-1:spec' } },
+      { type: 'status_changed', status: 'completed' }
+    ])
+    await expect(engine.waitForIdle(run.id)).resolves.toMatchObject({ status: 'completed', artifacts: [expect.objectContaining({ name: 'second-location', location: '/tmp/second', idempotencyKey: 'artifact:run-1:spec' })] })
+    await expect(engine.getRun(run.id)).resolves.toMatchObject({ artifacts: [expect.anything()] })
+    const finalRun = await engine.getRun(run.id)
+    expect(finalRun?.artifacts).toHaveLength(1)
+  })
+
   it('shows a GitHub Data Transfer Notice when a later Skill publishes external artifacts', async () => {
     directory = await mkdtemp(join(tmpdir(), 'agent-space-run-'))
     engine = createWorkflowEngine({ databasePath: join(directory, 'runs.sqlite'), runtime: new FakeRuntime() })

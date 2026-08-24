@@ -288,7 +288,7 @@ describe('Codex Runtime Adapter recorded contract', () => {
       phaseContext: null, inputArtifacts: [], decisionRecords: [], permissionPolicy: { grantedPermissions: [] }, events: []
     })
 
-    expect(readPaths).toEqual(['/installed/external@1.0.0/skills/external/SKILL.md'])
+    expect(readPaths.map((path) => path.replaceAll('\\', '/'))).toEqual(['/installed/external@1.0.0/skills/external/SKILL.md'])
   })
 
   it.skipIf(process.env.RUN_CODEX_CLI_TEST !== '1')('reaches the installed Codex CLI JSONL boundary when explicitly enabled', async () => {

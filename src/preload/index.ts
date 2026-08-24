@@ -22,7 +22,10 @@ const appShellApi: AppShellApi = Object.freeze({
   answerWorkflowQuestion: (runId, answer) => ipcRenderer.invoke(APP_SHELL_CHANNELS.answerWorkflowQuestion, runId, answer),
   approveWorkflowApproval: (runId) => ipcRenderer.invoke(APP_SHELL_CHANNELS.approveWorkflowApproval, runId),
   rejectWorkflowApproval: (runId) => ipcRenderer.invoke(APP_SHELL_CHANNELS.rejectWorkflowApproval, runId),
-  openWorkflowFile: (projectId) => ipcRenderer.invoke(APP_SHELL_CHANNELS.openWorkflowFile, projectId)
+  openWorkflowFile: (projectId) => ipcRenderer.invoke(APP_SHELL_CHANNELS.openWorkflowFile, projectId),
+  previewSkillInstall: (source) => ipcRenderer.invoke(APP_SHELL_CHANNELS.previewSkillInstall, source),
+  installSkill: (source) => ipcRenderer.invoke(APP_SHELL_CHANNELS.installSkill, source),
+  listInstalledSkills: () => ipcRenderer.invoke(APP_SHELL_CHANNELS.listInstalledSkills)
 })
 
 contextBridge.exposeInMainWorld('appShell', appShellApi)

@@ -271,6 +271,26 @@ describe('Codex Runtime Adapter recorded contract', () => {
     })
   })
 
+  it('loads an Installed Skill from its fixed package path instead of the built-in package', async () => {
+    const readPaths: string[] = []
+    const manifest = { name: 'external', version: '1.0.0', entry: 'skills/external/SKILL.md', dependencies: [], supportedRuntimes: ['codex'], capabilities: [], requiredPermissions: [] }
+    const adapter = createCodexRuntimeAdapter({
+      getSkillManifests: () => [manifest],
+      resolveSkillPackagePath: () => '/installed/external@1.0.0',
+      readSkill: async (path) => { readPaths.push(path); return '# external' },
+      runProcess: async () => ({ code: 0, stderr: '', stdout: '{"type":"turn.completed"}' })
+    })
+
+    await adapter.execute({
+      runId: 'run-1', project: { workspacePath: '/work/demo' } as never, workspace: { path: '/work/demo' }, idea: 'Idea',
+      workflow: { phases: [] } as never, phaseIndex: 0, stepIndex: 0,
+      execution: { id: 'execution-1', runtimeSessionId: null } as never, skill: { name: 'external', version: '1.0.0' },
+      phaseContext: null, inputArtifacts: [], decisionRecords: [], permissionPolicy: { grantedPermissions: [] }, events: []
+    })
+
+    expect(readPaths.map((path) => path.replaceAll('\\', '/'))).toEqual(['/installed/external@1.0.0/skills/external/SKILL.md'])
+  })
+
   it.skipIf(process.env.RUN_CODEX_CLI_TEST !== '1')('reaches the installed Codex CLI JSONL boundary when explicitly enabled', async () => {
     const adapter = createCodexRuntimeAdapter()
     const events = await adapter.execute({

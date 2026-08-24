@@ -25,6 +25,32 @@ export interface ProjectDeliveryPolicy {
   requiredApprovals?: number
 }
 
+export type ReleasePlatform = 'darwin' | 'linux' | 'win32'
+export type ReleaseOperation = 'build' | 'release' | 'validation'
+
+export interface ProjectReleaseStep {
+  kind: 'tool' | 'human'
+  command?: string
+  args?: string[]
+  cwd?: string
+  targetEnvironment?: string
+  dataTransfer?: string
+  requiredPermissions?: string[]
+  instructions?: string
+}
+
+export interface ProjectReleasePlatformConfig {
+  build?: ProjectReleaseStep
+  release?: ProjectReleaseStep
+  validation?: ProjectReleaseStep
+}
+
+export interface ProjectReleaseConfig {
+  enabled: boolean
+  platforms: Partial<Record<ReleasePlatform, ProjectReleasePlatformConfig>>
+  targetEnvironment?: string
+}
+
 export const DEFAULT_PROJECT_PERMISSIONS = [
   'workspace.read',
   'workspace.write',
@@ -39,6 +65,7 @@ export interface Project extends WorkspaceState {
   updatedAt: string
   permissionPolicy?: PermissionPolicy
   deliveryPolicy?: ProjectDeliveryPolicy
+  release?: ProjectReleaseConfig
 }
 
 export interface ProjectImportResult {

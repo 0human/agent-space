@@ -125,6 +125,101 @@ describe('WorkflowEngine public API', () => {
     })
   })
 
+  it('selects the current platform release configuration during Preflight', async () => {
+    directory = await mkdtemp(join(tmpdir(), 'agent-space-run-'))
+    engine = createWorkflowEngine({ databasePath: join(directory, 'runs.sqlite'), runtime: new FakeRuntime(), platform: 'linux' })
+    const releaseWorkflow: WorkflowView = {
+      ...workflow,
+      definition: {
+        ...workflow.definition,
+        phases: [{
+          id: 'release', name: 'Release', goal: 'Publish', steps: [
+            { id: 'build', name: 'Build', kind: 'tool', adapter: 'project.release', operation: 'build' },
+            { id: 'release', name: 'Release', kind: 'tool', adapter: 'project.release', operation: 'release', approvalGate: '发布确认' },
+            { id: 'validate', name: 'Validation', kind: 'tool', adapter: 'project.release', operation: 'validation' }
+          ]
+        }]
+      }
+    }
+    const configuredProject: Project = {
+      ...project,
+      release: {
+        enabled: true,
+        platforms: {
+          linux: {
+            build: { kind: 'tool', command: 'npm', args: ['run', 'build'] },
+            release: { kind: 'tool', command: 'deploy', args: ['--production'], targetEnvironment: 'https://staging.example.com', requiredPermissions: ['network.deploy'] },
+            validation: { kind: 'tool', command: 'curl', args: ['--fail', 'https://staging.example.com/health'] }
+          }
+        }
+      }
+    }
+
+    const result = await engine.preflight({ project: configuredProject, workflow: releaseWorkflow, idea: 'Release the app' })
+
+    expect(result.passed).toBe(false)
+    expect(result.errors).toEqual(expect.arrayContaining([
+      expect.stringContaining('network.deploy'),
+      expect.stringContaining('Release Preflight')
+    ]))
+    expect(result.checks).toEqual(expect.arrayContaining([
+      expect.stringContaining('Linux'),
+      expect.stringContaining('Data Transfer Notice')
+    ]))
+  })
+
+  it('runs configured Release and Post-release Validation Tool Steps after approval', async () => {
+    directory = await mkdtemp(join(tmpdir(), 'agent-space-run-'))
+    const releaseWorkflow: WorkflowView = {
+      ...workflow,
+      definition: {
+        ...workflow.definition,
+        phases: [{
+          id: 'release', name: 'Release', goal: 'Publish', steps: [
+            { id: 'build', name: 'Build', kind: 'tool', adapter: 'project.release', operation: 'build' },
+            { id: 'release', name: 'Release', kind: 'tool', adapter: 'project.release', operation: 'release', approvalGate: '发布确认' },
+            { id: 'validate', name: 'Validation', kind: 'tool', adapter: 'project.release', operation: 'validation' }
+          ]
+        }]
+      }
+    }
+    const configuredProject: Project = {
+      ...project,
+      release: {
+        enabled: true,
+        platforms: {
+          linux: {
+            build: { kind: 'tool', command: 'npm', args: ['run', 'build'] },
+            release: { kind: 'tool', command: 'deploy', args: ['--production'], targetEnvironment: 'https://staging.example.com' },
+            validation: { kind: 'tool', command: 'curl', args: ['--fail', 'https://staging.example.com/health'] }
+          }
+        }
+      }
+    }
+    const releaseManager = {
+      preflight: vi.fn().mockResolvedValue({ checks: ['release commands available'], errors: [] }),
+      execute: vi.fn()
+        .mockResolvedValueOnce([{ type: 'artifact_produced', artifact: { type: 'build', name: 'Build', status: 'available' } }, { type: 'status_changed', status: 'completed' }])
+        .mockResolvedValueOnce([{ type: 'artifact_produced', artifact: { type: 'release', name: 'Release', location: 'https://staging.example.com', status: 'published' } }, { type: 'status_changed', status: 'completed' }])
+        .mockResolvedValueOnce([{ type: 'artifact_produced', artifact: { type: 'validation-report', name: 'Validation', location: 'https://staging.example.com/health', status: 'passed' } }, { type: 'status_changed', status: 'completed' }])
+    }
+    engine = createWorkflowEngine({ databasePath: join(directory, 'runs.sqlite'), runtime: new FakeRuntime(), platform: 'linux', releaseManager })
+
+    const run = await engine.startRun({ project: configuredProject, workflow: releaseWorkflow, idea: 'Release the app' })
+    const waiting = await engine.waitForIdle(run.id)
+
+    expect(waiting.status).toBe('waiting')
+    expect(waiting.snapshot.pendingApproval).toBe('发布确认')
+    expect(waiting.artifacts.map((artifact) => artifact.type)).toEqual(['build'])
+
+    await engine.approve(run.id)
+    const completed = await engine.waitForIdle(run.id)
+
+    expect(completed.status).toBe('completed')
+    expect(completed.artifacts.map((artifact) => artifact.type)).toEqual(['build', 'release', 'validation-report'])
+    expect(releaseManager.execute).toHaveBeenCalledTimes(3)
+  })
+
   it('starts a built-in Workflow and persists its source snapshot with the definition', async () => {
     directory = await mkdtemp(join(tmpdir(), 'agent-space-run-'))
     const runtime = new FakeRuntime()

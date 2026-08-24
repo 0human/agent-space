@@ -44,13 +44,16 @@
       "id": "release",
       "name": "发布",
       "goal": "按 Project 配置完成发布。",
-      "steps": [{ "id": "release", "name": "发布", "kind": "human", "condition": "project.release.enabled", "approvalGate": "发布确认" }]
+      "steps": [
+        { "id": "build", "name": "构建发布包", "kind": "tool", "adapter": "project.release", "operation": "build", "condition": "project.release.enabled" },
+        { "id": "release", "name": "发布", "kind": "tool", "adapter": "project.release", "operation": "release", "condition": "project.release.enabled", "approvalGate": "发布确认" }
+      ]
     },
     {
       "id": "post-release",
       "name": "发布后验证",
       "goal": "确认交付结果在目标环境可用。",
-      "steps": [{ "id": "validate", "name": "上线验证", "kind": "human", "artifacts": ["validation-report"] }]
+      "steps": [{ "id": "validate", "name": "上线验证", "kind": "tool", "adapter": "project.release", "operation": "validation", "condition": "project.release.enabled", "artifacts": ["validation-report"] }]
     }
   ]
 }

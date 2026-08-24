@@ -18,7 +18,7 @@ describe('Desktop Shell navigation', () => {
         source: 'built-in',
         path: null,
         validation: { valid: true, errors: [], warnings: [] },
-        canStart: false,
+        canStart: true,
         skillManifests: BUILT_IN_SKILL_MANIFESTS
       }),
       copyWorkflow: vi.fn(),
@@ -257,6 +257,7 @@ describe('Desktop Shell navigation', () => {
     expect(screen.getByText('skills/grill-with-docs/SKILL.md')).toBeVisible()
     expect(screen.getByText('内置 Workflow 只读')).toBeVisible()
     expect(screen.getByRole('button', { name: '复制为 Project Workflow' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: '直接运行内置 Workflow' })).toBeEnabled()
     expect(screen.getByRole('button', { name: '启动新 Run' })).toBeDisabled()
   })
 
@@ -333,6 +334,40 @@ describe('Desktop Shell navigation', () => {
     expect(await screen.findByRole('heading', { name: 'Build durable runs' })).toBeVisible()
     expect(screen.getAllByText('运行中').length).toBeGreaterThan(0)
     expect(window.appShell.startWorkflowRun).toHaveBeenCalledWith('project-1', 'Build durable runs')
+  })
+
+  it('runs a valid built-in Workflow after Preflight without copying it', async () => {
+    const user = userEvent.setup()
+    const project = {
+      id: 'project-1', name: 'demo', workspacePath: '/work/demo', workspaceAvailable: true,
+      remote: null, currentBranch: 'main', head: 'abc123', defaultBranch: 'main',
+      isGreenfield: false, dirty: false,
+      dirtySummary: { staged: 0, unstaged: 0, untracked: 0, files: [] }, updatedAt: '2026-08-14T00:00:00.000Z'
+    }
+    const run = {
+      id: 'run-built-in', projectId: project.id, workspacePath: project.workspacePath, idea: 'Run built-in',
+      workflowId: BUILT_IN_DEVELOPMENT_WORKFLOW.id, workflowVersion: BUILT_IN_DEVELOPMENT_WORKFLOW.version,
+      workflowSource: { source: 'built-in' as const, id: BUILT_IN_DEVELOPMENT_WORKFLOW.id, version: BUILT_IN_DEVELOPMENT_WORKFLOW.version, path: null },
+      definition: BUILT_IN_DEVELOPMENT_WORKFLOW, status: 'running' as const, error: null,
+      snapshot: { phaseIndex: 0, stepIndex: 0, currentStepExecutionId: 'execution-built-in', pendingQuestion: null, pendingApproval: null, pendingQuestionDetails: null, pendingApprovalDetails: null, blockedBy: null, nextAction: '等待 Runtime 完成当前 Step。' },
+      stepExecutions: [], events: [], artifacts: [], phaseContexts: [], decisionRecords: [], logs: [], createdAt: '2026-08-24T00:00:00.000Z', updatedAt: '2026-08-24T00:00:00.000Z'
+    }
+    window.appShell.listProjects = vi.fn().mockResolvedValue([project])
+    window.appShell.getWorkflow = vi.fn().mockResolvedValue({ definition: BUILT_IN_DEVELOPMENT_WORKFLOW, source: 'built-in', path: null, validation: { valid: true, errors: [], warnings: [] }, canStart: true, skillManifests: BUILT_IN_SKILL_MANIFESTS })
+    window.appShell.preflightWorkflowRun = vi.fn().mockResolvedValue({ passed: true, checks: ['Workflow Validation 通过。'], errors: [] })
+    window.appShell.startWorkflowRun = vi.fn().mockResolvedValue({ ok: true, error: null, run })
+    window.appShell.getWorkflowRun = vi.fn().mockResolvedValue(run)
+
+    render(<App />)
+    await user.click(await screen.findByRole('button', { name: /demo/ }))
+    await user.click(screen.getByRole('button', { name: '查看 Workflow' }))
+    await user.type(await screen.findByLabelText('Idea'), 'Run built-in')
+    await user.click(screen.getByRole('button', { name: '运行 Preflight' }))
+    await user.click(await screen.findByRole('button', { name: '启动新 Run' }))
+
+    expect(window.appShell.copyWorkflow).not.toHaveBeenCalled()
+    expect(window.appShell.startWorkflowRun).toHaveBeenCalledWith(project.id, 'Run built-in')
+    expect(screen.getByText('来源快照：内置 Workflow@1.0.0')).toBeVisible()
   })
 
   it('shows parallel Run phase, blocker, recent Artifact, and Run ID in Project Overview', async () => {

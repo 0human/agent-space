@@ -7,7 +7,7 @@ import type { WorkflowPreflightResult, WorkflowRunActionResult } from '../shared
 import type { WorkflowEngine } from './workflow-engine'
 
 interface WorkflowService {
-  getBuiltIn: () => Promise<WorkflowView>
+  getBuiltIn: (grantedPermissions?: string[]) => Promise<WorkflowView>
   copyToProject: (workspacePath: string, grantedPermissions: string[]) => Promise<WorkflowView>
   loadProject: (workspacePath: string, grantedPermissions: string[]) => Promise<WorkflowView>
   startProjectRun: (workspacePath: string, grantedPermissions: string[]) => Promise<{ ok: boolean; error: string | null }>
@@ -32,7 +32,7 @@ export function registerWorkflowHandlers({ handle, projectService, workflowServi
     try {
       return await workflowService.loadProject(project.workspacePath, permissionsFor(project))
     } catch (reason) {
-      if (reason && typeof reason === 'object' && 'code' in reason && reason.code === 'ENOENT') return workflowService.getBuiltIn()
+      if (reason && typeof reason === 'object' && 'code' in reason && reason.code === 'ENOENT') return workflowService.getBuiltIn(permissionsFor(project))
       throw reason
     }
   }

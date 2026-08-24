@@ -21,6 +21,7 @@ describe('Workflow service', () => {
     expect(view.path).toBeNull()
     expect(view.definition).toEqual(BUILT_IN_DEVELOPMENT_WORKFLOW)
     expect(view.validation.valid).toBe(true)
+    expect(view.canStart).toBe(true)
     expect(BUILT_IN_SKILL_MANIFESTS[1]).toMatchObject({ name: 'implement', entry: 'skills/implement/SKILL.md' })
   })
 

@@ -19,7 +19,7 @@ import type {
   WorkflowRun,
   WorkflowRunStatus
 } from '../shared/workflow-run'
-import type { WorkflowDefinition } from '../shared/workflow'
+import type { WorkflowDefinition, WorkflowSource } from '../shared/workflow'
 import { zhCNMain } from '../shared/i18n/zh-CN'
 import type { RunWorkspaceManager } from './run-workspace'
 
@@ -32,6 +32,7 @@ interface CreateRunInput {
   id: string
   project: Project
   workflow: WorkflowDefinition
+  workflowSource: { source: WorkflowSource; path: string | null }
   idea: string
   now: string
 }
@@ -247,6 +248,7 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
         branch TEXT,
         pull_request_json TEXT,
         workflow_json TEXT NOT NULL,
+        workflow_source_json TEXT,
         project_json TEXT NOT NULL,
         status TEXT NOT NULL,
         error TEXT,
@@ -256,6 +258,7 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
     `)
     const runColumns = await all<{ name: string }>(db, 'PRAGMA table_info(runs)')
     const existingRunColumns = new Set(runColumns.map((column) => column.name))
+    if (!existingRunColumns.has('workflow_source_json')) await run(db, 'ALTER TABLE runs ADD COLUMN workflow_source_json TEXT')
     if (!existingRunColumns.has('base_commit')) await run(db, 'ALTER TABLE runs ADD COLUMN base_commit TEXT')
     if (!existingRunColumns.has('branch')) await run(db, 'ALTER TABLE runs ADD COLUMN branch TEXT')
     if (!existingRunColumns.has('pull_request_json')) await run(db, 'ALTER TABLE runs ADD COLUMN pull_request_json TEXT')
@@ -394,6 +397,7 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
       id: string; project_id: string; workspace_path: string; idea: string; workflow_id: string; workflow_version: string;
       base_commit: string | null; branch: string | null; pull_request_json: string | null;
       workflow_json: string; project_json: string; status: WorkflowRunStatus; error: string | null; created_at: string; updated_at: string
+      workflow_source_json: string | null
     }>(db, 'SELECT * FROM runs WHERE id = ?', [id])
     if (!row) return null
     const snapshotRow = await get<{
@@ -430,6 +434,7 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
       idea: row.idea,
       workflowId: row.workflow_id,
       workflowVersion: row.workflow_version,
+      workflowSource: row.workflow_source_json ? parseJson<StoredRun['workflowSource']>(row.workflow_source_json) : { source: 'project', id: workflow.id, version: workflow.version, path: null },
       baseCommit: row.base_commit,
       branch: row.branch,
       pullRequest: row.pull_request_json ? parseJson<WorkflowRun['pullRequest']>(row.pull_request_json) ?? null : null,
@@ -573,8 +578,8 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
           ? await dependencies.runWorkspaceManager.prepare(project, id)
           : { workspacePath: project.workspacePath, baseCommit: null, branch: null }
         const runProject = { ...project, workspacePath: workspace.workspacePath }
-        await run(db, `INSERT INTO runs (id, project_id, workspace_path, idea, workflow_id, workflow_version, base_commit, branch, pull_request_json, workflow_json, project_json, status, error, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
-          id, project.id, workspace.workspacePath, idea, workflow.id, workflow.version, workspace.baseCommit, workspace.branch, null, json(workflow), json(runProject), 'running', null, createdAt, createdAt
+        await run(db, `INSERT INTO runs (id, project_id, workspace_path, idea, workflow_id, workflow_version, base_commit, branch, pull_request_json, workflow_json, workflow_source_json, project_json, status, error, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
+          id, project.id, workspace.workspacePath, idea, workflow.id, workflow.version, workspace.baseCommit, workspace.branch, null, json(workflow), json({ ...input.workflowSource, id: workflow.id, version: workflow.version }), json(runProject), 'running', null, createdAt, createdAt
         ])
         const executionId = await insertExecution(id, workflow, 0, 0, 1, 'running', createdAt, { idea })
         const snapshot: RunSnapshot = { phaseIndex: 0, stepIndex: 0, currentStepExecutionId: executionId, pendingQuestion: null, pendingApproval: null, pendingQuestionDetails: null, pendingApprovalDetails: null, blockedBy: null, nextAction: statusNextAction('running') }

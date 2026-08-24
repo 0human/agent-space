@@ -334,7 +334,7 @@ function RunBoard({ run, onBack, onPause, onResume, onRetry, onCancel, onAnswer,
         <button className="back-action" type="button" onClick={onBack}><ArrowLeft aria-hidden="true" />{copy.run.backAction}</button>
         <div className="run-board-heading">
           <div>
-            <div className="workflow-source-line"><span className={`run-status is-${run.status}`}>{copy.run.status[run.status]}</span><span>{copy.run.projectId(run.projectId)}</span><span>{copy.run.runId(run.id)}</span></div>
+            <div className="workflow-source-line"><span className={`run-status is-${run.status}`}>{copy.run.status[run.status]}</span><span>{copy.run.projectId(run.projectId)}</span><span>{copy.run.runId(run.id)}</span><span>{copy.run.sourceSnapshot(run.workflowSource?.source ?? 'project', run.workflowSource?.version ?? run.workflowVersion)}</span></div>
             <h1 id="run-board-title">{run.idea}</h1>
             <p>{run.snapshot.nextAction}</p>
           </div>
@@ -488,9 +488,14 @@ function WorkflowView({ project, workflow, loading, error, idea, preflight, onBa
           </div>
           <div className="workflow-actions">
             {workflow.source === 'built-in' ? (
-              <button className="primary-action" type="button" onClick={onCopy}>
-                <Copy aria-hidden="true" />{copy.workflow.copyAction}
-              </button>
+              <>
+                <button className="primary-action" type="button" onClick={() => document.getElementById('workflow-idea')?.focus()}>
+                  <ArrowRight aria-hidden="true" />{copy.workflow.directRunAction}
+                </button>
+                <button className="secondary-action" type="button" onClick={onCopy}>
+                  <Copy aria-hidden="true" />{copy.workflow.copyAction}
+                </button>
+              </>
             ) : (
               <>
                 <button className="secondary-action" type="button" onClick={onEdit}>
@@ -518,6 +523,7 @@ function WorkflowView({ project, workflow, loading, error, idea, preflight, onBa
             <p className="eyebrow">{copy.workflow.preflightEyebrow}</p>
             <h2 id="run-launcher-title">{copy.workflow.launchTitle}</h2>
             <p>{copy.workflow.launchDescription}</p>
+            {workflow.source === 'built-in' ? <p className="workflow-origin">{copy.workflow.directRunDescription}</p> : null}
           </div>
           <label htmlFor="workflow-idea">{copy.workflow.ideaLabel}</label>
           <textarea id="workflow-idea" value={idea} onChange={(event) => onIdeaChange(event.target.value)} placeholder={copy.workflow.ideaPlaceholder} />

@@ -150,7 +150,7 @@ function createWorkflowView(value: unknown, source: WorkflowView['source'], path
     source,
     path,
     validation,
-    canStart: source === 'project' && validation.valid,
+    canStart: validation.valid,
     skillManifests: structuredClone(manifests)
   }
 }
@@ -159,8 +159,8 @@ export function createWorkflowService(dependencies: WorkflowFileDependencies) {
   return {
     manifests: dependencies.manifests,
 
-    async getBuiltIn(): Promise<WorkflowView> {
-      return createWorkflowView(structuredClone(BUILT_IN_DEVELOPMENT_WORKFLOW), 'built-in', null, dependencies.manifests)
+    async getBuiltIn(grantedPermissions?: string[]): Promise<WorkflowView> {
+      return createWorkflowView(structuredClone(BUILT_IN_DEVELOPMENT_WORKFLOW), 'built-in', null, dependencies.manifests, grantedPermissions)
     },
 
     validate(definition: unknown): WorkflowValidationResult {

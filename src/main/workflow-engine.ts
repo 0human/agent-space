@@ -259,7 +259,7 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
       if (!preflight.passed) throw new Error(preflight.errors.join(' '))
       const missingDeliveryGate = deliveryGateError(input)
       if (missingDeliveryGate) throw new Error(missingDeliveryGate)
-      const run = await store.createRun({ id: (dependencies.createId ?? randomUUID)(), project: input.project, workflow: input.workflow.definition, idea: input.idea.trim(), now: (dependencies.now ?? (() => new Date().toISOString()))() })
+      const run = await store.createRun({ id: (dependencies.createId ?? randomUUID)(), project: input.project, workflow: input.workflow.definition, workflowSource: { source: input.workflow.source, path: input.workflow.path }, idea: input.idea.trim(), now: (dependencies.now ?? (() => new Date().toISOString()))() })
       ensureRunning(run.id)
       return run
     },

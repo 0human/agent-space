@@ -125,6 +125,28 @@ describe('WorkflowEngine public API', () => {
     })
   })
 
+  it('starts a built-in Workflow and persists its source snapshot with the definition', async () => {
+    directory = await mkdtemp(join(tmpdir(), 'agent-space-run-'))
+    const runtime = new FakeRuntime()
+    engine = createWorkflowEngine({ databasePath: join(directory, 'runs.sqlite'), runtime })
+    const builtInWorkflow: WorkflowView = { ...workflow, definition: structuredClone(workflow.definition), source: 'built-in', path: null }
+
+    const run = await engine.startRun({ project, workflow: builtInWorkflow, idea: 'Run the built-in workflow directly' })
+
+    expect(run.workflowSource).toEqual({ source: 'built-in', id: workflow.definition.id, version: workflow.definition.version, path: null })
+    builtInWorkflow.definition.name = 'Mutated after Run creation'
+    await vi.waitFor(() => expect(runtime.calls).toHaveLength(1))
+    runtime.finish([{ type: 'status_changed', status: 'completed' }])
+    await engine.waitForIdle(run.id)
+    await engine.close()
+    engine = createWorkflowEngine({ databasePath: join(directory, 'runs.sqlite'), runtime: new FakeRuntime() })
+
+    await expect(engine.getRun(run.id)).resolves.toMatchObject({
+      workflowSource: { source: 'built-in', id: workflow.definition.id, version: workflow.definition.version, path: null },
+      definition: expect.objectContaining({ name: 'Project Workflow' })
+    })
+  })
+
   it('runs multiple Runs for one Project in isolated workspaces', async () => {
     directory = await mkdtemp(join(tmpdir(), 'agent-space-run-'))
     const runtime = new FakeRuntime()

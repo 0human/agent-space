@@ -39,6 +39,27 @@ describe('Workflow IPC handlers', () => {
     expect(workflow.copyToProject).toHaveBeenCalledWith('/work/demo', expect.any(Array))
   })
 
+  it('validates a built-in Workflow against the Project permissions before direct runs', async () => {
+    const handlers = new Map<string, (...args: unknown[]) => unknown>()
+    const workflow = {
+      getBuiltIn: vi.fn().mockResolvedValue({ ...view, canStart: false }),
+      copyToProject: vi.fn(),
+      loadProject: vi.fn().mockRejectedValue(Object.assign(new Error('missing'), { code: 'ENOENT' })),
+      startProjectRun: vi.fn()
+    }
+    const project = { id: 'project-1', workspacePath: '/work/demo', permissionPolicy: { grantedPermissions: [] } }
+    const projectService = { findById: vi.fn().mockResolvedValue(project) }
+
+    registerWorkflowHandlers({
+      handle: (channel, listener) => handlers.set(channel, listener),
+      projectService,
+      workflowService: workflow
+    })
+
+    await expect(handlers.get(APP_SHELL_CHANNELS.getWorkflow)?.({}, project.id)).resolves.toMatchObject({ canStart: false })
+    expect(workflow.getBuiltIn).toHaveBeenCalledWith([])
+  })
+
   it('reloads the Project Workflow and blocks invalid starts', async () => {
     const handlers = new Map<string, (...args: unknown[]) => unknown>()
     const invalid = { ...view, source: 'project' as const, canStart: false, validation: { valid: false, errors: ['schemaVersion 无效。'], warnings: [] } }

@@ -1,6 +1,6 @@
 import type { Project } from './project'
 import type { PermissionPolicy } from './project'
-import type { WorkflowDefinition, WorkflowView } from './workflow'
+import type { WorkflowDefinition, WorkflowSource, WorkflowView } from './workflow'
 
 export type WorkflowRunStatus = 'running' | 'paused' | 'waiting' | 'blocked' | 'failed' | 'completed' | 'cancelled'
 export type StepExecutionStatus = 'pending' | 'running' | 'waiting' | 'blocked' | 'failed' | 'completed' | 'skipped' | 'cancelled'
@@ -152,6 +152,7 @@ export interface WorkflowRun {
   idea: string
   workflowId: string
   workflowVersion: string
+  workflowSource: WorkflowSourceSnapshot
   baseCommit: string | null
   branch: string | null
   pullRequest?: PullRequestState | null
@@ -167,6 +168,13 @@ export interface WorkflowRun {
   artifacts: ArtifactIndex[]
   createdAt: string
   updatedAt: string
+}
+
+export interface WorkflowSourceSnapshot {
+  source: WorkflowSource
+  id: string
+  version: string
+  path: string | null
 }
 
 export interface RuntimeExecutionContext {

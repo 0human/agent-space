@@ -460,6 +460,46 @@ describe('Desktop Shell navigation', () => {
     expect(screen.getByRole('button', { name: '拒绝并停止' })).toBeEnabled()
   })
 
+  it('shows Pull Request checks and keeps an unready Merge Gate disabled', async () => {
+    const user = userEvent.setup()
+    const project = {
+      id: 'project-1', name: 'demo', workspacePath: '/work/demo', workspaceAvailable: true,
+      remote: 'https://github.com/example/demo.git', currentBranch: 'main', head: 'abc123', defaultBranch: 'main', isGreenfield: false, dirty: false,
+      dirtySummary: { staged: 0, unstaged: 0, untracked: 0, files: [] }, updatedAt: '2026-08-24T00:00:00.000Z'
+    }
+    const definition = structuredClone(BUILT_IN_DEVELOPMENT_WORKFLOW)
+    definition.phases = [{ ...definition.phases[0], steps: [{ id: 'delivery', name: '创建 PR', kind: 'tool', adapter: 'github.pull-request', approvalGate: 'PR 合并确认' }] }]
+    const run = {
+      id: 'run-pr', projectId: project.id, workspacePath: '/work/demo-agent-space-run-pr', remote: project.remote, idea: 'Deliver issue #12', workflowId: definition.id,
+      workflowVersion: definition.version, baseCommit: 'abc123', branch: 'main/agent-space/run-pr', definition, status: 'waiting' as const, error: null,
+      pullRequest: {
+        number: 42, url: 'https://github.com/example/demo/pull/42', title: 'Deliver issue #12', headBranch: 'main/agent-space/run-pr', baseBranch: 'main', headCommit: 'def456',
+        checks: [{ name: 'CI', status: 'IN_PROGRESS', conclusion: null }], reviews: [], mergeable: 'UNKNOWN', merged: false, mergedAt: null, draft: false,
+        gate: { checksSatisfied: false, reviewsSatisfied: false, mergeabilitySatisfied: false, canMerge: false, reason: 'checks 尚未全部通过。等待 1 个 approved review。' }, updatedAt: '2026-08-24T00:00:00.000Z'
+      },
+      snapshot: {
+        phaseIndex: 0, stepIndex: 0, currentStepExecutionId: 'execution-pr', pendingQuestion: null, pendingApproval: 'PR 合并确认', pendingQuestionDetails: null,
+        pendingApprovalDetails: { approval: 'PR 合并确认', decision: null, continuation: { phaseIndex: 0, stepIndex: 0, executionId: 'execution-pr' } }, blockedBy: null, nextAction: '等待用户处理当前 Step。'
+      },
+      stepExecutions: [{ id: 'execution-pr', runId: 'run-pr', phaseId: 'discovery', stepId: 'delivery', attempt: 1, status: 'waiting' as const, input: null, skill: null, error: null, output: null, startedAt: null, finishedAt: null }],
+      events: [], logs: [], phaseContexts: [], decisionRecords: [], artifacts: [{ id: 'artifact-pr', runId: 'run-pr', stepExecutionId: 'execution-pr', type: 'pull-request', name: 'PR #42', location: 'https://github.com/example/demo/pull/42', versionHash: 'def456', status: 'pending', createdAt: '2026-08-24T00:00:00.000Z' }],
+      createdAt: '2026-08-24T00:00:00.000Z', updatedAt: '2026-08-24T00:00:00.000Z'
+    }
+    window.appShell.listProjects = vi.fn().mockResolvedValue([project])
+    window.appShell.listWorkflowRuns = vi.fn().mockResolvedValue([run])
+    window.appShell.getWorkflowRun = vi.fn().mockResolvedValue(run)
+
+    render(<App />)
+    await user.click(await screen.findByRole('button', { name: /demo/ }))
+    await user.click(await screen.findByRole('button', { name: /Deliver issue #12/ }))
+
+    expect(screen.getAllByText('https://github.com/example/demo/pull/42').length).toBeGreaterThan(0)
+    expect(screen.getByText('CI: IN_PROGRESS')).toBeVisible()
+    expect(screen.getByText('0 / 0')).toBeVisible()
+    expect(screen.getByRole('button', { name: '批准并继续' })).toBeDisabled()
+    expect(screen.getAllByText(/checks 尚未全部通过/).length).toBeGreaterThan(0)
+  })
+
   it('does not offer Resume while a question is still waiting for an answer', async () => {
     const user = userEvent.setup()
     const project = {

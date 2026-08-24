@@ -5,6 +5,7 @@ import { promisify } from 'node:util'
 import { randomUUID } from 'node:crypto'
 
 import { DEFAULT_PROJECT_PERMISSIONS, type DirtyWorkspaceSummary, type Project, type WorkspaceState } from '../shared/project'
+import { resolveGitHubRepository } from './git-delivery'
 
 const execFile = promisify(execFileCallback)
 
@@ -21,6 +22,7 @@ export interface ProjectServiceDependencies {
   readDirectory?: (workspacePath: string) => Promise<string[]>
   cloneGitHub?: (repositoryUrl: string, destinationPath: string) => Promise<void>
   fetchGitHub?: (workspacePath: string) => Promise<void>
+  resolveSshHost?: (host: string) => Promise<string | null>
   now?: () => string
   createId?: () => string
 }
@@ -61,14 +63,6 @@ function parseStatus(output: string): DirtyWorkspaceSummary {
 function sanitizeGitError(reason: unknown): Error {
   const message = reason instanceof Error ? reason.message : String(reason)
   return new Error(message.replace(/(https?:\/\/)([^/@\s]+)@/gi, '$1<redacted>@'))
-}
-
-function isGitHubRepository(url: string): boolean {
-  return /^(?:https:\/\/github\.com\/[^/\s]+\/[^/\s]+(?:\.git)?|git@github\.com:[^/\s]+\/[^/\s]+(?:\.git)?)$/i.test(url)
-}
-
-function canonicalGitHubRemote(url: string): string {
-  return url.trim().replace(/\.git$/i, '').toLowerCase()
 }
 
 export async function inspectWorkspace(
@@ -179,6 +173,7 @@ export function createProjectService(dependencies: ProjectServiceDependencies) {
       workspacePath: normalizedWorkspacePath,
       ...state,
       permissionPolicy: existing?.permissionPolicy ?? { grantedPermissions: [...DEFAULT_PROJECT_PERMISSIONS] },
+      deliveryPolicy: existing?.deliveryPolicy,
       updatedAt: now()
     }
     const next = existing
@@ -218,7 +213,12 @@ export function createProjectService(dependencies: ProjectServiceDependencies) {
 
     async cloneGitHub(filePath: string, repositoryUrl: string, destinationPath: string): Promise<Project> {
       const url = repositoryUrl.trim()
-      if (!isGitHubRepository(url)) throw new Error('请输入有效的 GitHub 仓库地址。')
+      let repositorySlug: string
+      try {
+        repositorySlug = await resolveGitHubRepository(url, dependencies.resolveSshHost)
+      } catch {
+        throw new Error('请输入有效的 GitHub 仓库地址。')
+      }
       const workspacePath = resolve(destinationPath)
       let existing = false
       let existingRemote: string | null = null
@@ -231,8 +231,16 @@ export function createProjectService(dependencies: ProjectServiceDependencies) {
         // A non-empty directory may be a partial clone. Fetch it instead of risking a second clone.
         existing = entries.length > 0
       }
-      if (existingRemote && canonicalGitHubRemote(existingRemote) !== canonicalGitHubRemote(url)) {
-        throw new Error('目标 Workspace 已连接到另一个 GitHub 仓库。')
+      if (existingRemote) {
+        let existingRepositorySlug: string
+        try {
+          existingRepositorySlug = await resolveGitHubRepository(existingRemote, dependencies.resolveSshHost)
+        } catch {
+          throw new Error('目标 Workspace 已连接到另一个 GitHub 仓库。')
+        }
+        if (existingRepositorySlug.toLowerCase() !== repositorySlug.toLowerCase()) {
+          throw new Error('目标 Workspace 已连接到另一个 GitHub 仓库。')
+        }
       }
       try {
         if (existing) {

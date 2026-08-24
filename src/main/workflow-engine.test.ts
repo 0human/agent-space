@@ -228,6 +228,140 @@ describe('WorkflowEngine public API', () => {
     expect(runtime.calls).toHaveLength(1)
   })
 
+  it('creates a PR before its Merge Gate and merges only after approval', async () => {
+    directory = await mkdtemp(join(tmpdir(), 'agent-space-run-'))
+    const runtime = new FakeRuntime()
+    const remoteProject: Project = {
+      ...project,
+      remote: 'https://github.com/example/demo.git',
+      permissionPolicy: { grantedPermissions: ['workspace.read', 'workspace.write', 'git.commit', 'network.github'] }
+    }
+    const deliveryWorkflow: WorkflowView = {
+      ...workflow,
+      definition: {
+        ...workflow.definition,
+        phases: [
+          { ...workflow.definition.phases[0], steps: [{ id: 'review', name: '自动 Review', kind: 'skill', skill: { name: 'code-review', version: '1.0.0' } }] },
+          { id: 'delivery', name: '提交、推送与 PR', goal: 'delivery', steps: [{ id: 'delivery', name: '创建 PR', kind: 'tool', adapter: 'github.pull-request', approvalGate: 'PR 合并确认' }] }
+        ]
+      }
+    }
+    const pullRequest = {
+      number: 42,
+      url: 'https://github.com/example/demo/pull/42',
+      title: 'Agent Space: Implement issue #12',
+      headBranch: 'main/agent-space/run-1',
+      baseBranch: 'main',
+      headCommit: 'commit-12',
+      checks: [{ name: 'CI', status: 'COMPLETED', conclusion: 'SUCCESS' }],
+      reviews: [{ author: 'reviewer', state: 'APPROVED' }],
+      mergeable: 'MERGEABLE',
+      merged: false,
+      mergedAt: null,
+      draft: false,
+      gate: { checksSatisfied: true, reviewsSatisfied: true, mergeabilitySatisfied: true, canMerge: true, reason: null },
+      updatedAt: '2026-08-24T00:00:00.000Z'
+    }
+    const mergedPullRequest = { ...pullRequest, merged: true, mergedAt: '2026-08-24T00:01:00.000Z', gate: { ...pullRequest.gate, canMerge: false, mergeabilitySatisfied: false, reason: 'Pull Request 已合并。' } }
+    const commitAfterReview = vi.fn().mockResolvedValue({ commit: 'commit-12', artifact: { type: 'commit', name: 'commit', runId: 'run-12', location: '/work/demo@commit-12', versionHash: 'commit-12', status: 'available' } })
+    const deliverPullRequest = vi.fn().mockResolvedValue({ pullRequest, artifact: { type: 'pull-request', name: 'PR #42', runId: 'run-12', location: pullRequest.url, versionHash: pullRequest.headCommit, status: 'ready' } })
+    const mergePullRequest = vi.fn().mockResolvedValue({ pullRequest: mergedPullRequest, artifact: { type: 'pull-request', name: 'PR #42', runId: 'run-12', location: pullRequest.url, versionHash: pullRequest.headCommit, status: 'merged' } })
+    engine = createWorkflowEngine({ databasePath: join(directory, 'runs.sqlite'), runtime, runWorkspaceManager: { prepare: vi.fn().mockResolvedValue({ workspacePath: '/work/demo-agent-space/run-12', baseCommit: 'abc123', branch: 'main/agent-space/run-12' }) }, gitDeliveryManager: { commitAfterReview, deliverPullRequest, mergePullRequest, refreshPullRequest: vi.fn().mockResolvedValue(pullRequest), preflightPullRequest: vi.fn().mockResolvedValue(undefined) } })
+
+    const run = await engine.startRun({ project: remoteProject, workflow: deliveryWorkflow, idea: 'Implement issue #12' })
+    await vi.waitFor(() => expect(runtime.calls).toHaveLength(1))
+    runtime.finish([{ type: 'status_changed', status: 'completed' }])
+    const waiting = await engine.waitForIdle(run.id)
+
+    expect(waiting.status).toBe('waiting')
+    expect(waiting.pullRequest).toMatchObject({ number: 42, url: pullRequest.url, gate: { canMerge: true } })
+    expect(waiting.artifacts).toEqual(expect.arrayContaining([expect.objectContaining({ type: 'pull-request', location: pullRequest.url })]))
+    expect(deliverPullRequest).toHaveBeenCalledWith(expect.objectContaining({ branch: 'main/agent-space/run-12', defaultBranch: 'main', remote: remoteProject.remote }))
+    expect(mergePullRequest).not.toHaveBeenCalled()
+
+    await engine.approve(run.id)
+    const completed = await engine.waitForIdle(run.id)
+    expect(mergePullRequest).toHaveBeenCalledWith(expect.objectContaining({ gateApproved: true, pullRequest: expect.objectContaining({ number: 42 }) }))
+    expect(completed.status).toBe('completed')
+    expect(completed.pullRequest).toMatchObject({ number: 42, merged: true })
+  })
+
+  it('keeps the Merge Gate blocked when checks or reviews are not ready', async () => {
+    directory = await mkdtemp(join(tmpdir(), 'agent-space-run-'))
+    const runtime = new FakeRuntime()
+    const remoteProject: Project = {
+      ...project,
+      remote: 'https://github.com/example/demo.git',
+      permissionPolicy: { grantedPermissions: ['workspace.read', 'workspace.write', 'git.commit', 'network.github'] }
+    }
+    const deliveryWorkflow: WorkflowView = {
+      ...workflow,
+      definition: { ...workflow.definition, phases: [{ ...workflow.definition.phases[0], steps: [{ id: 'delivery', name: '创建 PR', kind: 'tool', adapter: 'github.pull-request', approvalGate: 'PR 合并确认' }] }] }
+    }
+    const blockedPullRequest = {
+      number: 43, url: 'https://github.com/example/demo/pull/43', title: 'Pending', headBranch: 'main/agent-space/run-2', baseBranch: 'main', headCommit: 'commit-13',
+      checks: [{ name: 'CI', status: 'IN_PROGRESS', conclusion: null }], reviews: [], mergeable: 'UNKNOWN', merged: false, mergedAt: null, draft: false,
+      gate: { checksSatisfied: false, reviewsSatisfied: false, mergeabilitySatisfied: false, canMerge: false, reason: 'checks 尚未全部通过。等待 1 个 approved review。Pull Request 当前不可合并。' }, updatedAt: '2026-08-24T00:00:00.000Z'
+    }
+    const deliverPullRequest = vi.fn().mockResolvedValue({ pullRequest: blockedPullRequest, artifact: { type: 'pull-request', name: 'PR #43', runId: 'run-13', location: blockedPullRequest.url, versionHash: blockedPullRequest.headCommit, status: 'pending' } })
+    const mergePullRequest = vi.fn()
+    engine = createWorkflowEngine({ databasePath: join(directory, 'runs.sqlite'), runtime, gitDeliveryManager: { commitAfterReview: vi.fn(), deliverPullRequest, mergePullRequest, refreshPullRequest: vi.fn().mockResolvedValue({ ...blockedPullRequest, headCommit: 'commit-13' }), preflightPullRequest: vi.fn().mockResolvedValue(undefined) } })
+
+    const run = await engine.startRun({ project: remoteProject, workflow: deliveryWorkflow, idea: 'Wait for checks' })
+    const waiting = await engine.waitForIdle(run.id)
+    await expect(engine.approve(waiting.id)).rejects.toThrow('Merge Gate 不可批准')
+    expect(mergePullRequest).not.toHaveBeenCalled()
+    await expect(engine.getRun(run.id)).resolves.toMatchObject({ status: 'waiting', pullRequest: { gate: { canMerge: false } } })
+  })
+
+  it('refuses to approve when the remote Pull Request cannot be refreshed', async () => {
+    directory = await mkdtemp(join(tmpdir(), 'agent-space-run-'))
+    const remoteProject: Project = {
+      ...project,
+      remote: 'https://github.com/example/demo.git',
+      permissionPolicy: { grantedPermissions: ['workspace.read', 'workspace.write', 'git.commit', 'network.github'] }
+    }
+    const deliveryWorkflow: WorkflowView = {
+      ...workflow,
+      definition: { ...workflow.definition, phases: [{ ...workflow.definition.phases[0], steps: [{ id: 'delivery', name: '创建 PR', kind: 'tool', adapter: 'github.pull-request', approvalGate: 'PR 合并确认' }] }] }
+    }
+    const pullRequest = {
+      number: 50, url: 'https://github.com/example/demo/pull/50', title: 'Pending refresh', headBranch: 'main/agent-space/run-3', baseBranch: 'main', headCommit: 'commit-14',
+      checks: [{ name: 'CI', status: 'COMPLETED', conclusion: 'SUCCESS' }], reviews: [{ author: 'reviewer', state: 'APPROVED' }], mergeable: 'MERGEABLE', merged: false, mergedAt: null, draft: false,
+      gate: { checksSatisfied: true, reviewsSatisfied: true, mergeabilitySatisfied: true, canMerge: true, reason: null }, updatedAt: '2026-08-24T00:00:00.000Z'
+    }
+    const deliverPullRequest = vi.fn().mockResolvedValue({ pullRequest, artifact: { type: 'pull-request', name: 'PR #50', runId: 'run-14', location: pullRequest.url, versionHash: pullRequest.headCommit, status: 'ready' } })
+    const refreshPullRequest = vi.fn().mockRejectedValue(new Error('GitHub network unavailable'))
+    engine = createWorkflowEngine({ databasePath: join(directory, 'runs.sqlite'), runtime: new FakeRuntime(), gitDeliveryManager: { commitAfterReview: vi.fn(), deliverPullRequest, refreshPullRequest, preflightPullRequest: vi.fn().mockResolvedValue(undefined) } })
+
+    const run = await engine.startRun({ project: remoteProject, workflow: deliveryWorkflow, idea: 'Approve only after refresh' })
+    const waiting = await engine.waitForIdle(run.id)
+
+    await expect(engine.approve(waiting.id)).rejects.toThrow('Merge Gate 状态刷新失败')
+    expect(refreshPullRequest).toHaveBeenCalled()
+  })
+
+  it('fails delivery Preflight when the GitHub remote or CLI is unavailable', async () => {
+    directory = await mkdtemp(join(tmpdir(), 'agent-space-run-'))
+    const remoteProject: Project = {
+      ...project,
+      remote: 'git@invalid-alias:example/demo.git',
+      permissionPolicy: { grantedPermissions: ['workspace.read', 'workspace.write', 'git.commit', 'network.github'] }
+    }
+    const deliveryWorkflow: WorkflowView = {
+      ...workflow,
+      definition: { ...workflow.definition, phases: [{ ...workflow.definition.phases[0], steps: [{ id: 'delivery', name: '创建 PR', kind: 'tool', adapter: 'github.pull-request', approvalGate: 'PR 合并确认' }] }] }
+    }
+    const preflightPullRequest = vi.fn().mockRejectedValue(new Error('Project remote 不是有效的 GitHub 仓库。'))
+    engine = createWorkflowEngine({ databasePath: join(directory, 'runs.sqlite'), runtime: new FakeRuntime(), gitDeliveryManager: { commitAfterReview: vi.fn(), preflightPullRequest } })
+
+    await expect(engine.preflight({ project: remoteProject, workflow: deliveryWorkflow, idea: 'Validate delivery before starting' })).resolves.toMatchObject({
+      passed: false,
+      errors: [expect.stringContaining('GitHub delivery Preflight 失败')]
+    })
+    expect(preflightPullRequest).toHaveBeenCalledWith(remoteProject.workspacePath, remoteProject.remote)
+  })
+
   it('shows a GitHub Data Transfer Notice when a later Skill publishes external artifacts', async () => {
     directory = await mkdtemp(join(tmpdir(), 'agent-space-run-'))
     engine = createWorkflowEngine({ databasePath: join(directory, 'runs.sqlite'), runtime: new FakeRuntime() })

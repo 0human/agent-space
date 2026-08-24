@@ -6,21 +6,44 @@ import type {
   WorkflowPreflightInput,
   WorkflowPreflightResult,
   WorkflowRun,
-  StartWorkflowRunInput
+  StartWorkflowRunInput,
+  PullRequestState,
+  RuntimeEvent,
+  RuntimeArtifact
 } from '../shared/workflow-run'
+import type { GitMergeRequest, GitPullRequestRequest, GitPullRequestResult } from './git-delivery'
 import { createSqliteRunStore } from './workflow-store'
 import { zhCNMain } from '../shared/i18n/zh-CN'
-import { DEFAULT_PROJECT_PERMISSIONS } from '../shared/project'
-import type { RuntimeArtifact } from '../shared/workflow-run'
+import { DEFAULT_PROJECT_PERMISSIONS, type PermissionPolicy, type ProjectDeliveryPolicy } from '../shared/project'
 
 interface GitDeliveryManager {
   commitAfterReview(request: { workspacePath: string; runId: string; baseCommit: string | null; ticket: string | null }): Promise<{ commit: string; artifact: RuntimeArtifact }>
+  deliverPullRequest?: (request: GitPullRequestRequest) => Promise<GitPullRequestResult>
+  mergePullRequest?: (request: GitMergeRequest) => Promise<GitPullRequestResult>
+  refreshPullRequest?: (workspacePath: string, remote: string, number: number, policy?: ProjectDeliveryPolicy, permissionPolicy?: PermissionPolicy) => Promise<PullRequestState>
+  preflightPullRequest?: (workspacePath: string, remote: string) => Promise<void>
 }
 
 function ticketReference(idea: string, artifacts: WorkflowRun['artifacts']): string | null {
   const direct = idea.match(/(?:#|\/issues\/)(\d+)/i)?.[1]
   if (direct) return direct
   return artifacts.map((artifact) => artifact.location ?? '').map((location) => location.match(/\/issues\/(\d+)/i)?.[1]).find(Boolean) ?? null
+}
+
+function isPullRequestStep(step: WorkflowRun['definition']['phases'][number]['steps'][number] | undefined): boolean {
+  return step?.kind === 'tool' && step.adapter === 'github.pull-request'
+}
+
+function deliveryGateError(input: WorkflowPreflightInput): string | null {
+  if (!input.project.remote) return null
+  const missing = input.workflow.definition.phases
+    .flatMap((phase) => phase.steps)
+    .some((step) => isPullRequestStep(step) && !step.approvalGate)
+  return missing ? 'GitHub delivery Step 必须声明 Merge Gate。' : null
+}
+
+function verifiedCommit(run: Pick<WorkflowRun, 'artifacts'> | null): string | null {
+  return run?.artifacts.find((artifact) => artifact.type === 'commit' && artifact.versionHash)?.versionHash ?? null
 }
 
 interface WorkflowEngineDependencies {
@@ -62,7 +85,8 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
       if (!execution) return
       const step = run.workflow.phases[run.snapshot.phaseIndex]?.steps[run.snapshot.stepIndex]
       const alreadyApproved = run.events.some((event) => event.type === 'approval_approved' && event.data.executionId === execution.id)
-      if (step?.approvalGate && !alreadyApproved) {
+      const pullRequestStep = isPullRequestStep(step)
+      if (step?.approvalGate && !alreadyApproved && !pullRequestStep) {
         await store.requestApproval(runId, execution.id, step.approvalGate)
         return
       }
@@ -89,14 +113,56 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
         permissionPolicy: run.project.permissionPolicy ?? { grantedPermissions: [...DEFAULT_PROJECT_PERMISSIONS] },
         events: run.events
       }
-      let events
+      let events: RuntimeEvent[]
+      let delivery: GitPullRequestResult | null = null
       try {
-        events = await dependencies.runtime.execute(context)
+        if (pullRequestStep) {
+          if (!dependencies.gitDeliveryManager?.deliverPullRequest) throw new Error('GitHub delivery adapter 不可用。')
+          const request: GitPullRequestRequest = {
+            workspacePath: run.workspacePath,
+            runId: run.id,
+            commit: run.artifacts.find((artifact) => artifact.type === 'commit' && artifact.versionHash)?.versionHash ?? '',
+            branch: run.branch ?? '',
+            defaultBranch: run.project.defaultBranch ?? '',
+            remote: run.remote ?? '',
+            ticket: ticketReference(run.idea, run.artifacts),
+            title: `Agent Space: ${run.idea.slice(0, 72)}`,
+            permissionPolicy: run.project.permissionPolicy ?? { grantedPermissions: [] },
+            deliveryPolicy: run.project.deliveryPolicy,
+            pullRequestNumber: run.pullRequest?.number ?? null
+          }
+          delivery = alreadyApproved
+            ? await dependencies.gitDeliveryManager.mergePullRequest?.({
+              workspacePath: request.workspacePath,
+              runId: request.runId,
+              pullRequest: {
+                number: run.pullRequest?.number ?? 0,
+                headBranch: run.pullRequest?.headBranch ?? request.branch,
+                baseBranch: run.pullRequest?.baseBranch ?? request.defaultBranch,
+                headCommit: request.commit,
+                gate: run.pullRequest?.gate ?? { checksSatisfied: false, reviewsSatisfied: false, mergeabilitySatisfied: false, canMerge: false, reason: 'Pull Request 状态不可用。' }
+              },
+              remote: request.remote,
+              defaultBranch: request.defaultBranch,
+              permissionPolicy: request.permissionPolicy,
+              deliveryPolicy: request.deliveryPolicy,
+              gateApproved: true
+            }) ?? null
+            : await dependencies.gitDeliveryManager.deliverPullRequest(request)
+          if (!delivery) throw new Error('GitHub merge adapter 不可用。')
+          events = [
+            { type: 'artifact_produced', artifact: delivery.artifact, source: 'github.pull-request' },
+            { type: 'status_changed', status: 'completed', source: 'github.pull-request' }
+          ]
+        } else {
+          events = await dependencies.runtime.execute(context)
+        }
       } catch (error) {
         events = [{ type: 'error' as const, error: error instanceof Error ? error.message : String(error) }]
       }
       if (closed) return
-      const updated = await store.recordRuntimeResult(runId, execution.id, events)
+      let updated = await store.recordRuntimeResult(runId, execution.id, events)
+      if (delivery) updated = await store.setPullRequest(runId, delivery.pullRequest)
       const reviewStep = step?.id === 'review' || step?.skill?.name === 'code-review' || /review/i.test(step?.name ?? '')
       if (reviewStep && events.some((event) => event.type === 'status_changed' && event.status === 'completed') && dependencies.gitDeliveryManager) {
         try {
@@ -113,6 +179,22 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
         }
       }
       if (updated.status !== 'running' || updated.snapshot.currentStepExecutionId === execution.id) return
+    }
+  }
+
+  async function refreshPullRequest(run: Awaited<ReturnType<typeof store.getRun>>, strict = false): Promise<Awaited<ReturnType<typeof store.getRun>>> {
+    if (!run?.pullRequest || !run.remote || !dependencies.gitDeliveryManager?.refreshPullRequest) {
+      if (strict) throw new Error('Merge Gate 状态不可验证：缺少远端 Pull Request 刷新能力。')
+      return run
+    }
+    try {
+      const state = await dependencies.gitDeliveryManager.refreshPullRequest(run.workspacePath, run.remote, run.pullRequest.number, run.project.deliveryPolicy, run.project.permissionPolicy ?? { grantedPermissions: [...DEFAULT_PROJECT_PERMISSIONS] })
+      const commit = verifiedCommit(run)
+      if (strict && commit && state.headCommit !== commit) throw new Error('远端 Pull Request head commit 与当前 Run 已验证 commit 不一致。')
+      return await store.setPullRequest(run.id, state)
+    } catch (error) {
+      if (strict) throw new Error(`Merge Gate 状态刷新失败：${error instanceof Error ? error.message : String(error)}`)
+      return run
     }
   }
 
@@ -136,6 +218,24 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
       else checks.push(zhCNMain.workflowRun.ideaFilled)
       for (const phase of input.workflow.definition.phases) {
         for (const step of phase.steps) {
+          if (isPullRequestStep(step) && input.project.remote) {
+            if (!step.approvalGate) errors.push('GitHub delivery Step 必须声明 Merge Gate。')
+            if (!input.project.defaultBranch?.trim()) errors.push('GitHub delivery Step 无法验证 Project 默认分支。')
+            if (!(input.project.permissionPolicy?.grantedPermissions ?? DEFAULT_PROJECT_PERMISSIONS).includes('network.github')) errors.push('GitHub delivery Step 权限校验失败：缺少 network.github。')
+            else {
+              if (!dependencies.gitDeliveryManager?.preflightPullRequest) {
+                errors.push('GitHub delivery Preflight 失败：delivery adapter 不可用。')
+              } else {
+                try {
+                  await dependencies.gitDeliveryManager.preflightPullRequest(input.project.workspacePath, input.project.remote)
+                  checks.push('GitHub remote、CLI 和凭据可用。')
+                } catch (error) {
+                  errors.push(`GitHub delivery Preflight 失败：${error instanceof Error ? error.message : String(error)}`)
+                }
+              }
+              checks.push(`Data Transfer Notice：External Destination: GitHub；Step ${phase.name}/${step.name} 将发送 feature branch、commit、Run ID 并读取 PR checks/reviews；权限：network.github；断网后从持久化 Pull Request Artifact 恢复。`)
+            }
+          }
           if (!step.skill) continue
           const manifest = input.workflow.skillManifests.find((candidate) => candidate.name === step.skill?.name && candidate.version === step.skill?.version)
           if (manifest?.requiredPermissions.includes('network.github')) checks.push(`Data Transfer Notice：External Destination: GitHub；Step ${phase.name}/${step.name} 将发送规格、tickets、blocking edges 和 Workflow Run ID；权限：network.github；断网后从持久化 Step Execution 恢复。`)
@@ -157,19 +257,21 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
     async startRun(input): Promise<WorkflowRun> {
       const preflight = input.preflight ?? await this.preflight(input)
       if (!preflight.passed) throw new Error(preflight.errors.join(' '))
+      const missingDeliveryGate = deliveryGateError(input)
+      if (missingDeliveryGate) throw new Error(missingDeliveryGate)
       const run = await store.createRun({ id: (dependencies.createId ?? randomUUID)(), project: input.project, workflow: input.workflow.definition, idea: input.idea.trim(), now: (dependencies.now ?? (() => new Date().toISOString()))() })
       ensureRunning(run.id)
       return run
     },
 
     async getRun(runId) {
-      const run = await store.getRun(runId)
-      if (!run) return null
-      return run
+      return refreshPullRequest(await store.getRun(runId))
     },
 
     async listRuns(projectId) {
-      return store.listRuns(projectId)
+      const runs = await store.listRuns(projectId)
+      const refreshed = await Promise.all(runs.map((run) => refreshPullRequest(run)))
+      return refreshed.filter((run): run is NonNullable<typeof run> => Boolean(run))
     },
 
     async pauseRun(runId) {
@@ -199,6 +301,13 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
     },
 
     async approve(runId) {
+      const stored = await store.getRun(runId)
+      if (!stored) throw new Error('找不到 Workflow Run。')
+      const execution = stored.snapshot.currentStepExecutionId ? stored.stepExecutions.find((candidate) => candidate.id === stored.snapshot.currentStepExecutionId) : null
+      const step = execution ? stored.workflow.phases[stored.snapshot.phaseIndex]?.steps[stored.snapshot.stepIndex] : undefined
+      const current = await refreshPullRequest(stored, isPullRequestStep(step))
+      if (!current) throw new Error('找不到 Workflow Run。')
+      if (isPullRequestStep(step) && !current.pullRequest?.gate.canMerge) throw new Error(`Merge Gate 不可批准：${current.pullRequest?.gate.reason ?? 'Pull Request 状态不可用。'}`)
       const run = await store.decideApproval(runId, 'approved')
       ensureRunning(runId)
       return run

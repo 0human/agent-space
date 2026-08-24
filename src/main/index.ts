@@ -14,7 +14,7 @@ import { createWorkflowService } from './workflow-service'
 import { createWorkflowEngine } from './workflow-engine'
 import { createCodexRuntimeAdapter } from './codex-runtime'
 import { createRunWorkspaceManager } from './run-workspace'
-import { createGitDeliveryManager } from './git-delivery'
+import { createDefaultGitHubExecutor, createGitDeliveryManager } from './git-delivery'
 import { BUILT_IN_SKILL_MANIFESTS } from '../shared/workflow'
 
 const currentDirectory = fileURLToPath(new URL('.', import.meta.url))
@@ -93,7 +93,7 @@ const workflowEngine = createWorkflowEngine({
     skillPackagePath: join(currentDirectory, '../../.agents')
   }),
   runWorkspaceManager: createRunWorkspaceManager({ execGit: createDefaultGitExecutor() }),
-  gitDeliveryManager: createGitDeliveryManager({ execGit: createDefaultGitExecutor() })
+  gitDeliveryManager: createGitDeliveryManager({ execGit: createDefaultGitExecutor(), execGitHub: createDefaultGitHubExecutor() })
 })
 
 registerProjectHandlers({

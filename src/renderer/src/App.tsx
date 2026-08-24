@@ -347,8 +347,15 @@ function RunBoard({ run, onBack, onPause, onResume, onRetry, onCancel, onAnswer,
           <dl className="run-delivery-metadata">
             <div><dt>{copy.run.baseCommit}</dt><dd>{run.baseCommit ?? copy.projectDetail.noCommit}</dd></div>
             <div><dt>{copy.run.branch}</dt><dd>{run.branch ?? copy.projectDetail.detached}</dd></div>
+            {run.pullRequest ? <>
+              <div><dt>{copy.run.pullRequest}</dt><dd>{run.pullRequest.url || copy.run.noLocation}</dd></div>
+              <div><dt>{copy.run.checks}</dt><dd>{run.pullRequest.checks.length > 0 ? run.pullRequest.checks.map((check) => `${check.name}: ${check.conclusion ?? check.status}`).join(', ') : copy.run.noChecks}</dd></div>
+              <div><dt>{copy.run.reviews}</dt><dd>{run.pullRequest.reviews.filter((review) => review.state.toUpperCase() === 'APPROVED').length} / {run.pullRequest.reviews.length}</dd></div>
+              <div><dt>{copy.run.mergeability}</dt><dd>{run.pullRequest.mergeable}</dd></div>
+            </> : null}
           </dl>
-          <p>{run.artifacts.some((artifact) => artifact.type === 'commit') && !run.remote ? copy.run.localDelivery : copy.run.remoteDelivery}</p>
+          {run.pullRequest ? <p className={run.pullRequest.gate.canMerge ? 'delivery-gate is-ready' : 'delivery-gate is-blocked'}>{run.pullRequest.gate.canMerge ? copy.run.mergeGateReady : `${copy.run.mergeGateBlocked} ${run.pullRequest.gate.reason ?? ''}`}</p> : <p>{run.artifacts.some((artifact) => artifact.type === 'commit') && !run.remote ? copy.run.localDelivery : copy.run.remoteDelivery}</p>}
+          {run.pullRequest ? <p className="delivery-transfer-notice">{copy.run.deliveryTransferNotice}</p> : null}
         </section>
         <div className="run-phases" aria-label={copy.run.runBoardLabel}>
           {run.definition.phases.map((phase, phaseIndex) => (
@@ -359,6 +366,8 @@ function RunBoard({ run, onBack, onPause, onResume, onRetry, onCancel, onAnswer,
                   const execution = latestExecutions.get(step.id)
                   const isCurrent = phaseIndex === run.snapshot.phaseIndex && stepIndex === run.snapshot.stepIndex
                   const isApprovalPending = Boolean(step.approvalGate && execution && run.snapshot.pendingApprovalDetails?.decision === null && run.snapshot.pendingApprovalDetails.continuation.executionId === execution.id)
+                  const isPullRequestGate = step.kind === 'tool' && step.adapter === 'github.pull-request'
+                  const canApprove = !isPullRequestGate || run.pullRequest?.gate.canMerge === true
                   return <div className="run-step-group" key={step.id}>
                     <article className={isCurrent ? 'run-step-card is-current' : 'run-step-card'} role="button" tabIndex={0} aria-pressed={selectedStepId === step.id} onClick={() => setSelectedStepId(step.id)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setSelectedStepId(step.id) } }}>
                       <div><strong>{step.name}</strong>{execution ? <span>{copy.run.attempt(execution.attempt)}</span> : null}</div>
@@ -372,7 +381,8 @@ function RunBoard({ run, onBack, onPause, onResume, onRetry, onCancel, onAnswer,
                       <div><strong>{copy.run.approvalTitle}</strong><span>{step.name}</span></div>
                       <p>{step.approvalGate}</p>
                       <span className={`run-status is-${isApprovalPending ? 'waiting' : execution?.status ?? 'pending'}`}>{isApprovalPending ? copy.run.status.waiting : execution ? (copy.run.status[execution.status as WorkflowRunStatus] ?? execution.status) : copy.run.pending}</span>
-                      {isApprovalPending ? <div className="run-decision-actions"><button className="primary-action" type="button" onClick={onApprove}><ThumbsUp aria-hidden="true" />{copy.run.approveAction}</button><button className="secondary-action" type="button" onClick={onReject}><ThumbsDown aria-hidden="true" />{copy.run.rejectAction}</button></div> : null}
+                      {isApprovalPending ? <div className="run-decision-actions"><button className="primary-action" type="button" onClick={onApprove} disabled={!canApprove}><ThumbsUp aria-hidden="true" />{copy.run.approveAction}</button><button className="secondary-action" type="button" onClick={onReject}><ThumbsDown aria-hidden="true" />{copy.run.rejectAction}</button></div> : null}
+                      {isApprovalPending && !canApprove ? <p className="run-gate-reason">{run.pullRequest?.gate.reason ?? copy.run.mergeGateBlocked}</p> : null}
                     </article> : null}
                   </div>
                 })}

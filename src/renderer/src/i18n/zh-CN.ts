@@ -169,8 +169,16 @@ export const zhCN = {
     deliveryTitle: 'Git 交付',
     baseCommit: 'Base Commit',
     branch: '功能分支',
+    pullRequest: 'Pull Request',
+    checks: 'Checks',
+    reviews: 'Reviews',
+    mergeability: 'Mergeability',
+    noChecks: '尚未返回 checks',
+    mergeGateReady: 'Checks、GitHub review 和 mergeability 已满足 Merge Gate。',
+    mergeGateBlocked: 'Merge Gate 暂不可批准：',
+    deliveryTransferNotice: 'Data Transfer Notice：External Destination: GitHub；数据：feature branch、commit、Run ID、PR checks 和 review 状态；权限：network.github；断网后从持久化 Pull Request Artifact 恢复。',
     localDelivery: '本地 Git 交付已完成；Project 没有 remote，不会创建 PR。',
-    remoteDelivery: 'GitHub 交付将在后续 Step 处理。'
+    remoteDelivery: 'GitHub delivery 尚未创建 Pull Request。'
   },
   settings: {
     eyebrow: '设置',

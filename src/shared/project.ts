@@ -25,8 +25,10 @@ export interface ProjectDeliveryPolicy {
   requiredApprovals?: number
 }
 
-export type ReleasePlatform = 'darwin' | 'linux' | 'win32'
-export type ReleaseOperation = 'build' | 'release' | 'validation'
+export const RELEASE_PLATFORMS = ['darwin', 'linux', 'win32'] as const
+export type ReleasePlatform = typeof RELEASE_PLATFORMS[number]
+export const RELEASE_OPERATIONS = ['build', 'release', 'validation'] as const
+export type ReleaseOperation = typeof RELEASE_OPERATIONS[number]
 
 export interface ProjectReleaseStep {
   kind: 'tool' | 'human'

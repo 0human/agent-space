@@ -220,6 +220,53 @@ describe('WorkflowEngine public API', () => {
     expect(releaseManager.execute).toHaveBeenCalledTimes(3)
   })
 
+  it('recovers a configured Human Step through a structured answer and Artifact', async () => {
+    directory = await mkdtemp(join(tmpdir(), 'agent-space-run-'))
+    const humanWorkflow: WorkflowView = {
+      ...workflow,
+      definition: {
+        ...workflow.definition,
+        phases: [{ id: 'release', name: 'Release', goal: 'Publish', steps: [{ id: 'validate', name: 'Validation', kind: 'tool', adapter: 'project.release', operation: 'validation' }] }]
+      }
+    }
+    const humanProject: Project = { ...project, release: { enabled: true, platforms: { linux: { validation: { kind: 'human', instructions: '请确认目标环境可用。', targetEnvironment: 'staging' } } } } }
+    engine = createWorkflowEngine({ databasePath: join(directory, 'runs.sqlite'), runtime: new FakeRuntime(), platform: 'linux' })
+
+    const run = await engine.startRun({ project: humanProject, workflow: humanWorkflow, idea: 'Validate manually' })
+    const waiting = await engine.waitForIdle(run.id)
+    expect(waiting.snapshot.pendingQuestion).toBe('请确认目标环境可用。')
+
+    await engine.answerQuestion(run.id, '验证通过，页面可访问')
+    await expect(engine.waitForIdle(run.id)).resolves.toMatchObject({
+      status: 'completed',
+      artifacts: [expect.objectContaining({ type: 'validation-report', location: 'staging', status: 'passed' })]
+    })
+  })
+
+  it('rechecks Release dependencies before start and rejects an unsafe cwd or missing target', async () => {
+    directory = await mkdtemp(join(tmpdir(), 'agent-space-run-'))
+    const releaseWorkflow: WorkflowView = {
+      ...workflow,
+      definition: {
+        ...workflow.definition,
+        phases: [{ id: 'release', name: 'Release', goal: 'Publish', steps: [{ id: 'release', name: 'Release', kind: 'tool', adapter: 'project.release', operation: 'release', approvalGate: '发布确认' }] }]
+      }
+    }
+    const invalidProject: Project = {
+      ...project,
+      release: { enabled: true, platforms: { linux: { release: { kind: 'tool', command: process.execPath, cwd: '../outside' } } } }
+    }
+    engine = createWorkflowEngine({ databasePath: join(directory, 'runs.sqlite'), runtime: new FakeRuntime(), platform: 'linux' })
+
+    const preflight = await engine.preflight({ project: invalidProject, workflow: releaseWorkflow, idea: 'Unsafe release' })
+    expect(preflight.errors).toEqual(expect.arrayContaining([
+      expect.stringContaining('cwd 必须位于 Run Workspace 内'),
+      expect.stringContaining('targetEnvironment')
+    ]))
+    await expect(engine.startRun({ project: invalidProject, workflow: releaseWorkflow, idea: 'Unsafe release', preflight: { passed: true, checks: [], errors: [] } }))
+      .rejects.toThrow('Release Preflight 失败')
+  })
+
   it('starts a built-in Workflow and persists its source snapshot with the definition', async () => {
     directory = await mkdtemp(join(tmpdir(), 'agent-space-run-'))
     const runtime = new FakeRuntime()

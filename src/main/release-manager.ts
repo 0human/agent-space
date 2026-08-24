@@ -7,6 +7,7 @@ import type { PermissionPolicy, Project, ProjectReleaseStep, ReleaseOperation, R
 import type { RuntimeEvent } from '../shared/workflow-run'
 
 const execFile = promisify(execFileCallback)
+const SAFE_ENVIRONMENT_KEYS = new Set(['PATH', 'SystemRoot', 'SYSTEMROOT', 'TEMP', 'TMP', 'TMPDIR', 'HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'LANG', 'LC_ALL', 'CI'])
 
 export interface ReleaseManagerContext {
   project: Project
@@ -15,6 +16,7 @@ export interface ReleaseManagerContext {
   operation: ReleaseOperation
   step: ProjectReleaseStep
   permissionPolicy: PermissionPolicy
+  input: Record<string, unknown>
 }
 
 export interface ReleaseManager {
@@ -79,6 +81,14 @@ export function createDefaultReleaseManager(): ReleaseManager {
       } else {
         errors.push(`Release Preflight 失败：${platformName(context.platform)} 找不到 ${context.step.command.trim()}。`)
       }
+      try {
+        workingDirectory(context)
+      } catch (error) {
+        errors.push(`Release Preflight 失败：${error instanceof Error ? error.message : String(error)}`)
+      }
+      if (context.operation === 'release' && !(context.step.targetEnvironment ?? context.project.release?.targetEnvironment)?.trim()) {
+        errors.push('Release Preflight 失败：release 必须声明 targetEnvironment。')
+      }
       const missingPermissions = (context.step.requiredPermissions ?? []).filter((permission) => !context.permissionPolicy.grantedPermissions.includes(permission))
       if (missingPermissions.length > 0) errors.push(`Release Preflight 失败：${context.operation} 权限校验失败，缺少 ${missingPermissions.join(', ')}。`)
       const notice = transferNotice(context)
@@ -89,13 +99,25 @@ export function createDefaultReleaseManager(): ReleaseManager {
 
     async execute(context) {
       if (context.step.kind === 'human') {
-        return [{ type: 'approval_required', approval: context.step.instructions ?? `请完成 ${context.operation} Human Step。` }]
+        const answer = typeof context.input.answer === 'string' && context.input.answer.trim()
+          ? context.input.answer.trim()
+          : null
+        if (!answer) return [{ type: 'question', question: context.step.instructions ?? `请完成 ${context.operation} Human Step，并输入发布记录或验证结果。` }]
+        if (context.operation === 'validation' && !/(?:passed|success|通过|成功)/i.test(answer)) {
+          return [{ type: 'error', error: 'Post-release Validation 未明确报告成功；请重试并提交包含 passed、success、通过或成功的验证结果。' }]
+        }
+        return [
+          { type: 'text_delta', text: answer },
+          { type: 'artifact_produced', artifact: { type: context.operation === 'validation' ? 'validation-report' : context.operation, name: context.operation, location: context.step.targetEnvironment ?? context.project.release?.targetEnvironment, status: context.operation === 'validation' ? 'passed' : 'completed' } },
+          { type: 'status_changed', status: 'completed' }
+        ]
       }
       const command = context.step.command?.trim()
       if (!command) return [{ type: 'error', error: `Release ${context.operation} command 缺失。` }]
       try {
         const cwd = workingDirectory(context)
-        const result = await execFile(command, context.step.args ?? [], { cwd, windowsHide: true, env: process.env })
+        const env = Object.fromEntries(Object.entries(process.env).filter(([key, value]) => SAFE_ENVIRONMENT_KEYS.has(key) && typeof value === 'string'))
+        const result = await execFile(command, context.step.args ?? [], { cwd, windowsHide: true, env })
         const location = context.step.targetEnvironment ?? context.project.release?.targetEnvironment ?? cwd
         return [
           { type: 'tool_call', name: command, input: { args: context.step.args ?? [], cwd, operation: context.operation } },

@@ -14,8 +14,8 @@ import type {
 import type { GitMergeRequest, GitPullRequestRequest, GitPullRequestResult } from './git-delivery'
 import { createSqliteRunStore } from './workflow-store'
 import { zhCNMain } from '../shared/i18n/zh-CN'
-import { DEFAULT_PROJECT_PERMISSIONS, type PermissionPolicy, type ProjectDeliveryPolicy } from '../shared/project'
-import type { ReleaseOperation, ReleasePlatform } from '../shared/project'
+import { DEFAULT_PROJECT_PERMISSIONS, RELEASE_OPERATIONS, RELEASE_PLATFORMS, type PermissionPolicy, type ProjectDeliveryPolicy } from '../shared/project'
+import type { ReleaseOperation, ReleasePlatform, ProjectReleaseStep } from '../shared/project'
 import { createDefaultReleaseManager, resolveProjectReleaseStep, type ReleaseManager } from './release-manager'
 
 interface GitDeliveryManager {
@@ -41,7 +41,14 @@ function isReleaseStep(step: WorkflowRun['definition']['phases'][number]['steps'
 }
 
 function supportedPlatform(platform: NodeJS.Platform): ReleasePlatform | null {
-  return platform === 'darwin' || platform === 'linux' || platform === 'win32' ? platform : null
+  return RELEASE_PLATFORMS.includes(platform as ReleasePlatform) ? platform as ReleasePlatform : null
+}
+
+function configuredReleaseStep(project: WorkflowPreflightInput['project'], platform: ReleasePlatform, operation: ReleaseOperation, workflowStep?: { platforms?: Partial<Record<ReleasePlatform, { command: string; args?: string[] }>> }): ProjectReleaseStep | null {
+  const configured = resolveProjectReleaseStep(project, platform, operation)
+  if (configured) return configured
+  const platformCommand = workflowStep?.platforms?.[platform]
+  return platformCommand ? { kind: 'tool', command: platformCommand.command, args: platformCommand.args } : null
 }
 
 function releaseConfigErrors(project: WorkflowPreflightInput['project']): string[] {
@@ -53,7 +60,7 @@ function releaseConfigErrors(project: WorkflowPreflightInput['project']): string
   if (typeof value.enabled !== 'boolean') errors.push('Release Preflight 失败：Project release.enabled 必须是 boolean。')
   if (!value.platforms || typeof value.platforms !== 'object' || Array.isArray(value.platforms)) return [...errors, 'Release Preflight 失败：Project release.platforms 必须是对象。']
   for (const [platform, operations] of Object.entries(value.platforms as Record<string, unknown>)) {
-    if (!['darwin', 'linux', 'win32'].includes(platform)) {
+    if (!RELEASE_PLATFORMS.includes(platform as ReleasePlatform)) {
       errors.push(`Release Preflight 失败：不支持的平台 ${platform}。`)
       continue
     }
@@ -62,7 +69,7 @@ function releaseConfigErrors(project: WorkflowPreflightInput['project']): string
       continue
     }
     for (const [operation, config] of Object.entries(operations as Record<string, unknown>)) {
-      if (!['build', 'release', 'validation'].includes(operation) || !config || typeof config !== 'object' || Array.isArray(config)) {
+      if (!RELEASE_OPERATIONS.includes(operation as ReleaseOperation) || !config || typeof config !== 'object' || Array.isArray(config)) {
         errors.push(`Release Preflight 失败：${platform}/${operation} 配置无效。`)
         continue
       }
@@ -201,13 +208,9 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
             { type: 'status_changed', status: 'completed', source: 'github.pull-request' }
           ]
         } else if (releaseStep && platform) {
-          const configured = resolveProjectReleaseStep(run.project, platform, step.operation)
+          const configured = configuredReleaseStep(run.project, platform, step.operation, step)
           if (!configured) throw new Error(`Release ${step.operation} 配置不可用：当前平台没有适配。`)
-          if (configured.kind === 'tool') {
-            events = await releaseManager.execute({ project: run.project, workspacePath: run.workspacePath, platform, operation: step.operation, step: configured, permissionPolicy: run.project.permissionPolicy ?? { grantedPermissions: [...DEFAULT_PROJECT_PERMISSIONS] } })
-          } else {
-            events = await dependencies.runtime.execute(context)
-          }
+          events = await releaseManager.execute({ project: run.project, workspacePath: run.workspacePath, platform, operation: step.operation, step: configured, input: execution.input ?? {}, permissionPolicy: run.project.permissionPolicy ?? { grantedPermissions: [...DEFAULT_PROJECT_PERMISSIONS] } })
         } else {
           events = await dependencies.runtime.execute(context)
         }
@@ -296,12 +299,12 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
               errors.push(`Release Preflight 失败：当前平台 ${dependencies.platform ?? process.platform} 不受支持。`)
               continue
             }
-            const configured = resolveProjectReleaseStep(input.project, platform, step.operation)
+            const configured = configuredReleaseStep(input.project, platform, step.operation, step)
             if (!configured) {
               errors.push(`Release Preflight 失败：${platform} 缺少 ${step.operation} 适配。`)
             } else {
               if (step.operation === 'release' && !step.approvalGate) errors.push('Release Step 必须声明 Approval Gate。')
-              const result = await releaseManager.preflight({ project: input.project, workspacePath: input.project.workspacePath, platform, operation: step.operation, step: configured, permissionPolicy: input.project.permissionPolicy ?? { grantedPermissions: [...DEFAULT_PROJECT_PERMISSIONS] } })
+              const result = await releaseManager.preflight({ project: input.project, workspacePath: input.project.workspacePath, platform, operation: step.operation, step: configured, input: {}, permissionPolicy: input.project.permissionPolicy ?? { grantedPermissions: [...DEFAULT_PROJECT_PERMISSIONS] } })
               checks.push(...result.checks)
               errors.push(...result.errors)
             }
@@ -325,14 +328,14 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
     },
 
     async startRun(input): Promise<WorkflowRun> {
-      const preflight = input.preflight ?? await this.preflight(input)
+      const preflight = await this.preflight(input)
       if (!preflight.passed) throw new Error(preflight.errors.join(' '))
       const missingDeliveryGate = deliveryGateError(input)
       if (missingDeliveryGate) throw new Error(missingDeliveryGate)
       if (platform) {
         for (const step of input.workflow.definition.phases.flatMap((phase) => phase.steps)) {
           if (!isReleaseStep(step) || (step.condition === 'project.release.enabled' && input.project.release?.enabled !== true)) continue
-          if (!resolveProjectReleaseStep(input.project, platform, step.operation)) throw new Error(`Release Preflight 失败：${platform} 缺少 ${step.operation} 适配。`)
+          if (!configuredReleaseStep(input.project, platform, step.operation, step)) throw new Error(`Release Preflight 失败：${platform} 缺少 ${step.operation} 适配。`)
           if (step.operation === 'release' && !step.approvalGate) throw new Error('Release Step 必须声明 Approval Gate。')
         }
       }

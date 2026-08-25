@@ -2,16 +2,22 @@
   "name": "agent-space",
   "version": "0.1.0",
   "private": true,
+  "author": "Agent Space contributors",
   "description": "Software Delivery Workflow desktop app",
   "main": "out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
+    "package": "pnpm build && electron-builder --config electron-builder.yml",
+    "package:mac": "pnpm build && electron-builder --config electron-builder.yml --mac",
+    "package:linux": "pnpm build && electron-builder --config electron-builder.yml --linux",
+    "package:win": "pnpm build && electron-builder --config electron-builder.yml --win",
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:smoke": "node scripts/startup-smoke.mjs"
+    "test:smoke": "node scripts/startup-smoke.mjs",
+    "test:smoke:packaged": "node scripts/startup-smoke.mjs --packaged"
   },
   "dependencies": {
     "@fontsource-variable/inter": "^5.2.8",
@@ -32,6 +38,7 @@
     "@types/sql.js": "^1.4.11",
     "@vitejs/plugin-react": "^4.3.4",
     "electron": "^33.2.1",
+    "electron-builder": "^26.15.3",
     "electron-vite": "^3.0.0",
     "jsdom": "^25.0.1",
     "typescript": "^5.7.2",

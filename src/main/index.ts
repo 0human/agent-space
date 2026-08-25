@@ -22,6 +22,10 @@ import { BUILT_IN_SKILL_MANIFESTS, type SkillManifest } from '../shared/workflow
 const currentDirectory = fileURLToPath(new URL('.', import.meta.url))
 const execFile = promisify(execFileCallback)
 
+function builtInSkillPackagePath(): string {
+  return app.isPackaged ? join(process.resourcesPath, '.agents') : join(currentDirectory, '../../.agents')
+}
+
 function openMainWindow(): BrowserWindow {
   const mainWindow = createMainWindow({
     createWindow: (options) => new BrowserWindow(options),
@@ -102,8 +106,8 @@ const workflowEngine = createWorkflowEngine({
   runtime: createCodexRuntimeAdapter({
     skillManifests: BUILT_IN_SKILL_MANIFESTS,
     getSkillManifests: () => availableSkillManifests,
-    skillPackagePath: join(currentDirectory, '../../.agents'),
-    resolveSkillPackagePath: (manifest) => installedSkillPaths.get(`${manifest.name}@${manifest.version}`) ?? join(currentDirectory, '../../.agents')
+    skillPackagePath: builtInSkillPackagePath(),
+    resolveSkillPackagePath: (manifest) => installedSkillPaths.get(`${manifest.name}@${manifest.version}`) ?? builtInSkillPackagePath()
   }),
   runWorkspaceManager: createRunWorkspaceManager({ execGit: createDefaultGitExecutor() }),
   gitDeliveryManager: createGitDeliveryManager({ execGit: createDefaultGitExecutor(), execGitHub: createDefaultGitHubExecutor() })

@@ -43,6 +43,17 @@ jobs:
       - name: Build
         run: pnpm build
 
+      - name: Package installable application
+        run: pnpm package
+
+      - name: Upload installable artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-space-${{ runner.os }}-${{ runner.arch }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Install Linux display server
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install --yes xvfb
@@ -52,6 +63,16 @@ jobs:
         run: |
           sudo chown root:root node_modules/electron/dist/chrome-sandbox
           sudo chmod 4755 node_modules/electron/dist/chrome-sandbox
+          sudo chown root:root dist/linux-unpacked/chrome-sandbox
+          sudo chmod 4755 dist/linux-unpacked/chrome-sandbox
+
+      - name: Packaged startup smoke (Linux)
+        if: runner.os == 'Linux'
+        run: xvfb-run --auto-servernum pnpm test:smoke:packaged
+
+      - name: Packaged startup smoke
+        if: runner.os != 'Linux'
+        run: pnpm test:smoke:packaged
 
       - name: Startup smoke (Linux)
         if: runner.os == 'Linux'

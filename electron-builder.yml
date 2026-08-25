@@ -1,0 +1,32 @@
+appId: com.agentspace.desktop
+productName: Agent Space
+artifactName: ${productName}-${version}-${os}-${arch}.${ext}
+directories:
+  output: dist
+  buildResources: build
+files:
+  - out/**/*
+  - package.json
+extraResources:
+  - from: .agents
+    to: .agents
+    filter:
+      - '**/*'
+mac:
+  category: public.app-category.developer-tools
+  target:
+    - dmg
+    - zip
+linux:
+  category: Development
+  target:
+    - AppImage
+    - deb
+win:
+  target:
+    - nsis
+    - zip
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+publish: []

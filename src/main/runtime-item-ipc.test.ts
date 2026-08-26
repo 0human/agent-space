@@ -3,19 +3,25 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import { APP_SHELL_CHANNELS } from '../shared/app-shell'
-import type { RuntimeItemProjectionUpdate } from '../shared/workflow-run'
+import type { RuntimeItem } from '../shared/workflow-run'
 import { publishRuntimeItemUpdate, registerRuntimeItemHandlers } from './runtime-item-ipc'
 
-const update: RuntimeItemProjectionUpdate = {
+const item: RuntimeItem = {
+  id: 'item-1',
   runId: 'run-1',
   executionId: 'execution-1',
-  item: { id: 'item-1', runId: 'run-1', executionId: 'execution-1', type: 'agent_message', status: 'in_progress', text: 'Hello' }
+  type: 'agent_message',
+  status: 'in_progress',
+  text: 'Hello',
+  provider: 'codex',
+  source: 'codex app-server',
+  permissionPolicy: { grantedPermissions: ['workspace.read'] },
+  runtimeLocator: { runtimeProvider: 'codex', threadId: 'thread-1', turnId: 'turn-1', runtimeVersion: '0.144.3' }
 }
 
 describe('Runtime Item IPC', () => {
   it('lists the current in-memory projection through a controlled handler', async () => {
     const handlers = new Map<string, (...args: unknown[]) => unknown>()
-    const item = update.item
     const projection = { list: vi.fn().mockReturnValue([item]) }
 
     registerRuntimeItemHandlers({
@@ -31,7 +37,7 @@ describe('Runtime Item IPC', () => {
     const unavailable = { webContents: { send: vi.fn(() => { throw new Error('Renderer unavailable') }) } }
     const available = { webContents: { send: vi.fn() } }
 
-    expect(() => publishRuntimeItemUpdate([unavailable, available], update)).not.toThrow()
-    expect(available.webContents.send).toHaveBeenCalledWith(APP_SHELL_CHANNELS.runtimeItemUpdated, update)
+    expect(() => publishRuntimeItemUpdate([unavailable, available], item)).not.toThrow()
+    expect(available.webContents.send).toHaveBeenCalledWith(APP_SHELL_CHANNELS.runtimeItemUpdated, item)
   })
 })

@@ -311,7 +311,6 @@ function RuntimeItemList({ items }: { items: RuntimeItem[] }): React.JSX.Element
       : <article className="runtime-item is-command" aria-label={copy.run.commandItem(item.command)} key={item.id}>
           <header><span><Terminal aria-hidden="true" /><strong>{copy.run.commandItemTitle}</strong></span><span className={`runtime-item-status is-${item.status}`}>{copy.run.runtimeItemStatus[item.status]}</span></header>
           <code>{item.command}</code>
-          {item.cwd ? <span className="runtime-item-cwd">{item.cwd}</span> : null}
           <pre>{item.output || copy.run.noCommandOutput}</pre>
           <footer>
             {item.exitCode !== null ? <span>{copy.run.commandExitCode(item.exitCode)}</span> : null}
@@ -764,8 +763,8 @@ export default function App(): React.JSX.Element {
 
   useEffect(() => {
     try {
-      return window.appShell.subscribeRuntimeItemUpdates((update) => {
-        setRuntimeItems((current) => upsertRuntimeItems(current, [update.item]))
+      return window.appShell.subscribeRuntimeItemUpdates((item) => {
+        setRuntimeItems((current) => upsertRuntimeItems(current, [item]))
       })
     } catch {
       return undefined

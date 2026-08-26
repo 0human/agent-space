@@ -1,15 +1,17 @@
-import type { RuntimeAgentMessageItem, RuntimeCommandItem, RuntimeItem, RuntimeItemProjectionUpdate, RuntimeItemStatus } from '../shared/workflow-run'
+import type { PermissionPolicy } from '../shared/project'
+import type { RuntimeAgentMessageItem, RuntimeCommandItem, RuntimeItem, RuntimeItemStatus, RuntimeLocator } from '../shared/workflow-run'
 import type { JsonRpcNotification } from './codex-app-server-transport'
 
 export interface CodexItemProjectionScope {
   runId: string
   executionId: string
-  threadId: string
-  turnId: string
+  runtimeLocator: RuntimeLocator
+  permissionPolicy: PermissionPolicy
+  source: string
 }
 
 interface CodexItemProjectionDependencies {
-  publish?: (update: RuntimeItemProjectionUpdate) => void | Promise<void>
+  publish?: (item: RuntimeItem) => void | Promise<void>
 }
 
 export interface CodexItemProjection {
@@ -40,7 +42,7 @@ export function createCodexItemProjection(dependencies: CodexItemProjectionDepen
     executionItems.set(item.id, item)
 
     try {
-      const published = dependencies.publish?.({ runId: scope.runId, executionId: scope.executionId, item })
+      const published = dependencies.publish?.(item)
       if (published instanceof Promise) void published.catch(() => undefined)
     } catch {
       // Projection publication is observational and must not affect the active Turn.
@@ -49,7 +51,16 @@ export function createCodexItemProjection(dependencies: CodexItemProjectionDepen
 
   return {
     handle(notification, scope) {
-      if (notification.params?.threadId !== scope.threadId || notification.params?.turnId !== scope.turnId) return
+      if (notification.params?.threadId !== scope.runtimeLocator.threadId || notification.params?.turnId !== scope.runtimeLocator.turnId) return
+
+      const metadata = {
+        runId: scope.runId,
+        executionId: scope.executionId,
+        provider: scope.runtimeLocator.runtimeProvider,
+        source: scope.source,
+        permissionPolicy: scope.permissionPolicy,
+        runtimeLocator: scope.runtimeLocator
+      }
 
       if (notification.method === 'item/started' || notification.method === 'item/completed') {
         const item = record(notification.params.item)
@@ -57,8 +68,7 @@ export function createCodexItemProjection(dependencies: CodexItemProjectionDepen
         if (item.type === 'agentMessage' && typeof item.text === 'string') {
           update(scope, {
             id: item.id,
-            runId: scope.runId,
-            executionId: scope.executionId,
+            ...metadata,
             type: 'agent_message',
             status: notification.method === 'item/completed' ? 'completed' : 'in_progress',
             text: item.text
@@ -66,12 +76,10 @@ export function createCodexItemProjection(dependencies: CodexItemProjectionDepen
         } else if (item.type === 'commandExecution' && typeof item.command === 'string') {
           update(scope, {
             id: item.id,
-            runId: scope.runId,
-            executionId: scope.executionId,
+            ...metadata,
             type: 'command',
             status: commandStatus(item.status),
             command: item.command,
-            cwd: typeof item.cwd === 'string' ? item.cwd : null,
             output: typeof item.aggregatedOutput === 'string' ? item.aggregatedOutput : '',
             exitCode: typeof item.exitCode === 'number' ? item.exitCode : null,
             durationMs: typeof item.durationMs === 'number' ? item.durationMs : null

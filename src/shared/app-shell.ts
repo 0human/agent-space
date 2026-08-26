@@ -1,6 +1,6 @@
 import type { GitHubProjectCloneResponse, OpenProjectResult, Project, ProjectImportResult } from './project'
 import type { WorkflowView } from './workflow'
-import type { RuntimeItem, RuntimeItemProjectionUpdate, WorkflowPreflightResult, WorkflowRun, WorkflowRunActionResult } from './workflow-run'
+import type { RuntimeItem, WorkflowPreflightResult, WorkflowRun, WorkflowRunActionResult } from './workflow-run'
 import type { InstalledSkillRecord, SkillInstallPreview, SkillSource } from './skill-package'
 
 export interface RuntimeInfo {
@@ -50,7 +50,7 @@ export interface AppShellApi {
   listWorkflowRuns: (projectId: string) => Promise<WorkflowRun[]>
   getWorkflowRun: (runId: string) => Promise<WorkflowRun | null>
   listRuntimeItems: (executionId: string) => Promise<RuntimeItem[]>
-  subscribeRuntimeItemUpdates: (listener: (update: RuntimeItemProjectionUpdate) => void) => () => void
+  subscribeRuntimeItemUpdates: (listener: (item: RuntimeItem) => void) => () => void
   pauseWorkflowRun: (runId: string) => Promise<WorkflowRun>
   resumeWorkflowRun: (runId: string) => Promise<WorkflowRun>
   retryWorkflowStep: (runId: string) => Promise<WorkflowRun>

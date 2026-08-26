@@ -80,10 +80,14 @@ describe('App Shell preload contract', () => {
     const listener = vi.fn()
     const unsubscribe = api.subscribeRuntimeItemUpdates(listener)
     const ipcListener = on.mock.calls[0][1]
-    const update = { runId: 'run-1', executionId: 'execution-1', item: { id: 'item-1', type: 'agent_message', text: 'Hello' } }
-    ipcListener({}, update)
+    const item = {
+      id: 'item-1', runId: 'run-1', executionId: 'execution-1', type: 'agent_message', status: 'in_progress', text: 'Hello',
+      provider: 'codex', source: 'codex app-server', permissionPolicy: { grantedPermissions: ['workspace.read'] },
+      runtimeLocator: { runtimeProvider: 'codex', threadId: 'thread-1', turnId: 'turn-1', runtimeVersion: '0.144.3' }
+    }
+    ipcListener({}, item)
     expect(on).toHaveBeenCalledWith('runtime-item:updated', expect.any(Function))
-    expect(listener).toHaveBeenCalledWith(update)
+    expect(listener).toHaveBeenCalledWith(item)
 
     unsubscribe()
     expect(removeListener).toHaveBeenCalledWith('runtime-item:updated', ipcListener)

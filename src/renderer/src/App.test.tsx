@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import App from './App'
 import { BUILT_IN_DEVELOPMENT_WORKFLOW, BUILT_IN_SKILL_MANIFESTS } from '../../shared/workflow'
-import type { RuntimeItemProjectionUpdate } from '../../shared/workflow-run'
+import type { RuntimeItem } from '../../shared/workflow-run'
 
 describe('Desktop Shell navigation', () => {
   beforeEach(() => {
@@ -484,12 +484,20 @@ describe('Desktop Shell navigation', () => {
       stepExecutions: [{ id: 'execution-live', runId: 'run-live', phaseId: BUILT_IN_DEVELOPMENT_WORKFLOW.phases[0].id, stepId: step.id, attempt: 1, status: 'running' as const, input: null, skill: step.skill ?? null, error: null, output: null, startedAt: '2026-08-26T00:00:00.000Z', finishedAt: null }],
       events: [], logs: [], phaseContexts: [], decisionRecords: [], artifacts: [], createdAt: '2026-08-26T00:00:00.000Z', updatedAt: '2026-08-26T00:00:00.000Z'
     }
-    let emitUpdate: ((update: RuntimeItemProjectionUpdate) => void) | undefined
+    const itemMetadata = {
+      runId: run.id,
+      executionId: 'execution-live',
+      provider: 'codex',
+      source: 'codex app-server',
+      permissionPolicy: { grantedPermissions: ['workspace.read', 'workspace.write'] },
+      runtimeLocator: { runtimeProvider: 'codex', threadId: 'thread-live', turnId: 'turn-live', runtimeVersion: '0.144.3' }
+    }
+    let emitUpdate: ((item: RuntimeItem) => void) | undefined
     window.appShell.listProjects = vi.fn().mockResolvedValue([project])
     window.appShell.listWorkflowRuns = vi.fn().mockResolvedValue([run])
     window.appShell.getWorkflowRun = vi.fn().mockResolvedValue(run)
     window.appShell.listRuntimeItems = vi.fn().mockResolvedValue([{
-      id: 'agent-1', runId: run.id, executionId: 'execution-live', type: 'agent_message', status: 'in_progress', text: 'Initial draft'
+      id: 'agent-1', ...itemMetadata, type: 'agent_message', status: 'in_progress', text: 'Initial draft'
     }])
     window.appShell.subscribeRuntimeItemUpdates = vi.fn((listener) => {
       emitUpdate = listener
@@ -504,29 +512,17 @@ describe('Desktop Shell navigation', () => {
     const agentCard = await screen.findByRole('article', { name: 'Agent 消息' })
     expect(agentCard).toHaveTextContent('Initial draft')
 
-    act(() => emitUpdate?.({
-      runId: run.id, executionId: 'execution-live',
-      item: { id: 'agent-1', runId: run.id, executionId: 'execution-live', type: 'agent_message', status: 'in_progress', text: 'Draft answer' }
-    }))
+    act(() => emitUpdate?.({ id: 'agent-1', ...itemMetadata, type: 'agent_message', status: 'in_progress', text: 'Draft answer' }))
     expect(screen.getByRole('article', { name: 'Agent 消息' })).toBe(agentCard)
-    act(() => emitUpdate?.({
-      runId: run.id, executionId: 'execution-live',
-      item: { id: 'agent-1', runId: run.id, executionId: 'execution-live', type: 'agent_message', status: 'completed', text: 'Final answer' }
-    }))
+    act(() => emitUpdate?.({ id: 'agent-1', ...itemMetadata, type: 'agent_message', status: 'completed', text: 'Final answer' }))
     expect(screen.getByRole('article', { name: 'Agent 消息' })).toBe(agentCard)
     expect(agentCard).toHaveTextContent('Final answer')
     expect(agentCard).not.toHaveTextContent('Draft answer')
 
-    act(() => emitUpdate?.({
-      runId: run.id, executionId: 'execution-live',
-      item: { id: 'command-1', runId: run.id, executionId: 'execution-live', type: 'command', status: 'in_progress', command: 'pnpm test', cwd: '/work/live-demo', output: 'partial output', exitCode: null, durationMs: null }
-    }))
+    act(() => emitUpdate?.({ id: 'command-1', ...itemMetadata, type: 'command', status: 'in_progress', command: 'pnpm test', output: 'partial output', exitCode: null, durationMs: null }))
     const commandCard = screen.getByRole('article', { name: '命令执行：pnpm test' })
     expect(commandCard).toHaveTextContent('partial output')
-    act(() => emitUpdate?.({
-      runId: run.id, executionId: 'execution-live',
-      item: { id: 'command-1', runId: run.id, executionId: 'execution-live', type: 'command', status: 'failed', command: 'pnpm test', cwd: '/work/live-demo', output: 'authoritative output', exitCode: 2, durationMs: 1250 }
-    }))
+    act(() => emitUpdate?.({ id: 'command-1', ...itemMetadata, type: 'command', status: 'failed', command: 'pnpm test', output: 'authoritative output', exitCode: 2, durationMs: 1250 }))
     expect(screen.getByRole('article', { name: '命令执行：pnpm test' })).toBe(commandCard)
     expect(commandCard).toHaveTextContent('authoritative output')
     expect(commandCard).not.toHaveTextContent('partial output')

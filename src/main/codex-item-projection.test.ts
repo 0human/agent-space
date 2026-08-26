@@ -5,8 +5,18 @@ import { createCodexItemProjection } from './codex-item-projection'
 const scope = {
   runId: 'run-1',
   executionId: 'execution-1',
-  threadId: 'thread-1',
-  turnId: 'turn-1'
+  runtimeLocator: { runtimeProvider: 'codex', threadId: 'thread-1', turnId: 'turn-1', runtimeVersion: '0.144.3' },
+  permissionPolicy: { grantedPermissions: ['workspace.read', 'workspace.write'] },
+  source: 'codex app-server'
+}
+
+const metadata = {
+  runId: 'run-1',
+  executionId: 'execution-1',
+  provider: 'codex',
+  source: 'codex app-server',
+  permissionPolicy: { grantedPermissions: ['workspace.read', 'workspace.write'] },
+  runtimeLocator: scope.runtimeLocator
 }
 
 describe('Codex Item Projection', () => {
@@ -20,8 +30,7 @@ describe('Codex Item Projection', () => {
 
     expect(projection.list(scope.executionId)).toEqual([{
       id: 'item-1',
-      runId: 'run-1',
-      executionId: 'execution-1',
+      ...metadata,
       type: 'agent_message',
       status: 'in_progress',
       text: 'Draft answer'
@@ -31,8 +40,7 @@ describe('Codex Item Projection', () => {
 
     expect(projection.list(scope.executionId)).toEqual([{
       id: 'item-1',
-      runId: 'run-1',
-      executionId: 'execution-1',
+      ...metadata,
       type: 'agent_message',
       status: 'completed',
       text: 'Final answer'
@@ -70,12 +78,10 @@ describe('Codex Item Projection', () => {
 
     expect(projection.list(scope.executionId)).toEqual([{
       id: 'item-command',
-      runId: 'run-1',
-      executionId: 'execution-1',
+      ...metadata,
       type: 'command',
       status: 'failed',
       command: 'pnpm test',
-      cwd: '/work/demo',
       output: 'authoritative output',
       exitCode: 2,
       durationMs: 1250

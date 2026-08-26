@@ -1,7 +1,7 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 
 import { APP_SHELL_CHANNELS, type AppShellApi } from '../shared/app-shell'
-import type { RuntimeItemProjectionUpdate } from '../shared/workflow-run'
+import type { RuntimeItem } from '../shared/workflow-run'
 
 const appShellApi: AppShellApi = Object.freeze({
   getRuntimeInfo: () => ipcRenderer.invoke(APP_SHELL_CHANNELS.getRuntimeInfo),
@@ -18,7 +18,7 @@ const appShellApi: AppShellApi = Object.freeze({
   getWorkflowRun: (runId) => ipcRenderer.invoke(APP_SHELL_CHANNELS.getWorkflowRun, runId),
   listRuntimeItems: (executionId) => ipcRenderer.invoke(APP_SHELL_CHANNELS.listRuntimeItems, executionId),
   subscribeRuntimeItemUpdates: (listener) => {
-    const ipcListener = (_event: IpcRendererEvent, update: RuntimeItemProjectionUpdate): void => listener(update)
+    const ipcListener = (_event: IpcRendererEvent, item: RuntimeItem): void => listener(item)
     ipcRenderer.on(APP_SHELL_CHANNELS.runtimeItemUpdated, ipcListener)
     return () => ipcRenderer.removeListener(APP_SHELL_CHANNELS.runtimeItemUpdated, ipcListener)
   },

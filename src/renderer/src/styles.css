@@ -1061,15 +1061,13 @@ button:focus-visible {
 .runtime-item-status.is-failed,
 .runtime-item-status.is-declined { color: #8c382f; }
 
-.runtime-item code,
-.runtime-item-cwd {
+.runtime-item code {
   display: block;
   margin-top: 8px;
   font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
 .runtime-item code { color: #303731; }
-.runtime-item-cwd { color: #778178; }
 
 .runtime-item pre {
   max-height: 260px;

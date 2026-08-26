@@ -19,6 +19,10 @@ interface RuntimeItemBase {
   runId: string
   executionId: string
   status: RuntimeItemStatus
+  provider: string
+  source: string
+  permissionPolicy: PermissionPolicy
+  runtimeLocator: RuntimeLocator
 }
 
 export interface RuntimeAgentMessageItem extends RuntimeItemBase {
@@ -29,19 +33,12 @@ export interface RuntimeAgentMessageItem extends RuntimeItemBase {
 export interface RuntimeCommandItem extends RuntimeItemBase {
   type: 'command'
   command: string
-  cwd: string | null
   output: string
   exitCode: number | null
   durationMs: number | null
 }
 
 export type RuntimeItem = RuntimeAgentMessageItem | RuntimeCommandItem
-
-export interface RuntimeItemProjectionUpdate {
-  runId: string
-  executionId: string
-  item: RuntimeItem
-}
 
 export interface WorkflowEvent {
   id: number

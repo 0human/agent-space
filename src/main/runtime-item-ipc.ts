@@ -1,5 +1,5 @@
 import { APP_SHELL_CHANNELS } from '../shared/app-shell'
-import type { RuntimeItem, RuntimeItemProjectionUpdate } from '../shared/workflow-run'
+import type { RuntimeItem } from '../shared/workflow-run'
 
 interface RuntimeItemReader {
   list(executionId: string): RuntimeItem[]
@@ -12,7 +12,7 @@ interface RuntimeItemHandlerDependencies {
 
 interface RuntimeItemWindow {
   webContents: {
-    send(channel: string, update: RuntimeItemProjectionUpdate): void
+    send(channel: string, item: RuntimeItem): void
   }
 }
 
@@ -22,10 +22,10 @@ export function registerRuntimeItemHandlers({ handle, projection }: RuntimeItemH
   })
 }
 
-export function publishRuntimeItemUpdate(windows: RuntimeItemWindow[], update: RuntimeItemProjectionUpdate): void {
+export function publishRuntimeItemUpdate(windows: RuntimeItemWindow[], item: RuntimeItem): void {
   for (const window of windows) {
     try {
-      window.webContents.send(APP_SHELL_CHANNELS.runtimeItemUpdated, update)
+      window.webContents.send(APP_SHELL_CHANNELS.runtimeItemUpdated, item)
     } catch {
       // A closed or unavailable Renderer must not affect the active Turn.
     }

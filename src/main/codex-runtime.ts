@@ -541,8 +541,9 @@ export function createCodexRuntimeAdapter(dependencies: CodexRuntimeDependencies
             dependencies.itemProjection?.handle(notification, {
               runId: context.runId,
               executionId: context.execution.id,
-              threadId,
-              turnId
+              runtimeLocator: locator,
+              permissionPolicy: context.permissionPolicy,
+              source: 'codex app-server'
             })
           } catch {
             // Live projection is observational and must not affect the active Turn.

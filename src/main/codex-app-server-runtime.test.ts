@@ -67,6 +67,7 @@ function successfulTransport(incoming: JsonRpcNotification[], threadId = 'thread
 
 describe('Codex App Server Agent Runtime Adapter contract', () => {
   it('initializes stdio JSON-RPC, starts a Thread and Turn, and maps supported final Items', async () => {
+    const persistRuntimeLocator = vi.fn(async () => undefined)
     const transport = successfulTransport([
       { method: 'future/notification', params: { value: 'ignored' } },
       { method: 'item/completed', params: { threadId: 'thread-1', turnId: 'turn-1', item: { type: 'agentMessage', id: 'item-1', text: 'Step complete.' } } },
@@ -79,12 +80,13 @@ describe('Codex App Server Agent Runtime Adapter contract', () => {
       createTransport: async () => transport
     } as never)
 
-    const events = await adapter.execute(executionContext())
+    const events = await adapter.execute(executionContext({ persistRuntimeLocator } as never))
 
     expect(transport.requests.map((request) => request.method)).toEqual(['initialize', 'thread/start', 'turn/start'])
     expect(transport.notifications).toEqual([{ method: 'initialized', params: {} }])
     expect(transport.requests[1]?.params).toMatchObject({ cwd: '/work/demo', approvalPolicy: 'never', sandbox: 'workspace-write' })
     expect(transport.requests[2]?.params).toMatchObject({ threadId: 'thread-1', input: [expect.objectContaining({ type: 'text' })] })
+    expect(persistRuntimeLocator).toHaveBeenCalledWith({ runtimeProvider: 'codex', threadId: 'thread-1', turnId: 'turn-1', runtimeVersion: '0.144.3' })
     expect(events).toEqual([
       expect.objectContaining({
         type: 'text_delta',
@@ -155,5 +157,22 @@ describe('Codex App Server Agent Runtime Adapter contract', () => {
       expect.objectContaining({ type: 'error', error: 'Thread unavailable', provider: 'codex' })
     ])
     expect(transport.close).toHaveBeenCalledOnce()
+  })
+
+  it('preserves a network failure reason and the execution Permission Policy', async () => {
+    const transport = new ControlledTransport({
+      initialize: { userAgent: 'codex-cli/0.144.3' },
+      'thread/start': new Error('connection refused by local App Server')
+    }, [])
+    const adapter = createCodexRuntimeAdapter({ command: '/definitely-missing-agent-space-codex', createTransport: async () => transport } as never)
+
+    await expect(adapter.execute(executionContext())).resolves.toEqual([
+      expect.objectContaining({
+        type: 'status_changed',
+        status: 'blocked',
+        reason: 'connection refused by local App Server',
+        permissionPolicy: { grantedPermissions: ['workspace.read', 'workspace.write'] }
+      })
+    ])
   })
 })

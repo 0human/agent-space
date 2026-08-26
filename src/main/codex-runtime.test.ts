@@ -113,7 +113,11 @@ describe('Codex Runtime Adapter policy contract', () => {
     const adapter = appServerItems([{ type: 'commandExecution', id: 'item-1', command, status: 'completed' }])
 
     await expect(adapter.execute(context())).resolves.toEqual([
-      expect.objectContaining({ type: 'error', error })
+      expect.objectContaining({
+        type: 'error',
+        error,
+        runtimeLocator: { runtimeProvider: 'codex', threadId: 'thread-1', turnId: 'turn-1', runtimeVersion: '0.144.3' }
+      })
     ])
   })
 

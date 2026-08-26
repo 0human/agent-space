@@ -8,6 +8,7 @@ import type { Project } from '../shared/project'
 import type {
   RuntimeArtifact,
   RuntimeEvent,
+  RuntimeLocator,
   RunSnapshot,
   DecisionRecord,
   PhaseContext,
@@ -694,6 +695,12 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
           await appendEvent(runId, 'step_started', { executionId: nextExecutionId, phaseIndex: cursor.phaseIndex, stepIndex: cursor.stepIndex, attempt: 1 }, timestamp)
         }
         return (await load(runId))!
+      }))
+    },
+
+    async recordRuntimeLocator(runId: string, executionId: string, runtimeLocator: RuntimeLocator): Promise<void> {
+      await locked(async () => transaction(async () => {
+        await run(db, 'UPDATE step_executions SET runtime_locator_json = ?, runtime_session_id = ? WHERE id = ? AND run_id = ?', [json(runtimeLocator), runtimeLocator.threadId, executionId, runId])
       }))
     },
 

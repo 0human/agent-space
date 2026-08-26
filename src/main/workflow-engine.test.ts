@@ -127,6 +127,40 @@ describe('WorkflowEngine public API', () => {
     })
   })
 
+  it('persists a Runtime Locator before the Runtime execution completes', async () => {
+    directory = await mkdtemp(join(tmpdir(), 'agent-space-run-'))
+    const databasePath = join(directory, 'runs.sqlite')
+    const runtimeLocator = { runtimeProvider: 'codex', threadId: 'thread-live', turnId: 'turn-live', runtimeVersion: '0.144.3' }
+    let finish!: (events: RuntimeEvent[]) => void
+    const runtime: AgentRuntimeAdapter = {
+      async execute(context) {
+        const persistRuntimeLocator = (context as RuntimeExecutionContext & {
+          persistRuntimeLocator: (locator: typeof runtimeLocator) => Promise<void>
+        }).persistRuntimeLocator
+        await persistRuntimeLocator(runtimeLocator)
+        return new Promise((resolve) => { finish = resolve })
+      }
+    }
+    engine = createWorkflowEngine({ databasePath, runtime })
+
+    const run = await engine.startRun({ project, workflow, idea: 'Persist the active Codex Turn' })
+
+    await vi.waitFor(async () => {
+      await expect(engine.getRun(run.id)).resolves.toMatchObject({
+        status: 'running',
+        stepExecutions: [expect.objectContaining({ runtimeLocator })]
+      })
+    })
+    await engine.close()
+    finish([{ type: 'status_changed', status: 'completed', runtimeLocator }])
+    engine = createWorkflowEngine({ databasePath, runtime: new FakeRuntime() })
+
+    await expect(engine.getRun(run.id)).resolves.toMatchObject({
+      status: 'running',
+      stepExecutions: [expect.objectContaining({ runtimeLocator })]
+    })
+  })
+
   it('selects the current platform release configuration during Preflight', async () => {
     directory = await mkdtemp(join(tmpdir(), 'agent-space-run-'))
     engine = createWorkflowEngine({ databasePath: join(directory, 'runs.sqlite'), runtime: new FakeRuntime(), platform: 'linux' })

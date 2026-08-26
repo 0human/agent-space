@@ -204,6 +204,7 @@ export interface RuntimeExecutionContext {
   decisionRecords: DecisionRecord[]
   permissionPolicy: PermissionPolicy
   events: WorkflowEvent[]
+  persistRuntimeLocator?(locator: RuntimeLocator): Promise<void>
 }
 
 export interface RuntimeArtifact {

@@ -455,7 +455,8 @@ export function createCodexRuntimeAdapter(dependencies: CodexRuntimeDependencies
       }
     }
     if (forbidden) {
-      return [{ type: 'error', error: reason ?? 'Permission Policy 阻止 Git 操作。', provider: 'codex', source: 'permission-policy', permissionPolicy: context.permissionPolicy }]
+      const runtimeLocator = events.find((event) => event.runtimeLocator)?.runtimeLocator
+      return [{ type: 'error', error: reason ?? 'Permission Policy 阻止 Git 操作。', provider: 'codex', source: 'permission-policy', permissionPolicy: context.permissionPolicy, ...(runtimeLocator ? { runtimeLocator } : {}) }]
     }
     return events.filter((event) => event.type !== 'artifact_produced' || isArtifactInsideWorkspace(event.artifact, context.workspace.path)).map((event) => ({
       ...event,
@@ -529,6 +530,7 @@ export function createCodexRuntimeAdapter(dependencies: CodexRuntimeDependencies
         if (!turnId) throw new Error('Codex App Server 未返回 Turn ID。')
         const locator = { runtimeProvider: 'codex', threadId, turnId, runtimeVersion: codexVersion(initialized) }
         runtimeLocator = locator
+        await context.persistRuntimeLocator?.(locator)
         const events: RuntimeEvent[] = []
         while (true) {
           const notification = await transport.nextNotification()
@@ -553,8 +555,8 @@ export function createCodexRuntimeAdapter(dependencies: CodexRuntimeDependencies
       } catch (error) {
         const message = sanitizeSensitiveText(error instanceof Error ? error.message : String(error))
         return isNetworkFailure(message)
-          ? [{ type: 'status_changed', status: 'blocked', provider: 'codex', source: 'codex app-server', ...(runtimeLocator ? { runtimeLocator } : {}) }]
-          : [{ type: 'error', error: message, provider: 'codex', source: 'codex app-server', ...(runtimeLocator ? { runtimeLocator } : {}) }]
+          ? [{ type: 'status_changed', status: 'blocked', reason: message, provider: 'codex', source: 'codex app-server', permissionPolicy: context.permissionPolicy, ...(runtimeLocator ? { runtimeLocator } : {}) }]
+          : [{ type: 'error', error: message, provider: 'codex', source: 'codex app-server', permissionPolicy: context.permissionPolicy, ...(runtimeLocator ? { runtimeLocator } : {}) }]
       } finally {
         await transport?.close().catch(() => undefined)
         await gitGuard?.cleanup().catch(() => undefined)

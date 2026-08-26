@@ -12,6 +12,37 @@ export interface RuntimeLocator {
   runtimeVersion: string
 }
 
+export type RuntimeItemStatus = 'in_progress' | 'completed' | 'failed' | 'declined'
+
+interface RuntimeItemBase {
+  id: string
+  runId: string
+  executionId: string
+  status: RuntimeItemStatus
+}
+
+export interface RuntimeAgentMessageItem extends RuntimeItemBase {
+  type: 'agent_message'
+  text: string
+}
+
+export interface RuntimeCommandItem extends RuntimeItemBase {
+  type: 'command'
+  command: string
+  cwd: string | null
+  output: string
+  exitCode: number | null
+  durationMs: number | null
+}
+
+export type RuntimeItem = RuntimeAgentMessageItem | RuntimeCommandItem
+
+export interface RuntimeItemProjectionUpdate {
+  runId: string
+  executionId: string
+  item: RuntimeItem
+}
+
 export interface WorkflowEvent {
   id: number
   runId: string

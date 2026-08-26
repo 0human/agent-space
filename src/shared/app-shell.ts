@@ -1,6 +1,6 @@
 import type { GitHubProjectCloneResponse, OpenProjectResult, Project, ProjectImportResult } from './project'
 import type { WorkflowView } from './workflow'
-import type { WorkflowPreflightResult, WorkflowRun, WorkflowRunActionResult } from './workflow-run'
+import type { RuntimeItem, RuntimeItemProjectionUpdate, WorkflowPreflightResult, WorkflowRun, WorkflowRunActionResult } from './workflow-run'
 import type { InstalledSkillRecord, SkillInstallPreview, SkillSource } from './skill-package'
 
 export interface RuntimeInfo {
@@ -21,6 +21,8 @@ export const APP_SHELL_CHANNELS = {
   startWorkflowRun: 'workflow:start-run',
   listWorkflowRuns: 'workflow-run:list',
   getWorkflowRun: 'workflow-run:get',
+  listRuntimeItems: 'runtime-item:list',
+  runtimeItemUpdated: 'runtime-item:updated',
   pauseWorkflowRun: 'workflow-run:pause',
   resumeWorkflowRun: 'workflow-run:resume',
   retryWorkflowStep: 'workflow-run:retry-step',
@@ -47,6 +49,8 @@ export interface AppShellApi {
   startWorkflowRun: (projectId: string, idea: string) => Promise<WorkflowRunActionResult>
   listWorkflowRuns: (projectId: string) => Promise<WorkflowRun[]>
   getWorkflowRun: (runId: string) => Promise<WorkflowRun | null>
+  listRuntimeItems: (executionId: string) => Promise<RuntimeItem[]>
+  subscribeRuntimeItemUpdates: (listener: (update: RuntimeItemProjectionUpdate) => void) => () => void
   pauseWorkflowRun: (runId: string) => Promise<WorkflowRun>
   resumeWorkflowRun: (runId: string) => Promise<WorkflowRun>
   retryWorkflowStep: (runId: string) => Promise<WorkflowRun>

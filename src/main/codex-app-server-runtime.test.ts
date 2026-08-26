@@ -107,6 +107,27 @@ describe('Codex App Server Agent Runtime Adapter contract', () => {
     expect(transport.close).toHaveBeenCalledOnce()
   })
 
+  it('completes the Turn when live Item projection fails', async () => {
+    const transport = successfulTransport([
+      { method: 'item/started', params: { threadId: 'thread-1', turnId: 'turn-1', item: { type: 'agentMessage', id: 'item-1', text: '' } } },
+      { method: 'item/agentMessage/delta', params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'item-1', delta: 'Draft' } },
+      { method: 'item/completed', params: { threadId: 'thread-1', turnId: 'turn-1', item: { type: 'agentMessage', id: 'item-1', text: 'Final' } } },
+      { method: 'turn/completed', params: { threadId: 'thread-1', turn: { id: 'turn-1', status: 'completed', error: null } } }
+    ])
+    const itemProjection = { handle: vi.fn(() => { throw new Error('Renderer IPC unavailable') }) }
+    const adapter = createCodexRuntimeAdapter({
+      command: '/definitely-missing-agent-space-codex',
+      createTransport: async () => transport,
+      itemProjection
+    } as never)
+
+    await expect(adapter.execute(executionContext())).resolves.toEqual([
+      expect.objectContaining({ type: 'text_delta', text: 'Final' }),
+      expect.objectContaining({ type: 'status_changed', status: 'completed' })
+    ])
+    expect(itemProjection.handle).toHaveBeenCalledTimes(4)
+  })
+
   it('resumes the Thread recorded by the Step Execution before starting a new Turn', async () => {
     const transport = successfulTransport([
       { method: 'turn/completed', params: { threadId: 'thread-9', turn: { id: 'turn-10', status: 'completed', error: null } } }

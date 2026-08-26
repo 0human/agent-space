@@ -8,6 +8,7 @@ import type { AgentRuntimeAdapter, RuntimeArtifact, RuntimeEvent, RuntimeExecuti
 import type { SkillManifest } from '../shared/workflow'
 import { isCommandAllowed, isNetworkHostAllowed, isPathAllowed } from './permission-policy'
 import { createStdioCodexAppServerTransport, type CodexAppServerTransport, type JsonRpcNotification } from './codex-app-server-transport'
+import type { CodexItemProjection } from './codex-item-projection'
 
 interface ProcessResult {
   stdout: string
@@ -29,6 +30,7 @@ interface CodexRuntimeDependencies {
   resolveSkillPackagePath?: (manifest: SkillManifest) => string | null
   readSkill?: (path: string, encoding: 'utf8') => Promise<string>
   createTransport?: (options: ProcessOptions & { command: string }) => Promise<CodexAppServerTransport> | CodexAppServerTransport
+  itemProjection?: Pick<CodexItemProjection, 'handle'>
 }
 
 const QUESTION_PREFIX = 'QUESTION:'
@@ -535,6 +537,16 @@ export function createCodexRuntimeAdapter(dependencies: CodexRuntimeDependencies
         while (true) {
           const notification = await transport.nextNotification()
           if (!notification) throw new Error('Codex App Server 在 Turn 完成前关闭。')
+          try {
+            dependencies.itemProjection?.handle(notification, {
+              runId: context.runId,
+              executionId: context.execution.id,
+              threadId,
+              turnId
+            })
+          } catch {
+            // Live projection is observational and must not affect the active Turn.
+          }
           const itemEvent = appServerItemEvent(notification)
           if (itemEvent && notification.params?.threadId === threadId && notification.params?.turnId === turnId) events.push(itemEvent)
           if (notification.method === 'error' && notification.params?.threadId === threadId && notification.params?.turnId === turnId && notification.params.willRetry !== true) {

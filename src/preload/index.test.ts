@@ -4,10 +4,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const exposeInMainWorld = vi.fn()
 const invoke = vi.fn()
+const on = vi.fn()
+const removeListener = vi.fn()
 
 vi.mock('electron', () => ({
   contextBridge: { exposeInMainWorld },
-  ipcRenderer: { invoke }
+  ipcRenderer: { invoke, on, removeListener }
 }))
 
 describe('App Shell preload contract', () => {
@@ -15,6 +17,8 @@ describe('App Shell preload contract', () => {
     vi.resetModules()
     exposeInMainWorld.mockReset()
     invoke.mockReset()
+    on.mockReset()
+    removeListener.mockReset()
   })
 
   it('exposes only the controlled runtime information capability', async () => {
@@ -44,6 +48,7 @@ describe('App Shell preload contract', () => {
     await api.startWorkflowRun('project-1', 'idea')
     await api.listWorkflowRuns('project-1')
     await api.getWorkflowRun('run-1')
+    await api.listRuntimeItems('execution-1')
     await api.pauseWorkflowRun('run-1')
     await api.resumeWorkflowRun('run-1')
     await api.retryWorkflowStep('run-1')
@@ -62,6 +67,7 @@ describe('App Shell preload contract', () => {
     expect(invoke).toHaveBeenCalledWith('workflow:start-run', 'project-1', 'idea')
     expect(invoke).toHaveBeenCalledWith('workflow-run:list', 'project-1')
     expect(invoke).toHaveBeenCalledWith('workflow-run:get', 'run-1')
+    expect(invoke).toHaveBeenCalledWith('runtime-item:list', 'execution-1')
     expect(invoke).toHaveBeenCalledWith('workflow-run:pause', 'run-1')
     expect(invoke).toHaveBeenCalledWith('workflow-run:resume', 'run-1')
     expect(invoke).toHaveBeenCalledWith('workflow-run:retry-step', 'run-1')
@@ -70,5 +76,16 @@ describe('App Shell preload contract', () => {
     expect(invoke).toHaveBeenCalledWith('skill:preview-install', { type: 'local-directory', value: '/tmp/skill' })
     expect(invoke).toHaveBeenCalledWith('skill:install', { type: 'local-directory', value: '/tmp/skill' })
     expect(invoke).toHaveBeenCalledWith('skill:list-installed')
+
+    const listener = vi.fn()
+    const unsubscribe = api.subscribeRuntimeItemUpdates(listener)
+    const ipcListener = on.mock.calls[0][1]
+    const update = { runId: 'run-1', executionId: 'execution-1', item: { id: 'item-1', type: 'agent_message', text: 'Hello' } }
+    ipcListener({}, update)
+    expect(on).toHaveBeenCalledWith('runtime-item:updated', expect.any(Function))
+    expect(listener).toHaveBeenCalledWith(update)
+
+    unsubscribe()
+    expect(removeListener).toHaveBeenCalledWith('runtime-item:updated', ipcListener)
   })
 })

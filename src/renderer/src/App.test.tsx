@@ -1,9 +1,10 @@
-import { render, screen } from '@testing-library/react'
+import { act, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import App from './App'
 import { BUILT_IN_DEVELOPMENT_WORKFLOW, BUILT_IN_SKILL_MANIFESTS } from '../../shared/workflow'
+import type { RuntimeItemProjectionUpdate } from '../../shared/workflow-run'
 
 describe('Desktop Shell navigation', () => {
   beforeEach(() => {
@@ -27,6 +28,8 @@ describe('Desktop Shell navigation', () => {
       startWorkflowRun: vi.fn(),
       listWorkflowRuns: vi.fn().mockResolvedValue([]),
       getWorkflowRun: vi.fn(),
+      listRuntimeItems: vi.fn().mockResolvedValue([]),
+      subscribeRuntimeItemUpdates: vi.fn().mockReturnValue(() => undefined),
       pauseWorkflowRun: vi.fn(),
       resumeWorkflowRun: vi.fn(),
       retryWorkflowStep: vi.fn(),
@@ -462,6 +465,73 @@ describe('Desktop Shell navigation', () => {
     expect(screen.getByRole('heading', { name: '可用操作' })).toBeVisible()
     expect(screen.getAllByRole('button', { name: '继续' }).at(-1)).toBeEnabled()
     expect(screen.getAllByRole('button', { name: '取消 Run' }).at(-1)).toBeEnabled()
+  })
+
+  it('keeps live Item cards stable and renders authoritative Agent and command completion', async () => {
+    const user = userEvent.setup()
+    const project = {
+      id: 'project-live', name: 'live-demo', workspacePath: '/work/live-demo', workspaceAvailable: true,
+      remote: null, currentBranch: 'main', head: 'abc123', defaultBranch: 'main', isGreenfield: false, dirty: false,
+      dirtySummary: { staged: 0, unstaged: 0, untracked: 0, files: [] }, updatedAt: '2026-08-26T00:00:00.000Z'
+    }
+    const step = BUILT_IN_DEVELOPMENT_WORKFLOW.phases[0].steps[0]
+    const run = {
+      id: 'run-live', projectId: project.id, workspacePath: project.workspacePath, remote: null, idea: 'Observe live Runtime Items',
+      workflowId: BUILT_IN_DEVELOPMENT_WORKFLOW.id, workflowVersion: BUILT_IN_DEVELOPMENT_WORKFLOW.version,
+      workflowSource: { source: 'built-in' as const, id: BUILT_IN_DEVELOPMENT_WORKFLOW.id, version: BUILT_IN_DEVELOPMENT_WORKFLOW.version, path: null },
+      definition: BUILT_IN_DEVELOPMENT_WORKFLOW, status: 'running' as const, error: null,
+      snapshot: { phaseIndex: 0, stepIndex: 0, currentStepExecutionId: 'execution-live', pendingQuestion: null, pendingApproval: null, pendingQuestionDetails: null, pendingApprovalDetails: null, blockedBy: null, nextAction: '等待 Runtime 完成当前 Step。' },
+      stepExecutions: [{ id: 'execution-live', runId: 'run-live', phaseId: BUILT_IN_DEVELOPMENT_WORKFLOW.phases[0].id, stepId: step.id, attempt: 1, status: 'running' as const, input: null, skill: step.skill ?? null, error: null, output: null, startedAt: '2026-08-26T00:00:00.000Z', finishedAt: null }],
+      events: [], logs: [], phaseContexts: [], decisionRecords: [], artifacts: [], createdAt: '2026-08-26T00:00:00.000Z', updatedAt: '2026-08-26T00:00:00.000Z'
+    }
+    let emitUpdate: ((update: RuntimeItemProjectionUpdate) => void) | undefined
+    window.appShell.listProjects = vi.fn().mockResolvedValue([project])
+    window.appShell.listWorkflowRuns = vi.fn().mockResolvedValue([run])
+    window.appShell.getWorkflowRun = vi.fn().mockResolvedValue(run)
+    window.appShell.listRuntimeItems = vi.fn().mockResolvedValue([{
+      id: 'agent-1', runId: run.id, executionId: 'execution-live', type: 'agent_message', status: 'in_progress', text: 'Initial draft'
+    }])
+    window.appShell.subscribeRuntimeItemUpdates = vi.fn((listener) => {
+      emitUpdate = listener
+      return () => undefined
+    })
+
+    render(<App />)
+    await user.click(await screen.findByRole('button', { name: /live-demo/ }))
+    await user.click(await screen.findByRole('button', { name: /Observe live Runtime Items/ }))
+    await user.click(screen.getByRole('button', { name: new RegExp(step.name) }))
+
+    const agentCard = await screen.findByRole('article', { name: 'Agent 消息' })
+    expect(agentCard).toHaveTextContent('Initial draft')
+
+    act(() => emitUpdate?.({
+      runId: run.id, executionId: 'execution-live',
+      item: { id: 'agent-1', runId: run.id, executionId: 'execution-live', type: 'agent_message', status: 'in_progress', text: 'Draft answer' }
+    }))
+    expect(screen.getByRole('article', { name: 'Agent 消息' })).toBe(agentCard)
+    act(() => emitUpdate?.({
+      runId: run.id, executionId: 'execution-live',
+      item: { id: 'agent-1', runId: run.id, executionId: 'execution-live', type: 'agent_message', status: 'completed', text: 'Final answer' }
+    }))
+    expect(screen.getByRole('article', { name: 'Agent 消息' })).toBe(agentCard)
+    expect(agentCard).toHaveTextContent('Final answer')
+    expect(agentCard).not.toHaveTextContent('Draft answer')
+
+    act(() => emitUpdate?.({
+      runId: run.id, executionId: 'execution-live',
+      item: { id: 'command-1', runId: run.id, executionId: 'execution-live', type: 'command', status: 'in_progress', command: 'pnpm test', cwd: '/work/live-demo', output: 'partial output', exitCode: null, durationMs: null }
+    }))
+    const commandCard = screen.getByRole('article', { name: '命令执行：pnpm test' })
+    expect(commandCard).toHaveTextContent('partial output')
+    act(() => emitUpdate?.({
+      runId: run.id, executionId: 'execution-live',
+      item: { id: 'command-1', runId: run.id, executionId: 'execution-live', type: 'command', status: 'failed', command: 'pnpm test', cwd: '/work/live-demo', output: 'authoritative output', exitCode: 2, durationMs: 1250 }
+    }))
+    expect(screen.getByRole('article', { name: '命令执行：pnpm test' })).toBe(commandCard)
+    expect(commandCard).toHaveTextContent('authoritative output')
+    expect(commandCard).not.toHaveTextContent('partial output')
+    expect(commandCard).toHaveTextContent('退出码 2')
+    expect(commandCard).toHaveTextContent('耗时 1.25 秒')
   })
 
   it('renders an Approval Gate as an actionable Run Board card', async () => {

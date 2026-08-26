@@ -14,7 +14,9 @@ import {
   Send,
   Settings,
   ShieldAlert,
+  MessageSquareText,
   Square,
+  Terminal,
   ThumbsDown,
   ThumbsUp,
   Workflow
@@ -25,7 +27,7 @@ import type { DataTransferNotice, Project } from '../../shared/project'
 import type { InstalledSkillRecord, SkillInstallPreview, SkillSourceType } from '../../shared/skill-package'
 import { summarizeSkillPackage } from '../../shared/skill-package'
 import type { WorkflowView as WorkflowViewModel } from '../../shared/workflow'
-import type { WorkflowPreflightResult, WorkflowRun, WorkflowRunStatus } from '../../shared/workflow-run'
+import type { RuntimeItem, WorkflowPreflightResult, WorkflowRun, WorkflowRunStatus } from '../../shared/workflow-run'
 import { zhCN as copy } from './i18n/zh-CN'
 
 type View = 'projectOverview' | 'createProject' | 'resumeWork' | 'settings' | 'projectDetail' | 'workflow' | 'run'
@@ -276,6 +278,7 @@ function ProjectDetail({ project, runs, onBack, onOpenInIde, openError, importWa
 
 interface RunBoardProps {
   run: WorkflowRun
+  runtimeItems: RuntimeItem[]
   onBack: () => void
   onPause: () => void
   onResume: () => void
@@ -285,6 +288,37 @@ interface RunBoardProps {
   onApprove: () => void
   onReject: () => void
   error: string | null
+}
+
+function upsertRuntimeItems(current: RuntimeItem[], incoming: RuntimeItem[]): RuntimeItem[] {
+  const next = [...current]
+  for (const item of incoming) {
+    const index = next.findIndex((candidate) => candidate.executionId === item.executionId && candidate.id === item.id)
+    if (index >= 0) next[index] = item
+    else next.push(item)
+  }
+  return next
+}
+
+function RuntimeItemList({ items }: { items: RuntimeItem[] }): React.JSX.Element {
+  if (items.length === 0) return <p>{copy.run.noRuntimeItems}</p>
+  return <div className="runtime-item-list">
+    {items.map((item) => item.type === 'agent_message'
+      ? <article className="runtime-item" aria-label={copy.run.agentMessageItem} key={item.id}>
+          <header><span><MessageSquareText aria-hidden="true" /><strong>{copy.run.agentMessageItem}</strong></span><span className={`runtime-item-status is-${item.status}`}>{copy.run.runtimeItemStatus[item.status]}</span></header>
+          <pre>{item.text || copy.run.noOutput}</pre>
+        </article>
+      : <article className="runtime-item is-command" aria-label={copy.run.commandItem(item.command)} key={item.id}>
+          <header><span><Terminal aria-hidden="true" /><strong>{copy.run.commandItemTitle}</strong></span><span className={`runtime-item-status is-${item.status}`}>{copy.run.runtimeItemStatus[item.status]}</span></header>
+          <code>{item.command}</code>
+          {item.cwd ? <span className="runtime-item-cwd">{item.cwd}</span> : null}
+          <pre>{item.output || copy.run.noCommandOutput}</pre>
+          <footer>
+            {item.exitCode !== null ? <span>{copy.run.commandExitCode(item.exitCode)}</span> : null}
+            {item.durationMs !== null ? <span>{copy.run.commandDuration(item.durationMs)}</span> : null}
+          </footer>
+        </article>)}
+  </div>
 }
 
 interface RunActionButtonsProps {
@@ -308,7 +342,7 @@ function RunActionButtons({ className, canPause, canResume, canRetry, canCancel,
   </div>
 }
 
-function RunBoard({ run, onBack, onPause, onResume, onRetry, onCancel, onAnswer, onApprove, onReject, error }: RunBoardProps): React.JSX.Element {
+function RunBoard({ run, runtimeItems, onBack, onPause, onResume, onRetry, onCancel, onAnswer, onApprove, onReject, error }: RunBoardProps): React.JSX.Element {
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null)
   const [answer, setAnswer] = useState('')
   const latestExecutions = new Map<string, WorkflowRun['stepExecutions'][number]>()
@@ -318,6 +352,7 @@ function RunBoard({ run, onBack, onPause, onResume, onRetry, onCancel, onAnswer,
   const selectedPhaseContext = selectedExecution ? (run.phaseContexts ?? []).find((context) => context.phaseId === selectedExecution.phaseId) ?? null : null
   const selectedDecisions = selectedExecution ? (run.decisionRecords ?? []).filter((record) => record.executionId === selectedExecution.id) : []
   const selectedLogs = selectedExecution ? (run.logs ?? []).filter((log) => log.executionId === selectedExecution.id) : []
+  const selectedRuntimeItems = selectedExecution ? runtimeItems.filter((item) => item.executionId === selectedExecution.id) : []
   const selectedBlocker = selectedExecution && run.snapshot.blockedBy?.executionId === selectedExecution.id ? run.snapshot.blockedBy : null
   const isMergeConflict = selectedBlocker ? /merge conflict|冲突/i.test(selectedBlocker.reason) : false
   const selectedIsCurrent = selectedExecution?.id === run.snapshot.currentStepExecutionId
@@ -402,6 +437,7 @@ function RunBoard({ run, onBack, onPause, onResume, onRetry, onCancel, onAnswer,
               <h4>{copy.run.contextTitle}</h4><p>{selectedPhaseContext?.content ?? run.definition.phases.find((phase) => phase.id === selectedExecution.phaseId)?.goal ?? copy.run.noContext}</p>
               <h4>{copy.run.inputTitle}</h4><pre>{selectedExecution.input ? JSON.stringify(selectedExecution.input, null, 2) : copy.run.noInput}</pre>
               <h4>{copy.run.outputTitle}</h4><pre>{selectedExecution.output ? JSON.stringify(selectedExecution.output, null, 2) : copy.run.noOutput}</pre>
+              <h4>{copy.run.runtimeItemsTitle}</h4><RuntimeItemList items={selectedRuntimeItems} />
               <p className={selectedExecution.error ? 'run-detail-error' : 'run-detail-muted'}>{selectedExecution.error ?? copy.run.noError}</p>
             </div>
             <div>
@@ -720,9 +756,20 @@ export default function App(): React.JSX.Element {
   const [runs, setRuns] = useState<WorkflowRun[]>([])
   const [selectedRun, setSelectedRun] = useState<WorkflowRun | null>(null)
   const [runError, setRunError] = useState<string | null>(null)
+  const [runtimeItems, setRuntimeItems] = useState<RuntimeItem[]>([])
 
   useEffect(() => {
     document.title = copy.app.name
+  }, [])
+
+  useEffect(() => {
+    try {
+      return window.appShell.subscribeRuntimeItemUpdates((update) => {
+        setRuntimeItems((current) => upsertRuntimeItems(current, [update.item]))
+      })
+    } catch {
+      return undefined
+    }
   }, [])
 
   useEffect(() => {
@@ -765,6 +812,17 @@ export default function App(): React.JSX.Element {
     const timer = window.setInterval(() => { void refresh() }, 500)
     void refresh()
     return () => { disposed = true; window.clearInterval(timer) }
+  }, [view, selectedRun?.id])
+
+  useEffect(() => {
+    if (view !== 'run' || !selectedRun) return
+    let disposed = false
+    void Promise.all(selectedRun.stepExecutions.map((execution) => window.appShell.listRuntimeItems(execution.id)))
+      .then((snapshots) => {
+        if (!disposed) setRuntimeItems((current) => upsertRuntimeItems(current, snapshots.flat()))
+      })
+      .catch(() => undefined)
+    return () => { disposed = true }
   }, [view, selectedRun?.id])
 
   const importProject = async (): Promise<void> => {
@@ -905,7 +963,7 @@ export default function App(): React.JSX.Element {
         : view === 'workflow' && selectedProject
         ? <WorkflowView project={selectedProject} workflow={workflow} loading={workflowLoading} error={workflowError} idea={idea} preflight={preflight} onBack={() => setView('projectDetail')} onCopy={copyWorkflow} onReload={reloadWorkflow} onIdeaChange={(value) => { setIdea(value); setPreflight(null) }} onPreflight={runPreflight} onStart={startWorkflowRun} onEdit={editWorkflow} />
         : view === 'run' && selectedRun
-          ? <RunBoard run={selectedRun} onBack={() => setView('projectDetail')} onPause={() => { void updateRun(() => window.appShell.pauseWorkflowRun(selectedRun.id)) }} onResume={() => { void updateRun(() => window.appShell.resumeWorkflowRun(selectedRun.id)) }} onRetry={() => { void updateRun(() => window.appShell.retryWorkflowStep(selectedRun.id)) }} onCancel={() => { void updateRun(() => window.appShell.cancelWorkflowRun(selectedRun.id)) }} onAnswer={(value) => { void updateRun(() => window.appShell.answerWorkflowQuestion(selectedRun.id, value)) }} onApprove={() => { void updateRun(() => window.appShell.approveWorkflowApproval(selectedRun.id)) }} onReject={() => { void updateRun(() => window.appShell.rejectWorkflowApproval(selectedRun.id)) }} error={runError} />
+          ? <RunBoard run={selectedRun} runtimeItems={runtimeItems.filter((item) => item.runId === selectedRun.id)} onBack={() => setView('projectDetail')} onPause={() => { void updateRun(() => window.appShell.pauseWorkflowRun(selectedRun.id)) }} onResume={() => { void updateRun(() => window.appShell.resumeWorkflowRun(selectedRun.id)) }} onRetry={() => { void updateRun(() => window.appShell.retryWorkflowStep(selectedRun.id)) }} onCancel={() => { void updateRun(() => window.appShell.cancelWorkflowRun(selectedRun.id)) }} onAnswer={(value) => { void updateRun(() => window.appShell.answerWorkflowQuestion(selectedRun.id, value)) }} onApprove={() => { void updateRun(() => window.appShell.approveWorkflowApproval(selectedRun.id)) }} onReject={() => { void updateRun(() => window.appShell.rejectWorkflowApproval(selectedRun.id)) }} error={runError} />
         : view === 'projectDetail' && selectedProject
           ? <ProjectDetail project={selectedProject} runs={runs} onBack={() => setView('projectOverview')} onOpenInIde={openProjectInIde} openError={openError} importWarning={importWarning} transferNotice={transferNotice} onViewWorkflow={openWorkflow} onOpenRun={(run) => { setSelectedRun(run); setRunError(null); setView('run') }} />
           : <ProjectEntry mode={view === 'resumeWork' ? 'resumeWork' : 'createProject'} onBack={() => setView('projectOverview')} onImport={importProject} onClone={cloneGitHubProject} error={error} cloneBlocked={cloneBlocked} />

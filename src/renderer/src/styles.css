@@ -1000,6 +1000,90 @@ button:focus-visible {
   overflow-wrap: anywhere;
 }
 
+.runtime-item-list {
+  display: grid;
+  gap: 9px;
+}
+
+.runtime-item {
+  min-width: 0;
+  padding: 10px;
+  background: #ffffff;
+  border: 1px solid #d8ddd8;
+  border-left: 3px solid #4c7a63;
+  border-radius: 5px;
+}
+
+.runtime-item.is-command {
+  border-left-color: #80643e;
+}
+
+.runtime-item header,
+.runtime-item header > span,
+.runtime-item footer {
+  display: flex;
+  align-items: center;
+}
+
+.runtime-item header {
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.runtime-item header > span,
+.runtime-item footer {
+  gap: 6px;
+}
+
+.runtime-item header svg {
+  width: 14px;
+  height: 14px;
+  color: #4c6758;
+}
+
+.runtime-item header strong,
+.runtime-item code {
+  overflow-wrap: anywhere;
+}
+
+.runtime-item header strong {
+  color: #303731;
+  font-size: 11px;
+}
+
+.runtime-item-status {
+  flex: 0 0 auto;
+  color: #68726b;
+  font-size: 10px;
+}
+
+.runtime-item-status.is-completed { color: #276544; }
+.runtime-item-status.is-failed,
+.runtime-item-status.is-declined { color: #8c382f; }
+
+.runtime-item code,
+.runtime-item-cwd {
+  display: block;
+  margin-top: 8px;
+  font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.runtime-item code { color: #303731; }
+.runtime-item-cwd { color: #778178; }
+
+.runtime-item pre {
+  max-height: 260px;
+  margin-top: 8px;
+  overflow: auto;
+}
+
+.runtime-item footer {
+  min-height: 16px;
+  margin-top: 8px;
+  color: #68726b;
+  font-size: 10px;
+}
+
 .run-detail-events,
 .run-decision-actions {
   display: flex;

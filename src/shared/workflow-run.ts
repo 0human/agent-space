@@ -38,7 +38,41 @@ export interface RuntimeCommandItem extends RuntimeItemBase {
   durationMs: number | null
 }
 
-export type RuntimeItem = RuntimeAgentMessageItem | RuntimeCommandItem
+export interface RuntimeFileChange {
+  path: string
+  kind: 'add' | 'update' | 'delete'
+  additions: number
+  deletions: number
+}
+
+export interface RuntimeFileChangeItem extends RuntimeItemBase {
+  type: 'file_change'
+  changes: RuntimeFileChange[]
+  additions: number
+  deletions: number
+}
+
+export interface RuntimePlanItem extends RuntimeItemBase {
+  type: 'plan'
+  text: string
+  steps?: Array<{ step: string; status: string }>
+}
+
+export interface RuntimeToolItem extends RuntimeItemBase {
+  type: 'tool'
+  name: string
+  status: RuntimeItemStatus
+  durationMs: number | null
+  output: string | null
+}
+
+export interface RuntimeErrorItem extends RuntimeItemBase {
+  type: 'error'
+  status: 'failed'
+  error: string
+}
+
+export type RuntimeItem = RuntimeAgentMessageItem | RuntimeCommandItem | RuntimeFileChangeItem | RuntimePlanItem | RuntimeToolItem | RuntimeErrorItem
 
 export interface WorkflowEvent {
   id: number

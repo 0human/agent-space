@@ -1018,6 +1018,11 @@ button:focus-visible {
   border-left-color: #80643e;
 }
 
+.runtime-item.is-file-change { border-left-color: #4f6b88; }
+.runtime-item.is-plan { border-left-color: #74608e; }
+.runtime-item.is-tool { border-left-color: #587a72; }
+.runtime-item.is-error { border-left-color: #9a4a42; }
+
 .runtime-item header,
 .runtime-item header > span,
 .runtime-item footer {
@@ -1073,6 +1078,28 @@ button:focus-visible {
   max-height: 260px;
   margin-top: 8px;
   overflow: auto;
+}
+
+.runtime-item-files {
+  display: grid;
+  gap: 5px;
+  margin: 9px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.runtime-item-files li {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  color: #68726b;
+  font-size: 10px;
+}
+
+.runtime-item-files li code {
+  min-width: 0;
+  margin: 0;
+  color: #303731;
 }
 
 .runtime-item footer {

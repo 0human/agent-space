@@ -5,6 +5,7 @@ import {
   CheckCircle2,
   Copy,
   Download,
+  FileDiff,
   FolderClock,
   FolderKanban,
   Pause,
@@ -14,12 +15,14 @@ import {
   Send,
   Settings,
   ShieldAlert,
+  ListChecks,
   MessageSquareText,
   Square,
   Terminal,
   ThumbsDown,
   ThumbsUp,
-  Workflow
+  Workflow,
+  Wrench
 } from 'lucide-react'
 
 import type { RuntimeInfo } from '../../shared/app-shell'
@@ -308,7 +311,7 @@ function RuntimeItemList({ items }: { items: RuntimeItem[] }): React.JSX.Element
           <header><span><MessageSquareText aria-hidden="true" /><strong>{copy.run.agentMessageItem}</strong></span><span className={`runtime-item-status is-${item.status}`}>{copy.run.runtimeItemStatus[item.status]}</span></header>
           <pre>{item.text || copy.run.noOutput}</pre>
         </article>
-      : <article className="runtime-item is-command" aria-label={copy.run.commandItem(item.command)} key={item.id}>
+      : item.type === 'command' ? <article className="runtime-item is-command" aria-label={copy.run.commandItem(item.command)} key={item.id}>
           <header><span><Terminal aria-hidden="true" /><strong>{copy.run.commandItemTitle}</strong></span><span className={`runtime-item-status is-${item.status}`}>{copy.run.runtimeItemStatus[item.status]}</span></header>
           <code>{item.command}</code>
           <pre>{item.output || copy.run.noCommandOutput}</pre>
@@ -316,6 +319,27 @@ function RuntimeItemList({ items }: { items: RuntimeItem[] }): React.JSX.Element
             {item.exitCode !== null ? <span>{copy.run.commandExitCode(item.exitCode)}</span> : null}
             {item.durationMs !== null ? <span>{copy.run.commandDuration(item.durationMs)}</span> : null}
           </footer>
+        </article>
+      : item.type === 'file_change' ? <article className="runtime-item is-file-change" aria-label={copy.run.fileChangeItem} key={item.id}>
+          <header><span><FileDiff aria-hidden="true" /><strong>{copy.run.fileChangeItem}</strong></span><span className={`runtime-item-status is-${item.status}`}>{copy.run.runtimeItemStatus[item.status]}</span></header>
+          <ul className="runtime-item-files">{item.changes.map((change) => <li key={`${change.path}:${change.kind}`}><code>{change.path}</code><span>{copy.run.fileChangeCounts(change.additions, change.deletions)}</span></li>)}</ul>
+          <footer><span>{copy.run.diffSummary(item.changes.length, item.additions, item.deletions)}</span></footer>
+        </article>
+      : item.type === 'plan' ? <article className="runtime-item is-plan" aria-label={copy.run.planItem} key={item.id}>
+          <header><span><ListChecks aria-hidden="true" /><strong>{copy.run.planItem}</strong></span><span className={`runtime-item-status is-${item.status}`}>{copy.run.runtimeItemStatus[item.status]}</span></header>
+          {item.text ? <pre>{item.text}</pre> : null}
+          {item.steps && item.steps.length > 0 ? <ul className="runtime-item-files">{item.steps.map((step) => <li key={`${step.step}:${step.status}`}><span>{step.step}</span><span>{step.status}</span></li>)}</ul> : null}
+          {!item.text && (!item.steps || item.steps.length === 0) ? <pre>{copy.run.noOutput}</pre> : null}
+        </article>
+      : item.type === 'tool' ? <article className="runtime-item is-tool" aria-label={copy.run.toolItem(item.name)} key={item.id}>
+          <header><span><Wrench aria-hidden="true" /><strong>{copy.run.toolItemTitle}</strong></span><span className={`runtime-item-status is-${item.status}`}>{copy.run.runtimeItemStatus[item.status]}</span></header>
+          <code>{item.name}</code>
+          {item.output ? <pre>{item.output}</pre> : null}
+          {item.durationMs !== null ? <footer><span>{copy.run.commandDuration(item.durationMs)}</span></footer> : null}
+        </article>
+      : <article className="runtime-item is-error" aria-label={copy.run.errorItem} key={item.id}>
+          <header><span><ShieldAlert aria-hidden="true" /><strong>{copy.run.errorItem}</strong></span><span className="runtime-item-status is-failed">{copy.run.runtimeItemStatus.failed}</span></header>
+          <p className="run-detail-error">{item.error}</p>
         </article>)}
   </div>
 }

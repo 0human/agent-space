@@ -177,6 +177,14 @@ _Avoid_：Workflow engine、browser app
 Agent Runtime Adapter 向 Workflow 引擎返回的统一结构化事件，例如 text_delta、tool_call、question、approval_required、artifact_produced、status_changed 或 error。
 _Avoid_：Provider transcript、raw CLI output
 
+**Runtime Item**：
+Agent Runtime 在一次 Turn 内产生的、可增量更新并归属于某个 Step Execution 的可观察工作单元，例如 Agent 消息或命令执行。
+_Avoid_：Workflow Event、Artifact、provider transcript
+
+**Item Projection**：
+按 Step Execution 汇集 Runtime Item 当前状态的临时操作视图；它不是 Run Snapshot 或持久化执行事实。
+_Avoid_：Run Snapshot、durable transcript、Workflow log
+
 **Data Transfer Notice**：
 联网或向 External Destination 发送数据前展示的说明，包含目标服务、数据类型、权限和断网后的恢复方式。
 _Avoid_：Privacy policy、silent upload

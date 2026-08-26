@@ -1,6 +1,7 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 
 import { APP_SHELL_CHANNELS, type AppShellApi } from '../shared/app-shell'
+import type { RuntimeItem } from '../shared/workflow-run'
 
 const appShellApi: AppShellApi = Object.freeze({
   getRuntimeInfo: () => ipcRenderer.invoke(APP_SHELL_CHANNELS.getRuntimeInfo),
@@ -15,6 +16,12 @@ const appShellApi: AppShellApi = Object.freeze({
   startWorkflowRun: (projectId, idea) => ipcRenderer.invoke(APP_SHELL_CHANNELS.startWorkflowRun, projectId, idea),
   listWorkflowRuns: (projectId) => ipcRenderer.invoke(APP_SHELL_CHANNELS.listWorkflowRuns, projectId),
   getWorkflowRun: (runId) => ipcRenderer.invoke(APP_SHELL_CHANNELS.getWorkflowRun, runId),
+  listRuntimeItems: (executionId) => ipcRenderer.invoke(APP_SHELL_CHANNELS.listRuntimeItems, executionId),
+  subscribeRuntimeItemUpdates: (listener) => {
+    const ipcListener = (_event: IpcRendererEvent, item: RuntimeItem): void => listener(item)
+    ipcRenderer.on(APP_SHELL_CHANNELS.runtimeItemUpdated, ipcListener)
+    return () => ipcRenderer.removeListener(APP_SHELL_CHANNELS.runtimeItemUpdated, ipcListener)
+  },
   pauseWorkflowRun: (runId) => ipcRenderer.invoke(APP_SHELL_CHANNELS.pauseWorkflowRun, runId),
   resumeWorkflowRun: (runId) => ipcRenderer.invoke(APP_SHELL_CHANNELS.resumeWorkflowRun, runId),
   retryWorkflowStep: (runId) => ipcRenderer.invoke(APP_SHELL_CHANNELS.retryWorkflowStep, runId),

@@ -15,6 +15,8 @@ import { createSkillInstaller } from './skill-installer'
 import { createWorkflowService } from './workflow-service'
 import { createWorkflowEngine } from './workflow-engine'
 import { createCodexRuntimeAdapter } from './codex-runtime'
+import { createCodexItemProjection } from './codex-item-projection'
+import { publishRuntimeItemUpdate, registerRuntimeItemHandlers } from './runtime-item-ipc'
 import { createRunWorkspaceManager } from './run-workspace'
 import { createDefaultGitHubExecutor, createGitDeliveryManager } from './git-delivery'
 import { BUILT_IN_SKILL_MANIFESTS, type SkillManifest } from '../shared/workflow'
@@ -101,13 +103,21 @@ const refreshInstalledSkills = async (): Promise<void> => {
   installedSkillPaths.clear()
   for (const record of records) for (const manifest of record.manifest.skills) installedSkillPaths.set(`${manifest.name}@${manifest.version}`, record.installedPath)
 }
+const runtimeItemProjection = createCodexItemProjection({
+  publish: (update) => publishRuntimeItemUpdate(BrowserWindow.getAllWindows(), update)
+})
+registerRuntimeItemHandlers({
+  handle: (channel, listener) => ipcMain.handle(channel, listener),
+  projection: runtimeItemProjection
+})
 const workflowEngine = createWorkflowEngine({
   databasePath: join(app.getPath('userData'), 'workflow-runs.sqlite'),
   runtime: createCodexRuntimeAdapter({
     skillManifests: BUILT_IN_SKILL_MANIFESTS,
     getSkillManifests: () => availableSkillManifests,
     skillPackagePath: builtInSkillPackagePath(),
-    resolveSkillPackagePath: (manifest) => installedSkillPaths.get(`${manifest.name}@${manifest.version}`) ?? builtInSkillPackagePath()
+    resolveSkillPackagePath: (manifest) => installedSkillPaths.get(`${manifest.name}@${manifest.version}`) ?? builtInSkillPackagePath(),
+    itemProjection: runtimeItemProjection
   }),
   runWorkspaceManager: createRunWorkspaceManager({ execGit: createDefaultGitExecutor() }),
   gitDeliveryManager: createGitDeliveryManager({ execGit: createDefaultGitExecutor(), execGitHub: createDefaultGitHubExecutor() })

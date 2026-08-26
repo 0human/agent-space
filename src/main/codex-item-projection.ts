@@ -25,6 +25,13 @@ function record(value: unknown): Record<string, unknown> | null {
     : null
 }
 
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`
+  const object = record(value)
+  if (object) return `{${Object.keys(object).sort().map((key) => `${JSON.stringify(key)}:${stableJson(object[key])}`).join(',')}}`
+  return JSON.stringify(value)
+}
+
 function commandStatus(value: unknown): RuntimeItemStatus {
   if (value === 'completed' || value === 'failed' || value === 'declined') return value
   return 'in_progress'
@@ -59,7 +66,7 @@ function fileChanges(value: unknown): RuntimeFileChange[] {
     const kindValue = typeof change?.kind === 'string' ? change.kind : record(change?.kind)?.type
     if (!path || !['add', 'update', 'delete'].includes(String(kindValue))) return []
     const counts = lineCounts(diff)
-    const safePath = /(?:^|[\\/])(?:\.env(?:\.|$)|[^\\/]*(?:secret|credential|token|password)[^\\/]*)$/i.test(path) ? '<redacted path>' : path
+    const safePath = path.split(/[\\/]/).some((segment) => /^\.env(?:\.|$)/i.test(segment) || /(secret|credential|token|password)/i.test(segment)) ? '<redacted path>' : path
     return [{ path: safePath, kind: kindValue as RuntimeFileChange['kind'], ...counts }]
   })
 }
@@ -89,7 +96,7 @@ function planSteps(value: unknown): Array<{ step: string; status: string }> {
 
 export function createCodexItemProjection(dependencies: CodexItemProjectionDependencies = {}): CodexItemProjection {
   const itemsByExecution = new Map<string, Map<string, RuntimeItem>>()
-  const seenNotifications = new WeakSet<object>()
+  const seenNotifications = new Set<string>()
 
   const update = (scope: CodexItemProjectionScope, item: RuntimeItem): void => {
     let executionItems = itemsByExecution.get(scope.executionId)
@@ -112,8 +119,9 @@ export function createCodexItemProjection(dependencies: CodexItemProjectionDepen
   return {
     handle(notification, scope) {
       if (notification.params?.threadId !== scope.runtimeLocator.threadId || notification.params?.turnId !== scope.runtimeLocator.turnId) return
-      if (seenNotifications.has(notification)) return
-      seenNotifications.add(notification)
+      const notificationKey = `${scope.executionId}:${stableJson(notification)}`
+      if (seenNotifications.has(notificationKey)) return
+      seenNotifications.add(notificationKey)
 
       const metadata = {
         runId: scope.runId,

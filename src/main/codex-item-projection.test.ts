@@ -91,9 +91,10 @@ describe('Codex Item Projection', () => {
   it('projects safe file, plan, supported tool and error items while ignoring reasoning and unknown items', () => {
     const projection = createCodexItemProjection()
     projection.handle({ method: 'item/started', params: { threadId: 'thread-1', turnId: 'turn-1', item: { type: 'reasoning', id: 'reasoning-1', content: ['secret'] } } }, scope)
-    projection.handle({ method: 'item/started', params: { threadId: 'thread-1', turnId: 'turn-1', item: { type: 'fileChange', id: 'file-1', status: 'inProgress', changes: [{ path: 'src/a.ts', kind: { type: 'update' }, diff: '@@\n+one\n-two' }, { path: 'secret.env', kind: 'add', diff: '+TOKEN=abc' }] } } }, scope)
+    projection.handle({ method: 'item/started', params: { threadId: 'thread-1', turnId: 'turn-1', item: { type: 'fileChange', id: 'file-1', status: 'inProgress', changes: [{ path: 'src/a.ts', kind: { type: 'update' }, diff: '@@\n+one\n-two' }, { path: 'secrets/config.json', kind: 'add', diff: '+TOKEN=abc' }] } } }, scope)
     projection.handle({ method: 'item/completed', params: { threadId: 'thread-1', turnId: 'turn-1', item: { type: 'plan', id: 'plan-1', status: 'failed', text: 'Implement and verify', extra: 'do not expose' } } }, scope)
     projection.handle({ method: 'item/completed', params: { threadId: 'thread-1', turnId: 'turn-1', item: { type: 'mcpToolCall', id: 'tool-1', server: 'github', tool: 'list_issues', status: 'completed', arguments: { token: 'secret' }, durationMs: 42, result: { content: [{ text: '2 issues' }] } } } }, scope)
+    projection.handle({ method: 'item/started', params: { threadId: 'thread-1', turnId: 'turn-1', item: { type: 'futureItem', id: 'unknown-1', secret: 'do not expose' } } }, scope)
     projection.handle({ method: 'error', params: { threadId: 'thread-1', turnId: 'turn-1', error: { message: 'authorization=secret failed' }, rawJsonRpc: { secret: true } } }, scope)
 
     expect(projection.list(scope.executionId)).toEqual([
@@ -111,15 +112,16 @@ describe('Codex Item Projection', () => {
     const started = { method: 'item/started', params: { threadId: 'thread-1', turnId: 'turn-1', item: { type: 'agentMessage', id: 'item-1', text: '' } } } as const
     const delta = { method: 'item/agentMessage/delta', params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'item-1', delta: 'same' } } as const
     projection.handle(started, scope)
-    projection.handle(started, scope)
+    projection.handle({ ...started, params: { ...started.params, item: { ...started.params.item } } }, scope)
     projection.handle(delta, scope)
-    projection.handle(delta, scope)
+    projection.handle({ ...delta, params: { ...delta.params } }, scope)
     expect(projection.list(scope.executionId)[0]).toMatchObject({ text: 'same' })
     expect(publish).toHaveBeenCalledTimes(2)
 
-    const repeated = { method: 'item/agentMessage/delta', params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'item-1', delta: 'same' } } as const
-    projection.handle(repeated, scope)
-    projection.handle({ ...repeated, params: { ...repeated.params } }, scope)
-    expect(projection.list(scope.executionId)[0]).toMatchObject({ text: 'samesamesame' })
+    const completed = { method: 'item/completed', params: { threadId: 'thread-1', turnId: 'turn-1', item: { type: 'agentMessage', id: 'item-1', text: 'final' } } } as const
+    projection.handle(completed, scope)
+    projection.handle({ ...completed, params: { ...completed.params, item: { ...completed.params.item } } }, scope)
+    expect(projection.list(scope.executionId)[0]).toMatchObject({ status: 'completed', text: 'final' })
+    expect(publish).toHaveBeenCalledTimes(3)
   })
 })

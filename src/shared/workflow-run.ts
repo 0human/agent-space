@@ -5,6 +5,13 @@ import type { WorkflowDefinition, WorkflowSource, WorkflowView } from './workflo
 export type WorkflowRunStatus = 'running' | 'paused' | 'waiting' | 'blocked' | 'failed' | 'completed' | 'cancelled'
 export type StepExecutionStatus = 'pending' | 'running' | 'waiting' | 'blocked' | 'failed' | 'completed' | 'skipped' | 'cancelled'
 
+export interface RuntimeLocator {
+  runtimeProvider: string
+  threadId: string
+  turnId: string
+  runtimeVersion: string
+}
+
 export interface WorkflowEvent {
   id: number
   runId: string
@@ -56,6 +63,7 @@ export interface StepExecution {
   status: StepExecutionStatus
   input: Record<string, unknown> | null
   skill: { name: string; version: string } | null
+  runtimeLocator?: RuntimeLocator | null
   runtimeSessionId?: string | null
   error: string | null
   output: Record<string, unknown> | null
@@ -196,6 +204,7 @@ export interface RuntimeExecutionContext {
   decisionRecords: DecisionRecord[]
   permissionPolicy: PermissionPolicy
   events: WorkflowEvent[]
+  persistRuntimeLocator?(locator: RuntimeLocator): Promise<void>
 }
 
 export interface RuntimeArtifact {
@@ -223,6 +232,7 @@ export interface RuntimeEventMetadata {
   provider?: string
   source?: string
   permissionPolicy?: PermissionPolicy
+  runtimeLocator?: RuntimeLocator
 }
 
 export type WorkflowLogType = RuntimeEvent['type']

@@ -8,6 +8,7 @@ import type { Project } from '../shared/project'
 import type {
   RuntimeArtifact,
   RuntimeEvent,
+  RuntimeLocator,
   RunSnapshot,
   DecisionRecord,
   PhaseContext,
@@ -294,6 +295,7 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
         skill_name TEXT,
         skill_version TEXT,
         runtime_session_id TEXT,
+        runtime_locator_json TEXT,
         error TEXT,
         output_json TEXT,
         started_at TEXT,
@@ -308,6 +310,7 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
     if (!existingExecutionColumns.has('skill_name')) await run(db, 'ALTER TABLE step_executions ADD COLUMN skill_name TEXT')
     if (!existingExecutionColumns.has('skill_version')) await run(db, 'ALTER TABLE step_executions ADD COLUMN skill_version TEXT')
     if (!existingExecutionColumns.has('runtime_session_id')) await run(db, 'ALTER TABLE step_executions ADD COLUMN runtime_session_id TEXT')
+    if (!existingExecutionColumns.has('runtime_locator_json')) await run(db, 'ALTER TABLE step_executions ADD COLUMN runtime_locator_json TEXT')
     await run(db, `
       CREATE TABLE IF NOT EXISTS workflow_events (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -421,7 +424,7 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
     if (!snapshotRow) throw new Error(`Run Snapshot missing for ${id}`)
     const executions = await all<{
       id: string; run_id: string; phase_id: string; step_id: string; attempt: number; idempotency_key: string | null; status: StepExecutionStatus; input_json: string;
-      skill_name: string | null; skill_version: string | null; runtime_session_id: string | null;
+      skill_name: string | null; skill_version: string | null; runtime_session_id: string | null; runtime_locator_json: string | null;
       error: string | null; output_json: string | null; started_at: string | null; finished_at: string | null
     }>(db, 'SELECT * FROM step_executions WHERE run_id = ? ORDER BY rowid', [id])
     const events = await all<{ id: number; run_id: string; type: string; idempotency_key: string | null; data_json: string; created_at: string }>(db, 'SELECT * FROM workflow_events WHERE run_id = ? ORDER BY id', [id])
@@ -470,6 +473,7 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
         id: execution.id, runId: execution.run_id, phaseId: execution.phase_id, stepId: execution.step_id,
         attempt: execution.attempt, idempotencyKey: execution.idempotency_key ?? `${execution.run_id}:${execution.phase_id}:${execution.step_id}:attempt-${execution.attempt}`, status: execution.status, input: parseJson<Record<string, unknown>>(execution.input_json),
         skill: execution.skill_name && execution.skill_version ? { name: execution.skill_name, version: execution.skill_version } : null,
+        runtimeLocator: execution.runtime_locator_json ? parseJson(execution.runtime_locator_json) : null,
         runtimeSessionId: execution.runtime_session_id,
         error: execution.error,
         output: execution.output_json ? parseJson<Record<string, unknown>>(execution.output_json) : null,
@@ -506,6 +510,8 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
 
     const sessionId = events.find((event) => event.sessionId)?.sessionId
     if (sessionId) await run(db, 'UPDATE step_executions SET runtime_session_id = ? WHERE id = ?', [sessionId, executionId])
+    const runtimeLocator = events.find((event) => event.runtimeLocator)?.runtimeLocator
+    if (runtimeLocator) await run(db, 'UPDATE step_executions SET runtime_locator_json = ?, runtime_session_id = ? WHERE id = ?', [json(runtimeLocator), runtimeLocator.threadId, executionId])
 
     const content = events
       .filter((event): event is Extract<RuntimeEvent, { type: 'text_delta' }> => event.type === 'text_delta')
@@ -689,6 +695,12 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
           await appendEvent(runId, 'step_started', { executionId: nextExecutionId, phaseIndex: cursor.phaseIndex, stepIndex: cursor.stepIndex, attempt: 1 }, timestamp)
         }
         return (await load(runId))!
+      }))
+    },
+
+    async recordRuntimeLocator(runId: string, executionId: string, runtimeLocator: RuntimeLocator): Promise<void> {
+      await locked(async () => transaction(async () => {
+        await run(db, 'UPDATE step_executions SET runtime_locator_json = ?, runtime_session_id = ? WHERE id = ? AND run_id = ?', [json(runtimeLocator), runtimeLocator.threadId, executionId, runId])
       }))
     },
 

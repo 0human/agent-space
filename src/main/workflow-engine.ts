@@ -186,7 +186,10 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
         inputArtifacts: run.artifacts,
         decisionRecords: run.decisionRecords,
         permissionPolicy: run.project.permissionPolicy ?? { grantedPermissions: [...DEFAULT_PROJECT_PERMISSIONS] },
-        events: run.events
+        events: run.events,
+        persistRuntimeLocator: async (runtimeLocator) => {
+          await store.recordRuntimeLocator(runId, execution.id, runtimeLocator)
+        }
       }
       let events: RuntimeEvent[]
       let delivery: GitPullRequestResult | null = null

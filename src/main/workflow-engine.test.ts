@@ -107,7 +107,8 @@ describe('WorkflowEngine public API', () => {
     expect(run.events.map((event) => event.type)).toEqual(['started', 'step_started'])
 
     await vi.waitFor(() => expect(runtime.calls).toHaveLength(1))
-    runtime.finish([{ type: 'status_changed', status: 'completed' }, { type: 'artifact_produced', artifact: { type: 'document', name: 'domain-docs', location: '/work/demo/CONTEXT.md' } }])
+    const runtimeLocator = { runtimeProvider: 'codex', threadId: 'thread-40', turnId: 'turn-40', runtimeVersion: '0.144.3' }
+    runtime.finish([{ type: 'status_changed', status: 'completed', runtimeLocator }, { type: 'artifact_produced', artifact: { type: 'document', name: 'domain-docs', location: '/work/demo/CONTEXT.md' }, runtimeLocator }])
     const completed = await engine.waitForIdle(run.id)
     expect(completed.status).toBe('completed')
     expect(completed.snapshot.nextAction).toBe('Workflow Run 已完成。')
@@ -121,6 +122,7 @@ describe('WorkflowEngine public API', () => {
       id: run.id,
       status: 'completed',
       snapshot: { nextAction: 'Workflow Run 已完成。' },
+      stepExecutions: [expect.objectContaining({ runtimeLocator })],
       artifacts: [expect.objectContaining({ name: 'domain-docs' })]
     })
   })

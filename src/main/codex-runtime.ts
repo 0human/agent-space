@@ -4,14 +4,10 @@ import { access, chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promise
 import { tmpdir } from 'node:os'
 import { basename, delimiter, join, normalize, relative, resolve } from 'node:path'
 
-import type { AgentRuntimeAdapter, RuntimeArtifact, RuntimeEvent, RuntimeExecutionContext, RuntimePreflightContext, RuntimePreflightResult } from '../shared/workflow-run'
+import type { AgentRuntimeAdapter, RuntimeArtifact, RuntimeEvent, RuntimeExecutionContext, RuntimeLocator, RuntimePreflightContext, RuntimePreflightResult } from '../shared/workflow-run'
 import type { SkillManifest } from '../shared/workflow'
 import { isCommandAllowed, isNetworkHostAllowed, isPathAllowed } from './permission-policy'
-
-interface CodexJsonlResult {
-  sessionId?: string
-  events: RuntimeEvent[]
-}
+import { createStdioCodexAppServerTransport, type CodexAppServerTransport, type JsonRpcNotification } from './codex-app-server-transport'
 
 interface ProcessResult {
   stdout: string
@@ -32,6 +28,7 @@ interface CodexRuntimeDependencies {
   skillPackagePath?: string
   resolveSkillPackagePath?: (manifest: SkillManifest) => string | null
   readSkill?: (path: string, encoding: 'utf8') => Promise<string>
+  createTransport?: (options: ProcessOptions & { command: string }) => Promise<CodexAppServerTransport> | CodexAppServerTransport
 }
 
 const QUESTION_PREFIX = 'QUESTION:'
@@ -159,17 +156,50 @@ function skillDependencyReference(value: string): { name: string; version?: stri
   return separator > 0 ? { name: value.slice(0, separator), version: value.slice(separator + 1) } : { name: value }
 }
 
-function parseJsonLine(line: string): Record<string, unknown> | null {
-  try {
-    const value: unknown = JSON.parse(line)
-    return value && typeof value === 'object' ? value as Record<string, unknown> : null
-  } catch {
-    return null
-  }
-}
-
 function asString(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value : null
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null
+}
+
+function codexVersion(initializeResponse: unknown): string {
+  const userAgent = asString(asRecord(initializeResponse)?.userAgent) ?? 'unknown'
+  return userAgent.match(/\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?/)?.[0] ?? userAgent
+}
+
+function appServerItemEvent(notification: JsonRpcNotification): RuntimeEvent | null {
+  if (notification.method !== 'item/completed') return null
+  const item = asRecord(notification.params?.item)
+  if (!item) return null
+  const type = asString(item.type)
+  if (type === 'agentMessage') {
+    const text = asString(item.text)
+    return text ? parseAgentMessage(text) : null
+  }
+  if (type === 'commandExecution') {
+    const command = asString(item.command)
+    if (!command) return null
+    return {
+      type: 'tool_call',
+      name: command,
+      input: {
+        ...(typeof item.status === 'string' ? { status: item.status } : {}),
+        ...(typeof item.exitCode === 'number' ? { exitCode: item.exitCode } : {}),
+        ...(typeof item.durationMs === 'number' ? { durationMs: item.durationMs } : {})
+      }
+    }
+  }
+  return null
+}
+
+function completedTurn(notification: JsonRpcNotification, threadId: string, turnId: string): Record<string, unknown> | null {
+  if (notification.method !== 'turn/completed' || notification.params?.threadId !== threadId) return null
+  const turn = asRecord(notification.params.turn)
+  return turn?.id === turnId ? turn : null
 }
 
 function isDiscoveryArtifact(artifact: RuntimeArtifact): boolean {
@@ -211,43 +241,6 @@ function parseAgentMessage(text: string, sessionId?: string): RuntimeEvent {
     }
   }
   return { type: 'text_delta', text, ...(sessionId ? { sessionId } : {}) }
-}
-
-export function parseCodexJsonl(output: string): CodexJsonlResult {
-  let sessionId: string | undefined
-  const events: RuntimeEvent[] = []
-  let completed = false
-  for (const line of output.split(/\r?\n/).map((value) => value.trim()).filter(Boolean)) {
-    const record = parseJsonLine(line)
-    if (!record) continue
-    const type = asString(record.type)
-    if (type === 'thread.started') {
-      sessionId = asString(record.thread_id) ?? undefined
-      continue
-    }
-    if (type === 'turn.completed') {
-      completed = true
-      continue
-    }
-    if (type === 'error') {
-      events.push({ type: 'error', error: asString(record.message) ?? 'Codex Runtime 返回未知错误。', ...(sessionId ? { sessionId } : {}) })
-      continue
-    }
-    if (type !== 'item.completed' || !record.item || typeof record.item !== 'object') continue
-    const item = record.item as Record<string, unknown>
-    const itemType = asString(item.type)
-    if (itemType === 'agent_message') {
-      const text = asString(item.text)
-      if (text) events.push(parseAgentMessage(text, sessionId))
-    } else if (itemType === 'command_execution') {
-      const command = asString(item.command)
-      if (command) events.push({ type: 'tool_call', name: command, input: typeof item.status === 'string' ? { status: item.status } : {}, ...(sessionId ? { sessionId } : {}) })
-    }
-  }
-  if (completed && !events.some((event) => event.type === 'error' || event.type === 'question' || event.type === 'approval_required')) {
-    events.push({ type: 'status_changed', status: 'completed', ...(sessionId ? { sessionId } : {}) })
-  }
-  return { sessionId, events }
 }
 
 function defaultRunProcess(command: string, args: string[], options: ProcessOptions): Promise<ProcessResult> {
@@ -427,6 +420,7 @@ export function createCodexRuntimeAdapter(dependencies: CodexRuntimeDependencies
   const command = dependencies.command ?? 'codex'
   const getManifests = dependencies.getSkillManifests ?? (() => dependencies.skillManifests ?? [])
   const readSkill = dependencies.readSkill ?? ((path: string, encoding: 'utf8') => readFile(path, encoding))
+  const createTransport = dependencies.createTransport ?? ((options: ProcessOptions & { command: string }) => createStdioCodexAppServerTransport(options))
 
   async function loadSkillInstructions(manifest: SkillManifest, packagePath: string, visited = new Set<string>()): Promise<string> {
     const key = `${manifest.name}@${manifest.version}`
@@ -468,7 +462,7 @@ export function createCodexRuntimeAdapter(dependencies: CodexRuntimeDependencies
       ...(event.type === 'artifact_produced' && isPublishedWorkflowArtifact(event.artifact) ? { artifact: { ...event.artifact, runId: context.runId } } : {}),
       ...(event.type === 'error' ? { error: sanitizeSensitiveText(event.error) } : event.type === 'text_delta' ? { text: sanitizeSensitiveText(event.text) } : {}),
       provider: 'codex',
-      source: 'codex exec --json',
+      source: 'codex app-server',
       permissionPolicy: context.permissionPolicy
     }))
   }
@@ -509,31 +503,62 @@ export function createCodexRuntimeAdapter(dependencies: CodexRuntimeDependencies
           return [{ type: 'error', error: `无法读取固定 Skill：${error instanceof Error ? error.message : String(error)}` }]
         }
       }
-      const sessionId = context.execution.runtimeSessionId
-      const args = sessionId
-        ? ['exec', 'resume', sessionId, '--json']
-        : ['exec', '--json', '--cd', context.workspace.path, '--sandbox', context.permissionPolicy.grantedPermissions.includes('workspace.write') ? 'workspace-write' : 'read-only']
-      if (!sessionId) args.push('--skip-git-repo-check')
-      args.push(promptFor(context, skillInstructions))
-      let result: ProcessResult
+      const persistedThreadId = context.execution.runtimeLocator?.threadId ?? context.execution.runtimeSessionId
       let gitGuard: GitGuard | null = null
+      let transport: CodexAppServerTransport | null = null
+      let runtimeLocator: RuntimeLocator | null = null
       try {
         gitGuard = await createGitGuard(context.project.defaultBranch, context.permissionPolicy.grantedPermissions.includes('network.github'))
-        result = await runProcess(command, args, { cwd: context.workspace.path, env: gitGuard.env })
+        transport = await createTransport({ command, cwd: context.workspace.path, env: gitGuard.env })
+        const initialized = await transport.request('initialize', {
+          clientInfo: { name: 'agent_space', title: 'Agent Space', version: '0.1.0' },
+          capabilities: null
+        })
+        await transport.notify('initialized', {})
+        const sandbox = context.permissionPolicy.grantedPermissions.includes('workspace.write') ? 'workspace-write' : 'read-only'
+        const threadResponse = await transport.request(persistedThreadId ? 'thread/resume' : 'thread/start', persistedThreadId
+          ? { threadId: persistedThreadId, cwd: context.workspace.path, approvalPolicy: 'never', sandbox }
+          : { cwd: context.workspace.path, approvalPolicy: 'never', sandbox, serviceName: 'agent_space' })
+        const threadId = asString(asRecord(asRecord(threadResponse)?.thread)?.id)
+        if (!threadId) throw new Error('Codex App Server 未返回 Thread ID。')
+        const turnResponse = await transport.request('turn/start', {
+          threadId,
+          input: [{ type: 'text', text: promptFor(context, skillInstructions), text_elements: [] }]
+        })
+        const turnId = asString(asRecord(asRecord(turnResponse)?.turn)?.id)
+        if (!turnId) throw new Error('Codex App Server 未返回 Turn ID。')
+        const locator = { runtimeProvider: 'codex', threadId, turnId, runtimeVersion: codexVersion(initialized) }
+        runtimeLocator = locator
+        const events: RuntimeEvent[] = []
+        while (true) {
+          const notification = await transport.nextNotification()
+          if (!notification) throw new Error('Codex App Server 在 Turn 完成前关闭。')
+          const itemEvent = appServerItemEvent(notification)
+          if (itemEvent && notification.params?.threadId === threadId && notification.params?.turnId === turnId) events.push(itemEvent)
+          if (notification.method === 'error' && notification.params?.threadId === threadId && notification.params?.turnId === turnId && notification.params.willRetry !== true) {
+            const error = asRecord(notification.params.error)
+            events.push({ type: 'error', error: asString(error?.message) ?? 'Codex App Server 返回未知错误。' })
+          }
+          const turn = completedTurn(notification, threadId, turnId)
+          if (!turn) continue
+          const status = asString(turn.status)
+          if (status === 'completed') events.push({ type: 'status_changed', status: 'completed' })
+          else if (status === 'interrupted') events.push({ type: 'status_changed', status: 'blocked', reason: 'Codex Turn 已中断。' })
+          else {
+            const error = asRecord(turn.error)
+            if (!events.some((event) => event.type === 'error')) events.push({ type: 'error', error: asString(error?.message) ?? 'Codex Turn 执行失败。' })
+          }
+          return enrichEvents(events.map((event) => ({ ...event, runtimeLocator: locator })), context)
+        }
       } catch (error) {
         const message = sanitizeSensitiveText(error instanceof Error ? error.message : String(error))
-        return isNetworkFailure(message) ? [{ type: 'status_changed', status: 'blocked', source: 'codex exec --json' }] : [{ type: 'error', error: message }]
+        return isNetworkFailure(message)
+          ? [{ type: 'status_changed', status: 'blocked', provider: 'codex', source: 'codex app-server', ...(runtimeLocator ? { runtimeLocator } : {}) }]
+          : [{ type: 'error', error: message, provider: 'codex', source: 'codex app-server', ...(runtimeLocator ? { runtimeLocator } : {}) }]
       } finally {
+        await transport?.close().catch(() => undefined)
         await gitGuard?.cleanup().catch(() => undefined)
       }
-      const parsed = parseCodexJsonl(result.stdout)
-      if (result.code !== 0) {
-        const message = sanitizeSensitiveText(result.stderr.trim() || `Codex Runtime 退出码 ${String(result.code)}。`)
-        if (isNetworkFailure(message)) return [{ type: 'status_changed', status: 'blocked', provider: 'codex', source: 'codex exec --json', permissionPolicy: context.permissionPolicy }]
-        return [{ type: 'error', error: message, provider: 'codex', source: 'codex exec --json', permissionPolicy: context.permissionPolicy }]
-      }
-      const events = enrichEvents(parsed.events, context)
-      return events.length > 0 ? events : [{ type: 'error', error: 'Codex Runtime 未返回有效事件。', provider: 'codex', source: 'codex exec --json', permissionPolicy: context.permissionPolicy }]
     }
   }
 }

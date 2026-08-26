@@ -1,227 +1,138 @@
 // @vitest-environment node
 
-import { describe, expect, it } from 'vitest'
 import { spawnSync } from 'node:child_process'
+import { describe, expect, it } from 'vitest'
 
-import { createCodexRuntimeAdapter, parseCodexJsonl } from './codex-runtime'
+import type { RuntimeExecutionContext } from '../shared/workflow-run'
+import { createCodexRuntimeAdapter } from './codex-runtime'
 
-describe('Codex Runtime Adapter recorded contract', () => {
-  it('converts Codex JSONL lifecycle items into provider-neutral Runtime Events', () => {
-    const result = parseCodexJsonl([
-      '{"type":"thread.started","thread_id":"thread-42"}',
-      '{"type":"turn.started"}',
-      '{"type":"item.completed","item":{"type":"agent_message","text":"先确认目标用户。"}}',
-      '{"type":"item.completed","item":{"type":"command_execution","command":"cat CONTEXT.md","status":"completed"}}',
-      '{"type":"item.completed","item":{"type":"agent_message","text":"QUESTION: 首个目标用户是谁？"}}',
-      JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'ARTIFACT: ' + JSON.stringify({ type: 'domain-context', name: 'CONTEXT.md', location: '/work/demo/CONTEXT.md' }) } }),
-      '{"type":"turn.completed"}'
-    ].join('\n'))
+interface Notification {
+  method: string
+  params?: Record<string, unknown>
+}
 
-    expect(result).toEqual({
-      sessionId: 'thread-42',
-      events: [
-        { type: 'text_delta', text: '先确认目标用户。', sessionId: 'thread-42' },
-        { type: 'tool_call', name: 'cat CONTEXT.md', input: { status: 'completed' }, sessionId: 'thread-42' },
-        { type: 'question', question: '首个目标用户是谁？', sessionId: 'thread-42' },
-        { type: 'artifact_produced', artifact: { type: 'domain-context', name: 'CONTEXT.md', location: '/work/demo/CONTEXT.md' }, sessionId: 'thread-42' }
-      ]
-    })
+function context(overrides: Partial<RuntimeExecutionContext> = {}): RuntimeExecutionContext {
+  return {
+    runId: 'run-1',
+    project: { workspacePath: '/work/demo', defaultBranch: 'main' } as never,
+    workspace: { path: '/work/demo' },
+    idea: 'Execute the Workflow Step',
+    workflow: { phases: [] } as never,
+    phaseIndex: 0,
+    stepIndex: 0,
+    execution: { id: 'execution-1', runtimeLocator: null } as never,
+    skill: null,
+    phaseContext: null,
+    inputArtifacts: [],
+    decisionRecords: [],
+    permissionPolicy: { grantedPermissions: ['workspace.read', 'workspace.write'] },
+    events: [],
+    ...overrides
+  }
+}
+
+function appServerTransport(items: Array<Record<string, unknown>> = [], extraNotifications: Notification[] = []) {
+  const incoming: Notification[] = [
+    ...extraNotifications,
+    ...items.map((item) => ({ method: 'item/completed', params: { threadId: 'thread-1', turnId: 'turn-1', item } })),
+    { method: 'turn/completed', params: { threadId: 'thread-1', turn: { id: 'turn-1', status: 'completed', error: null } } }
+  ]
+  return {
+    async request(method: string) {
+      if (method === 'initialize') return { userAgent: 'codex-cli/0.144.3' }
+      if (method === 'thread/start' || method === 'thread/resume') return { thread: { id: 'thread-1' } }
+      if (method === 'turn/start') return { turn: { id: 'turn-1' } }
+      throw new Error(`Unexpected request: ${method}`)
+    },
+    async notify() {},
+    async nextNotification() { return incoming.shift() ?? null },
+    async close() {}
+  }
+}
+
+function appServerItems(items: Array<Record<string, unknown>>, dependencies: Record<string, unknown> = {}) {
+  return createCodexRuntimeAdapter({
+    ...dependencies,
+    createTransport: async () => appServerTransport(items)
   })
+}
 
-  it('keeps verification artifacts inside the Run workspace', async () => {
-    const adapter = createCodexRuntimeAdapter({
+describe('Codex Runtime Adapter policy contract', () => {
+  it('keeps verification Artifacts inside the Run Workspace', async () => {
+    const adapter = appServerItems([
+      { type: 'agentMessage', id: 'item-1', text: 'ARTIFACT: ' + JSON.stringify({ type: 'test-result', name: 'typecheck', location: '/work/run-1/.agent-space/typecheck.json' }) }
+    ], {
       skillManifests: [{ name: 'code-review', version: '1.0.0', entry: 'review.md', dependencies: [], supportedRuntimes: ['codex'], capabilities: ['review'], requiredPermissions: [] }],
       skillPackagePath: '/skills',
-      readSkill: async () => 'review',
-      runProcess: async () => ({ code: 0, stdout: [
-        JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'ARTIFACT: ' + JSON.stringify({ type: 'test-result', name: 'typecheck', location: '/work/run-1/.agent-space/typecheck.json' }) } }),
-        JSON.stringify({ type: 'turn.completed' })
-      ].join('\n'), stderr: '' })
+      readSkill: async () => 'review'
     })
 
-    await expect(adapter.execute({
-      runId: 'run-1', project: {} as never, workspace: { path: '/work/run-1' }, idea: 'test', workflow: { schemaVersion: 1, id: 'w', name: 'w', version: '1.0.0', phases: [{ id: 'p', name: 'p', goal: 'p', steps: [{ id: 'review', name: 'review', kind: 'skill', skill: { name: 'code-review', version: '1.0.0' } }] }] }, phaseIndex: 0, stepIndex: 0, execution: { id: 'e', runId: 'run-1', phaseId: 'p', stepId: 'review', attempt: 1, status: 'running', input: null, skill: { name: 'code-review', version: '1.0.0' }, error: null, output: null, startedAt: null, finishedAt: null }, skill: { name: 'code-review', version: '1.0.0' }, phaseContext: null, inputArtifacts: [], decisionRecords: [], permissionPolicy: { grantedPermissions: [] }, events: []
-    })).resolves.toEqual(expect.arrayContaining([expect.objectContaining({ type: 'artifact_produced', artifact: expect.objectContaining({ type: 'test-result' }) })]))
+    await expect(adapter.execute(context({
+      workspace: { path: '/work/run-1' },
+      skill: { name: 'code-review', version: '1.0.0' }
+    }))).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'artifact_produced', artifact: expect.objectContaining({ type: 'test-result' }) })
+    ]))
   })
 
-  it('preserves structured provider errors without exposing raw transcript parsing to the engine', () => {
-    const result = parseCodexJsonl('{"type":"error","message":"authentication required"}')
+  it('does not convert chat, logs, temporary files, or external files into Artifacts', async () => {
+    const temporaryArtifact = { type: 'log', name: 'session.log', location: '/work/demo/.tmp/session.log' }
+    const externalArtifact = { type: 'domain-context', name: 'CONTEXT.md', location: '/tmp/CONTEXT.md' }
+    const adapter = appServerItems([
+      { type: 'agentMessage', id: 'item-1', text: 'ordinary chat' },
+      { type: 'agentMessage', id: 'item-2', text: `ARTIFACT: ${JSON.stringify(temporaryArtifact)}` },
+      { type: 'agentMessage', id: 'item-3', text: `ARTIFACT: ${JSON.stringify(externalArtifact)}` }
+    ])
 
-    expect(result.events).toEqual([{ type: 'error', error: 'authentication required' }])
-  })
+    const events = await adapter.execute(context())
 
-  it('does not convert chat, logs, or temporary files into Artifacts', () => {
-    const temporaryArtifact = JSON.stringify({ type: 'log', name: 'session.log', location: '/work/demo/.tmp/session.log' })
-    const result = parseCodexJsonl([
-      '{"type":"thread.started","thread_id":"thread-43"}',
-      JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'ordinary chat' } }),
-      JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: `ARTIFACT: ${temporaryArtifact}` } }),
-      '{"type":"turn.completed"}'
-    ].join('\n'))
-
-    expect(result.events.filter((event) => event.type === 'artifact_produced')).toEqual([])
-    expect(result.events).toEqual(expect.arrayContaining([
-      { type: 'text_delta', text: 'ordinary chat', sessionId: 'thread-43' },
-      { type: 'text_delta', text: `ARTIFACT: ${temporaryArtifact}`, sessionId: 'thread-43' },
-      { type: 'status_changed', status: 'completed', sessionId: 'thread-43' }
+    expect(events.filter((event) => event.type === 'artifact_produced')).toEqual([])
+    expect(events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'text_delta', text: 'ordinary chat' }),
+      expect.objectContaining({ type: 'status_changed', status: 'completed' })
     ]))
   })
 
   it('accepts published GitHub specification and ticket Artifacts while rejecting other external URLs', async () => {
-    const adapter = createCodexRuntimeAdapter({
-      runProcess: async () => ({ code: 0, stderr: '', stdout: [
-        '{"type":"thread.started","thread_id":"thread-publish"}',
-        JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'ARTIFACT: ' + JSON.stringify({ type: 'specification', name: 'specification', status: 'ready', location: 'https://github.com/example/project/issues/42' }) } }),
-        JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'ARTIFACT: ' + JSON.stringify({ type: 'ticket', name: 'ticket', location: 'https://evil.example/issues/1' }) } }),
-        '{"type":"turn.completed"}'
-      ].join('\n') })
-    })
+    const adapter = appServerItems([
+      { type: 'agentMessage', id: 'item-1', text: 'ARTIFACT: ' + JSON.stringify({ type: 'specification', name: 'specification', status: 'ready', location: 'https://github.com/example/project/issues/42' }) },
+      { type: 'agentMessage', id: 'item-2', text: 'ARTIFACT: ' + JSON.stringify({ type: 'ticket', name: 'ticket', location: 'https://evil.example/issues/1' }) }
+    ])
 
-    await expect(adapter.execute({
-      runId: 'run-1', project: { workspacePath: '/work/demo' } as never, workspace: { path: '/work/demo' }, idea: 'Publish a spec',
-      workflow: { phases: [] } as never, phaseIndex: 0, stepIndex: 0,
-      execution: { id: 'execution-1', runtimeSessionId: null } as never, skill: { name: 'to-spec', version: '1.0.0' },
-      phaseContext: null, inputArtifacts: [], decisionRecords: [], permissionPolicy: { grantedPermissions: ['workspace.read', 'network.github'] }, events: []
-    })).resolves.toEqual(expect.arrayContaining([expect.objectContaining({ type: 'artifact_produced', artifact: expect.objectContaining({ location: 'https://github.com/example/project/issues/42' }) })]))
+    await expect(adapter.execute(context({ permissionPolicy: { grantedPermissions: ['workspace.read', 'network.github'] } }))).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'artifact_produced', artifact: expect.objectContaining({ runId: 'run-1', location: 'https://github.com/example/project/issues/42' }) })
+    ]))
   })
 
-  it('starts a new Codex session and resumes the persisted session in the same workspace', async () => {
-    const calls: Array<{ command: string; args: string[]; cwd: string }> = []
-    const adapter = createCodexRuntimeAdapter({
-      runProcess: async (command, args, options) => {
-        calls.push({ command, args, cwd: options.cwd })
-        return { code: 0, stderr: '', stdout: '{"type":"thread.started","thread_id":"thread-99"}\n{"type":"turn.completed"}' }
-      }
-    })
-    const context = {
-      runId: 'run-1',
-      project: { workspacePath: '/work/demo' } as never,
-      workspace: { path: '/work/demo' },
-      idea: 'Clarify the idea',
-      workflow: { phases: [{ id: 'discovery', name: 'Discovery', goal: 'Clarify', steps: [] }] } as never,
-      phaseIndex: 0,
-      stepIndex: 0,
-      execution: { id: 'execution-1', runtimeSessionId: null } as never,
-      skill: { name: 'grill-with-docs', version: '1.0.0' },
-      phaseContext: null,
-      inputArtifacts: [],
-      decisionRecords: [],
-      permissionPolicy: { grantedPermissions: ['workspace.read', 'workspace.write'] },
-      events: []
-    }
+  it.each([
+    ['git push --force origin feature/run-1', 'Permission Policy 阻止 force push。'],
+    ['git -C /work/demo push origin HEAD:refs/heads/main', 'Permission Policy 阻止直接更新默认分支。'],
+    ['/usr/bin/gh pr merge 42 --repo example/demo', 'Permission Policy 阻止绕过 Merge Gate 的 GitHub Pull Request 操作。'],
+    ['gh --repo example/demo pr merge 42', 'Permission Policy 阻止绕过 Merge Gate 的 GitHub Pull Request 操作。']
+  ])('blocks a forbidden command reported by the Runtime: %s', async (command, error) => {
+    const adapter = appServerItems([{ type: 'commandExecution', id: 'item-1', command, status: 'completed' }])
 
-    await adapter.execute(context)
-    await adapter.execute({ ...context, execution: { id: 'execution-2', runtimeSessionId: 'thread-99' } as never })
-
-    expect(calls[0]).toMatchObject({ command: 'codex', cwd: '/work/demo', args: expect.arrayContaining(['exec', '--json', '--cd', '/work/demo', '--sandbox', 'workspace-write']) })
-    expect(calls[1]).toMatchObject({ command: 'codex', cwd: '/work/demo', args: expect.arrayContaining(['exec', 'resume', 'thread-99', '--json']) })
-  })
-
-  it('rejects non-zero CLI exits and artifacts outside the isolated Workspace', async () => {
-    const adapter = createCodexRuntimeAdapter({
-      runProcess: async () => ({ code: 2, stdout: JSON.stringify({ type: 'thread.started', thread_id: 'thread-100' }) + '\n{"type":"turn.completed"}', stderr: 'permission denied' })
-    })
-    const events = await adapter.execute({
-      runId: 'run-1', project: { workspacePath: '/work/demo' } as never, workspace: { path: '/work/demo' }, idea: 'Idea',
-      workflow: { phases: [] } as never, phaseIndex: 0, stepIndex: 0,
-      execution: { id: 'execution-1', runtimeSessionId: null } as never, skill: null,
-      phaseContext: null, inputArtifacts: [], decisionRecords: [], permissionPolicy: { grantedPermissions: ['workspace.read'] }, events: []
-    })
-    expect(events).toEqual([expect.objectContaining({ type: 'error', error: 'permission denied' })])
-
-    const filtered = createCodexRuntimeAdapter({
-      runProcess: async () => ({ code: 0, stderr: '', stdout: [
-        '{"type":"thread.started","thread_id":"thread-101"}',
-        JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'ARTIFACT: ' + JSON.stringify({ type: 'domain-context', name: 'CONTEXT.md', location: '/tmp/CONTEXT.md' }) } }),
-        '{"type":"turn.completed"}'
-      ].join('\n') })
-    })
-    await expect(filtered.execute({
-      runId: 'run-1', project: { workspacePath: '/work/demo' } as never, workspace: { path: '/work/demo' }, idea: 'Idea',
-      workflow: { phases: [] } as never, phaseIndex: 0, stepIndex: 0,
-      execution: { id: 'execution-1', runtimeSessionId: null } as never, skill: null,
-      phaseContext: null, inputArtifacts: [], decisionRecords: [], permissionPolicy: { grantedPermissions: ['workspace.read'] }, events: []
-    })).resolves.toEqual([expect.objectContaining({ type: 'status_changed', status: 'completed' })])
-  })
-
-  it('blocks force pushes and direct default-branch updates reported by the Runtime', async () => {
-    const adapter = createCodexRuntimeAdapter({
-      runProcess: async () => ({ code: 0, stderr: '', stdout: [
-        JSON.stringify({ type: 'item.completed', item: { type: 'command_execution', command: 'git push --force origin feature/run-1', status: 'completed' } }),
-        '{"type":"turn.completed"}'
-      ].join('\n') })
-    })
-    await expect(adapter.execute({
-      runId: 'run-1', project: { workspacePath: '/work/demo', defaultBranch: 'main' } as never, workspace: { path: '/work/demo' }, idea: 'Protect Git delivery',
-      workflow: { phases: [] } as never, phaseIndex: 0, stepIndex: 0,
-      execution: { id: 'execution-1', runtimeSessionId: null } as never, skill: null,
-      phaseContext: null, inputArtifacts: [], decisionRecords: [], permissionPolicy: { grantedPermissions: ['workspace.read', 'workspace.write'] }, events: []
-    })).resolves.toEqual([expect.objectContaining({ type: 'error', error: 'Permission Policy 阻止 force push。' })])
-  })
-
-  it('blocks default-branch pushes reported with Git global options', async () => {
-    const adapter = createCodexRuntimeAdapter({
-      runProcess: async () => ({ code: 0, stderr: '', stdout: [
-        JSON.stringify({ type: 'item.completed', item: { type: 'command_execution', command: 'git -C /work/demo push origin HEAD:refs/heads/main', status: 'completed' } }),
-        '{"type":"turn.completed"}'
-      ].join('\n') })
-    })
-    await expect(adapter.execute({
-      runId: 'run-1', project: { workspacePath: '/work/demo', defaultBranch: 'main' } as never, workspace: { path: '/work/demo' }, idea: 'Protect Git delivery',
-      workflow: { phases: [] } as never, phaseIndex: 0, stepIndex: 0,
-      execution: { id: 'execution-1', runtimeSessionId: null } as never, skill: null,
-      phaseContext: null, inputArtifacts: [], decisionRecords: [], permissionPolicy: { grantedPermissions: ['workspace.read', 'workspace.write'] }, events: []
-    })).resolves.toEqual([expect.objectContaining({ type: 'error', error: 'Permission Policy 阻止直接更新默认分支。' })])
-  })
-
-  it('blocks GitHub Pull Request mutations reported through an absolute gh path', async () => {
-    const adapter = createCodexRuntimeAdapter({
-      runProcess: async () => ({ code: 0, stderr: '', stdout: [
-        JSON.stringify({ type: 'item.completed', item: { type: 'command_execution', command: '/usr/bin/gh pr merge 42 --repo example/demo', status: 'completed' } }),
-        '{"type":"turn.completed"}'
-      ].join('\n') })
-    })
-    await expect(adapter.execute({
-      runId: 'run-1', project: { workspacePath: '/work/demo', defaultBranch: 'main' } as never, workspace: { path: '/work/demo' }, idea: 'Protect Merge Gate',
-      workflow: { phases: [] } as never, phaseIndex: 0, stepIndex: 0,
-      execution: { id: 'execution-1', runtimeSessionId: null } as never, skill: null,
-      phaseContext: null, inputArtifacts: [], decisionRecords: [], permissionPolicy: { grantedPermissions: ['workspace.read', 'workspace.write'] }, events: []
-    })).resolves.toEqual([expect.objectContaining({ type: 'error', error: 'Permission Policy 阻止绕过 Merge Gate 的 GitHub Pull Request 操作。' })])
-  })
-
-  it('blocks GitHub Pull Request mutations with gh global options before the subcommand', async () => {
-    const adapter = createCodexRuntimeAdapter({
-      runProcess: async () => ({ code: 0, stderr: '', stdout: [
-        JSON.stringify({ type: 'item.completed', item: { type: 'command_execution', command: 'gh --repo example/demo pr merge 42', status: 'completed' } }),
-        '{"type":"turn.completed"}'
-      ].join('\n') })
-    })
-    await expect(adapter.execute({
-      runId: 'run-1', project: { workspacePath: '/work/demo', defaultBranch: 'main' } as never, workspace: { path: '/work/demo' }, idea: 'Protect Merge Gate',
-      workflow: { phases: [] } as never, phaseIndex: 0, stepIndex: 0,
-      execution: { id: 'execution-1', runtimeSessionId: null } as never, skill: null,
-      phaseContext: null, inputArtifacts: [], decisionRecords: [], permissionPolicy: { grantedPermissions: ['workspace.read', 'workspace.write'] }, events: []
-    })).resolves.toEqual([expect.objectContaining({ type: 'error', error: 'Permission Policy 阻止绕过 Merge Gate 的 GitHub Pull Request 操作。' })])
+    await expect(adapter.execute(context())).resolves.toEqual([
+      expect.objectContaining({ type: 'error', error })
+    ])
   })
 
   it.skipIf(process.platform === 'win32')('rejects forbidden Git pushes before invoking the real Git executable', async () => {
     const attempts: Array<{ status: number | null; stderr: string }> = []
     const adapter = createCodexRuntimeAdapter({
-      runProcess: async (_command, _args, options) => {
+      createTransport: async (options) => {
         for (const gitArgs of [['push', '--force', 'origin', 'feature/run-1'], ['push', 'origin', 'main']]) {
           const result = spawnSync('git', gitArgs, { cwd: process.cwd(), env: options.env, encoding: 'utf8' })
           attempts.push({ status: result.status, stderr: result.stderr })
         }
-        return { code: 0, stderr: '', stdout: '{"type":"turn.completed"}' }
+        return appServerTransport()
       }
     })
 
-    await adapter.execute({
-      runId: 'run-1', project: { workspacePath: process.cwd(), defaultBranch: 'main' } as never, workspace: { path: process.cwd() }, idea: 'Protect Git delivery',
-      workflow: { phases: [] } as never, phaseIndex: 0, stepIndex: 0,
-      execution: { id: 'execution-1', runtimeSessionId: null } as never, skill: null,
-      phaseContext: null, inputArtifacts: [], decisionRecords: [], permissionPolicy: { grantedPermissions: ['workspace.read', 'workspace.write'] }, events: []
-    })
+    await adapter.execute(context({
+      project: { workspacePath: process.cwd(), defaultBranch: 'main' } as never,
+      workspace: { path: process.cwd() }
+    }))
 
     expect(attempts).toHaveLength(2)
     expect(attempts.every((attempt) => attempt.status === 126 && attempt.stderr.includes('Permission Policy 阻止'))).toBe(true)
@@ -230,19 +141,17 @@ describe('Codex Runtime Adapter recorded contract', () => {
   it.skipIf(process.platform === 'win32')('rejects pushes when the Project default branch is unknown', async () => {
     const attempts: Array<{ status: number | null; stderr: string }> = []
     const adapter = createCodexRuntimeAdapter({
-      runProcess: async (_command, _args, options) => {
+      createTransport: async (options) => {
         const result = spawnSync('git', ['push', 'origin', 'feature/run-1'], { cwd: process.cwd(), env: options.env, encoding: 'utf8' })
         attempts.push({ status: result.status, stderr: result.stderr })
-        return { code: 0, stderr: '', stdout: '{"type":"turn.completed"}' }
+        return appServerTransport()
       }
     })
 
-    await adapter.execute({
-      runId: 'run-1', project: { workspacePath: process.cwd(), defaultBranch: null } as never, workspace: { path: process.cwd() }, idea: 'Protect Git delivery',
-      workflow: { phases: [] } as never, phaseIndex: 0, stepIndex: 0,
-      execution: { id: 'execution-1', runtimeSessionId: null } as never, skill: null,
-      phaseContext: null, inputArtifacts: [], decisionRecords: [], permissionPolicy: { grantedPermissions: ['workspace.read', 'workspace.write'] }, events: []
-    })
+    await adapter.execute(context({
+      project: { workspacePath: process.cwd(), defaultBranch: null } as never,
+      workspace: { path: process.cwd() }
+    }))
 
     expect(attempts).toEqual([expect.objectContaining({ status: 126 })])
     expect(attempts[0]?.stderr).toContain('默认分支未知')
@@ -278,37 +187,23 @@ describe('Codex Runtime Adapter recorded contract', () => {
       getSkillManifests: () => [manifest],
       resolveSkillPackagePath: () => '/installed/external@1.0.0',
       readSkill: async (path) => { readPaths.push(path); return '# external' },
-      runProcess: async () => ({ code: 0, stderr: '', stdout: '{"type":"turn.completed"}' })
+      createTransport: async () => appServerTransport()
     })
 
-    await adapter.execute({
-      runId: 'run-1', project: { workspacePath: '/work/demo' } as never, workspace: { path: '/work/demo' }, idea: 'Idea',
-      workflow: { phases: [] } as never, phaseIndex: 0, stepIndex: 0,
-      execution: { id: 'execution-1', runtimeSessionId: null } as never, skill: { name: 'external', version: '1.0.0' },
-      phaseContext: null, inputArtifacts: [], decisionRecords: [], permissionPolicy: { grantedPermissions: [] }, events: []
-    })
+    await adapter.execute(context({ skill: { name: 'external', version: '1.0.0' } }))
 
     expect(readPaths.map((path) => path.replaceAll('\\', '/'))).toEqual(['/installed/external@1.0.0/skills/external/SKILL.md'])
   })
 
-  it.skipIf(process.env.RUN_CODEX_CLI_TEST !== '1')('reaches the installed Codex CLI JSONL boundary when explicitly enabled', async () => {
+  it.skipIf(process.env.RUN_CODEX_CLI_TEST !== '1')('reaches the installed Codex App Server boundary when explicitly enabled', async () => {
     const adapter = createCodexRuntimeAdapter()
-    const events = await adapter.execute({
-      runId: 'cli-boundary',
-      project: { workspacePath: process.cwd() } as never,
+    const events = await adapter.execute(context({
+      runId: 'app-server-boundary',
+      project: { workspacePath: process.cwd(), defaultBranch: null } as never,
       workspace: { path: process.cwd() },
       idea: 'Return a short answer without using tools.',
-      workflow: { phases: [{ id: 'discovery', name: 'Discovery', goal: 'Clarify', steps: [] }] } as never,
-      phaseIndex: 0,
-      stepIndex: 0,
-      execution: { id: 'execution-1', runtimeSessionId: null } as never,
-      skill: { name: 'grill-with-docs', version: '1.0.0' },
-      phaseContext: null,
-      inputArtifacts: [],
-      decisionRecords: [],
-      permissionPolicy: { grantedPermissions: ['workspace.read'] },
-      events: []
-    })
+      permissionPolicy: { grantedPermissions: ['workspace.read'] }
+    }))
     expect(events.some((event) => event.type === 'status_changed' || event.type === 'error')).toBe(true)
   }, 30000)
 })

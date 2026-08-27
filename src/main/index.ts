@@ -104,7 +104,10 @@ const refreshInstalledSkills = async (): Promise<void> => {
   for (const record of records) for (const manifest of record.manifest.skills) installedSkillPaths.set(`${manifest.name}@${manifest.version}`, record.installedPath)
 }
 const runtimeItemProjection = createCodexItemProjection({
-  publish: (update) => publishRuntimeItemUpdate(BrowserWindow.getAllWindows(), update)
+  publish: (update) => publishRuntimeItemUpdate(BrowserWindow.getAllWindows(), update),
+  onIgnoredItem: (item) => {
+    console.warn('[agent-space] Ignored Runtime Item', item)
+  }
 })
 registerRuntimeItemHandlers({
   handle: (channel, listener) => ipcMain.handle(channel, listener),

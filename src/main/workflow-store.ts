@@ -23,6 +23,7 @@ import type {
 import type { WorkflowDefinition, WorkflowSource } from '../shared/workflow'
 import { zhCNMain } from '../shared/i18n/zh-CN'
 import type { RunWorkspaceManager } from './run-workspace'
+import { sanitizeSensitiveValue } from './sensitive-text'
 
 interface StoredRun extends WorkflowRun {
   project: Project
@@ -138,18 +139,7 @@ async function closeDatabase(db: SqliteCompat, path: string): Promise<void> {
 }
 
 function json(value: unknown): string {
-  const sanitize = (candidate: unknown): unknown => {
-    if (typeof candidate === 'string') {
-      return candidate
-        .replace(/(https?:\/\/)([^/@\s]+)@/gi, '$1<redacted>@')
-        .replace(/(bearer\s+)[A-Za-z0-9._~+\/-]+/gi, '$1<redacted>')
-        .replace(/((?:token|secret|password|authorization)[=:]\s*)[^\s,;]+/gi, '$1<redacted>')
-    }
-    if (Array.isArray(candidate)) return candidate.map(sanitize)
-    if (candidate && typeof candidate === 'object') return Object.fromEntries(Object.entries(candidate).map(([key, value]) => [key, sanitize(value)]))
-    return candidate
-  }
-  return JSON.stringify(sanitize(value))
+  return JSON.stringify(sanitizeSensitiveValue(value))
 }
 
 function parseJson<T>(value: string): T {

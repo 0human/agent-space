@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto'
 
 import { DEFAULT_PROJECT_PERMISSIONS, type DirtyWorkspaceSummary, type Project, type WorkspaceState } from '../shared/project'
 import { resolveGitHubRepository } from './git-delivery'
+import { sanitizeSensitiveText } from './sensitive-text'
 
 const execFile = promisify(execFileCallback)
 
@@ -62,7 +63,7 @@ function parseStatus(output: string): DirtyWorkspaceSummary {
 
 function sanitizeGitError(reason: unknown): Error {
   const message = reason instanceof Error ? reason.message : String(reason)
-  return new Error(message.replace(/(https?:\/\/)([^/@\s]+)@/gi, '$1<redacted>@'))
+  return new Error(sanitizeSensitiveText(message))
 }
 
 export async function inspectWorkspace(

@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process'
 import { describe, expect, it } from 'vitest'
 
 import type { RuntimeExecutionContext } from '../shared/workflow-run'
-import { createCodexRuntimeAdapter } from './codex-runtime'
+import { createCodexRuntimeAdapter, sanitizeSensitiveText } from './codex-runtime'
 
 interface Notification {
   method: string
@@ -58,6 +58,31 @@ function appServerItems(items: Array<Record<string, unknown>>, dependencies: Rec
 }
 
 describe('Codex Runtime Adapter policy contract', () => {
+  it('redacts JSON-style credentials and sensitive environment assignments', () => {
+    const value = '{"token":"json-secret","clientSecret":"client-secret","OPENAI_API_KEY":"openai-secret","HOME":"/private/home"}'
+
+    expect(sanitizeSensitiveText(value)).not.toContain('json-secret')
+    expect(sanitizeSensitiveText(value)).not.toContain('client-secret')
+    expect(sanitizeSensitiveText(value)).not.toContain('openai-secret')
+    expect(sanitizeSensitiveText(value)).not.toContain('/private/home')
+  })
+
+  it('applies the shared redaction rules to Runtime Event text and tool names', async () => {
+    const adapter = appServerItems([
+      { type: 'agentMessage', id: 'item-message', text: 'TOKEN=message-secret' },
+      { type: 'commandExecution', id: 'item-command', command: 'echo API_KEY=command-secret', status: 'completed' }
+    ])
+
+    const events = await adapter.execute(context())
+
+    expect(events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'text_delta', text: 'TOKEN=<redacted>' }),
+      expect.objectContaining({ type: 'tool_call', name: 'echo API_KEY=<redacted>' })
+    ]))
+    expect(JSON.stringify(events)).not.toContain('message-secret')
+    expect(JSON.stringify(events)).not.toContain('command-secret')
+  })
+
   it('keeps verification Artifacts inside the Run Workspace', async () => {
     const adapter = appServerItems([
       { type: 'agentMessage', id: 'item-1', text: 'ARTIFACT: ' + JSON.stringify({ type: 'test-result', name: 'typecheck', location: '/work/run-1/.agent-space/typecheck.json' }) }

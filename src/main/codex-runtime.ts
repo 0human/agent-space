@@ -4,11 +4,14 @@ import { access, chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promise
 import { tmpdir } from 'node:os'
 import { basename, delimiter, join, normalize, relative, resolve } from 'node:path'
 
-import type { AgentRuntimeAdapter, RuntimeArtifact, RuntimeEvent, RuntimeExecutionContext, RuntimeLocator, RuntimePreflightContext, RuntimePreflightResult } from '../shared/workflow-run'
+import type { AgentRuntimeAdapter, RuntimeArtifact, RuntimeEvent, RuntimeEventMetadata, RuntimeExecutionContext, RuntimeLocator, RuntimePreflightContext, RuntimePreflightResult } from '../shared/workflow-run'
 import type { SkillManifest } from '../shared/workflow'
 import { isCommandAllowed, isNetworkHostAllowed, isPathAllowed } from './permission-policy'
 import { createStdioCodexAppServerTransport, type CodexAppServerTransport, type JsonRpcNotification } from './codex-app-server-transport'
 import type { CodexItemProjection } from './codex-item-projection'
+import { sanitizePermissionPolicy, sanitizeSensitivePath, sanitizeSensitiveText, sanitizeSensitiveValue } from './sensitive-text'
+
+export { sanitizeSensitiveText } from './sensitive-text'
 
 interface ProcessResult {
   stdout: string
@@ -142,13 +145,6 @@ if (child.error) {
 process.exit(child.status === null ? 1 : child.status)
 `
 
-export function sanitizeSensitiveText(value: string): string {
-  return value
-    .replace(/(https?:\/\/)([^/@\s]+)@/gi, '$1<redacted>@')
-    .replace(/(bearer\s+)[A-Za-z0-9._~+\/-]+/gi, '$1<redacted>')
-    .replace(/((?:token|secret|password|authorization)[=:]\s*)[^\s,;]+/gi, '$1<redacted>')
-}
-
 function isNetworkFailure(value: string): boolean {
   return /(?:network|offline|enotfound|eai_again|timeout|timed out|connection reset|connection refused|could not resolve)/i.test(value)
 }
@@ -243,6 +239,60 @@ function parseAgentMessage(text: string, sessionId?: string): RuntimeEvent {
     }
   }
   return { type: 'text_delta', text, ...(sessionId ? { sessionId } : {}) }
+}
+
+function sanitizeRuntimeMetadata(event: RuntimeEvent): RuntimeEventMetadata {
+  const metadata: RuntimeEventMetadata = {}
+  if (typeof event.idempotencyKey === 'string') metadata.idempotencyKey = sanitizeSensitiveText(event.idempotencyKey)
+  if (typeof event.sessionId === 'string') metadata.sessionId = sanitizeSensitiveText(event.sessionId)
+  if (typeof event.provider === 'string') metadata.provider = sanitizeSensitiveText(event.provider)
+  if (typeof event.source === 'string') metadata.source = sanitizeSensitiveText(event.source)
+  if (event.permissionPolicy) metadata.permissionPolicy = sanitizePermissionPolicy(event.permissionPolicy)
+  if (event.runtimeLocator) {
+    metadata.runtimeLocator = {
+      runtimeProvider: sanitizeSensitiveText(event.runtimeLocator.runtimeProvider),
+      threadId: sanitizeSensitiveText(event.runtimeLocator.threadId),
+      turnId: sanitizeSensitiveText(event.runtimeLocator.turnId),
+      runtimeVersion: sanitizeSensitiveText(event.runtimeLocator.runtimeVersion)
+    }
+  }
+  return metadata
+}
+
+function sanitizeRuntimeEvent(event: RuntimeEvent): RuntimeEvent {
+  const metadata = sanitizeRuntimeMetadata(event)
+  switch (event.type) {
+    case 'text_delta':
+      return { type: 'text_delta', ...metadata, text: sanitizeSensitiveText(event.text) }
+    case 'tool_call':
+      return { type: 'tool_call', ...metadata, name: sanitizeSensitiveText(event.name), input: sanitizeSensitiveValue(event.input, 'input') as Record<string, unknown> }
+    case 'question':
+      return { type: 'question', ...metadata, question: sanitizeSensitiveText(event.question) }
+    case 'approval_required':
+      return { type: 'approval_required', ...metadata, approval: sanitizeSensitiveText(event.approval) }
+    case 'status_changed':
+      return { type: 'status_changed', ...metadata, status: event.status, ...(typeof event.reason === 'string' ? { reason: sanitizeSensitiveText(event.reason) } : {}) }
+    case 'error':
+      return { type: 'error', ...metadata, error: sanitizeSensitiveText(event.error) }
+    case 'artifact_produced': {
+      const artifact = event.artifact
+      return {
+        type: 'artifact_produced',
+        ...metadata,
+        artifact: {
+          type: sanitizeSensitiveText(artifact.type),
+          name: sanitizeSensitiveText(artifact.name),
+          ...(typeof artifact.runId === 'string' ? { runId: sanitizeSensitiveText(artifact.runId) } : {}),
+          ...(typeof artifact.location === 'string' ? { location: sanitizeSensitivePath(sanitizeSensitiveText(artifact.location)) } : artifact.location === null ? { location: null } : {}),
+          ...(typeof artifact.versionHash === 'string' ? { versionHash: sanitizeSensitiveText(artifact.versionHash) } : artifact.versionHash === null ? { versionHash: null } : {}),
+          ...(typeof artifact.status === 'string' ? { status: sanitizeSensitiveText(artifact.status) } : {}),
+          ...(typeof artifact.idempotencyKey === 'string' ? { idempotencyKey: sanitizeSensitiveText(artifact.idempotencyKey) } : artifact.idempotencyKey === null ? { idempotencyKey: null } : {})
+        }
+      }
+    }
+    default:
+      return event
+  }
 }
 
 function defaultRunProcess(command: string, args: string[], options: ProcessOptions): Promise<ProcessResult> {
@@ -445,6 +495,7 @@ export function createCodexRuntimeAdapter(dependencies: CodexRuntimeDependencies
 
   function enrichEvents(events: RuntimeEvent[], context: RuntimeExecutionContext): RuntimeEvent[] {
     const networkGithub = context.permissionPolicy.grantedPermissions.includes('network.github')
+    const permissionPolicy = sanitizePermissionPolicy(context.permissionPolicy)
     let forbidden: Extract<RuntimeEvent, { type: 'tool_call' }> | null = null
     let reason: string | null = null
     for (const event of events) {
@@ -458,16 +509,19 @@ export function createCodexRuntimeAdapter(dependencies: CodexRuntimeDependencies
     }
     if (forbidden) {
       const runtimeLocator = events.find((event) => event.runtimeLocator)?.runtimeLocator
-      return [{ type: 'error', error: reason ?? 'Permission Policy 阻止 Git 操作。', provider: 'codex', source: 'permission-policy', permissionPolicy: context.permissionPolicy, ...(runtimeLocator ? { runtimeLocator } : {}) }]
+      return [{ type: 'error', error: reason ?? 'Permission Policy 阻止 Git 操作。', provider: 'codex', source: 'permission-policy', permissionPolicy, ...(runtimeLocator ? { runtimeLocator } : {}) }]
     }
-    return events.filter((event) => event.type !== 'artifact_produced' || isArtifactInsideWorkspace(event.artifact, context.workspace.path)).map((event) => ({
-      ...event,
-      ...(event.type === 'artifact_produced' && isPublishedWorkflowArtifact(event.artifact) ? { artifact: { ...event.artifact, runId: context.runId } } : {}),
-      ...(event.type === 'error' ? { error: sanitizeSensitiveText(event.error) } : event.type === 'text_delta' ? { text: sanitizeSensitiveText(event.text) } : {}),
-      provider: 'codex',
-      source: 'codex app-server',
-      permissionPolicy: context.permissionPolicy
-    }))
+    return events.filter((event) => event.type !== 'artifact_produced' || isArtifactInsideWorkspace(event.artifact, context.workspace.path)).map((event) => {
+      const sanitized = sanitizeRuntimeEvent(event)
+      const publishedArtifact = event.type === 'artifact_produced' && isPublishedWorkflowArtifact(event.artifact)
+      return {
+        ...sanitized,
+        ...(publishedArtifact && sanitized.type === 'artifact_produced' ? { artifact: { ...sanitized.artifact, runId: context.runId } } : {}),
+        provider: 'codex',
+        source: 'codex app-server',
+        permissionPolicy
+      }
+    })
   }
 
   return {
@@ -479,31 +533,32 @@ export function createCodexRuntimeAdapter(dependencies: CodexRuntimeDependencies
         if (version.code === 0) checks.push('Codex CLI 可用。')
         else errors.push('Codex CLI 不可用。')
       } catch (error) {
-        errors.push(`Codex CLI 不可用：${error instanceof Error ? error.message : String(error)}`)
+        errors.push(`Codex CLI 不可用：${sanitizeSensitiveText(error instanceof Error ? error.message : String(error))}`)
       }
       try {
         const login = await runProcess(command, ['login', 'status'], { cwd: context.workspace.path })
         if (login.code === 0) checks.push('Codex 凭据可用。')
         else errors.push('Codex 凭据不可用。')
       } catch (error) {
-        errors.push(`Codex 凭据不可用：${error instanceof Error ? error.message : String(error)}`)
+        errors.push(`Codex 凭据不可用：${sanitizeSensitiveText(error instanceof Error ? error.message : String(error))}`)
       }
       const manifest = context.skill ? getManifests().find((candidate) => candidate.name === context.skill?.name && candidate.version === context.skill?.version) : null
-      if (!manifest) errors.push(`固定 Skill ${context.skill?.name ?? 'unknown'}@${context.skill?.version ?? 'unknown'} 不可用。`)
-      else checks.push(`固定 Skill ${manifest.name}@${manifest.version} 可用。`)
-      checks.push(`Data Transfer Notice：External Destination: Codex Agent Runtime；发送 Idea、Phase Context、Artifact、Decision Record；权限：${context.permissionPolicy.grantedPermissions.join(', ') || 'none'}；断网后从持久化 Step Execution 恢复。`)
+      if (!manifest) errors.push(sanitizeSensitiveText(`固定 Skill ${context.skill?.name ?? 'unknown'}@${context.skill?.version ?? 'unknown'} 不可用。`))
+      else checks.push(sanitizeSensitiveText(`固定 Skill ${manifest.name}@${manifest.version} 可用。`))
+      const permissions = context.permissionPolicy.grantedPermissions.map(sanitizeSensitiveText).join(', ') || 'none'
+      checks.push(sanitizeSensitiveText(`Data Transfer Notice：External Destination: Codex Agent Runtime；发送 Idea、Phase Context、Artifact、Decision Record；权限：${permissions}；断网后从持久化 Step Execution 恢复。`))
       return { checks, errors }
     },
     async execute(context): Promise<RuntimeEvent[]> {
       const skillManifest = getManifests().find((manifest) => manifest.name === context.skill?.name && manifest.version === context.skill?.version)
-      if ((dependencies.skillManifests || dependencies.getSkillManifests) && !skillManifest) return [{ type: 'error', error: `固定 Skill ${context.skill?.name ?? 'unknown'}@${context.skill?.version ?? 'unknown'} 不可用。` }]
+      if ((dependencies.skillManifests || dependencies.getSkillManifests) && !skillManifest) return [{ type: 'error', error: sanitizeSensitiveText(`固定 Skill ${context.skill?.name ?? 'unknown'}@${context.skill?.version ?? 'unknown'} 不可用。`) }]
       let skillInstructions = '(Skill instructions unavailable)'
       const packagePath = skillManifest ? (dependencies.resolveSkillPackagePath?.(skillManifest) ?? dependencies.skillPackagePath) : null
       if (skillManifest && packagePath) {
         try {
           skillInstructions = await loadSkillInstructions(skillManifest, packagePath)
         } catch (error) {
-          return [{ type: 'error', error: `无法读取固定 Skill：${error instanceof Error ? error.message : String(error)}` }]
+          return [{ type: 'error', error: sanitizeSensitiveText(`无法读取固定 Skill：${error instanceof Error ? error.message : String(error)}`) }]
         }
       }
       const persistedThreadId = context.execution.runtimeLocator?.threadId ?? context.execution.runtimeSessionId
@@ -568,8 +623,8 @@ export function createCodexRuntimeAdapter(dependencies: CodexRuntimeDependencies
       } catch (error) {
         const message = sanitizeSensitiveText(error instanceof Error ? error.message : String(error))
         return isNetworkFailure(message)
-          ? [{ type: 'status_changed', status: 'blocked', reason: message, provider: 'codex', source: 'codex app-server', permissionPolicy: context.permissionPolicy, ...(runtimeLocator ? { runtimeLocator } : {}) }]
-          : [{ type: 'error', error: message, provider: 'codex', source: 'codex app-server', permissionPolicy: context.permissionPolicy, ...(runtimeLocator ? { runtimeLocator } : {}) }]
+          ? [{ type: 'status_changed', status: 'blocked', reason: message, provider: 'codex', source: 'codex app-server', permissionPolicy: sanitizePermissionPolicy(context.permissionPolicy), ...(runtimeLocator ? { runtimeLocator } : {}) }]
+          : [{ type: 'error', error: message, provider: 'codex', source: 'codex app-server', permissionPolicy: sanitizePermissionPolicy(context.permissionPolicy), ...(runtimeLocator ? { runtimeLocator } : {}) }]
       } finally {
         await transport?.close().catch(() => undefined)
         await gitGuard?.cleanup().catch(() => undefined)

@@ -95,7 +95,7 @@ describe('Codex Item Projection', () => {
     projection.handle({ method: 'item/completed', params: { threadId: 'thread-1', turnId: 'turn-1', item: { type: 'plan', id: 'plan-1', status: 'failed', text: 'Implement and verify', extra: 'do not expose' } } }, scope)
     projection.handle({ method: 'item/completed', params: { threadId: 'thread-1', turnId: 'turn-1', item: { type: 'mcpToolCall', id: 'tool-1', server: 'github', tool: 'list_issues', status: 'completed', arguments: { token: 'secret' }, durationMs: 42, result: { content: [{ text: '2 issues' }] } } } }, scope)
     projection.handle({ method: 'item/started', params: { threadId: 'thread-1', turnId: 'turn-1', item: { type: 'futureItem', id: 'unknown-1', secret: 'do not expose' } } }, scope)
-    projection.handle({ method: 'error', params: { threadId: 'thread-1', turnId: 'turn-1', error: { message: 'authorization=secret failed' }, rawJsonRpc: { secret: true } } }, scope)
+    projection.handle({ method: 'error', params: { threadId: 'thread-1', turnId: 'turn-1', code: 'authorization=code-secret', error: { message: 'authorization=secret failed' }, rawJsonRpc: { secret: true } } }, scope)
 
     expect(projection.list(scope.executionId)).toEqual([
       expect.objectContaining({ type: 'file_change', changes: [{ path: 'src/a.ts', kind: 'update', additions: 1, deletions: 1 }, { path: '<redacted path>', kind: 'add', additions: 1, deletions: 0 }], additions: 2, deletions: 1 }),
@@ -123,5 +123,71 @@ describe('Codex Item Projection', () => {
     projection.handle({ ...completed, params: { ...completed.params, item: { ...completed.params.item } } }, scope)
     expect(projection.list(scope.executionId)[0]).toMatchObject({ status: 'completed', text: 'final' })
     expect(publish).toHaveBeenCalledTimes(3)
+  })
+
+  it('does not let a late delta or duplicate start regress a completed Item', () => {
+    const projection = createCodexItemProjection()
+    projection.handle({ method: 'item/started', params: { threadId: 'thread-1', turnId: 'turn-1', item: { type: 'agentMessage', id: 'terminal-1', text: '' } } }, scope)
+    projection.handle({ method: 'item/completed', params: { threadId: 'thread-1', turnId: 'turn-1', item: { type: 'agentMessage', id: 'terminal-1', text: 'final' } } }, scope)
+    projection.handle({ method: 'item/agentMessage/delta', params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'terminal-1', delta: ' leaked-after-completion' } }, scope)
+    projection.handle({ method: 'item/started', params: { threadId: 'thread-1', turnId: 'turn-1', item: { type: 'agentMessage', id: 'terminal-1', text: 'stale-start' } } }, scope)
+
+    expect(projection.list(scope.executionId)).toEqual([expect.objectContaining({ id: 'terminal-1', status: 'completed', text: 'final' })])
+  })
+
+  it('redacts sensitive values that are split across incremental notifications', () => {
+    const projection = createCodexItemProjection()
+    projection.handle({ method: 'item/started', params: { threadId: 'thread-1', turnId: 'turn-1', item: { type: 'agentMessage', id: 'split-1', text: '' } } }, scope)
+    projection.handle({ method: 'item/agentMessage/delta', params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'split-1', delta: 'OPENAI_API_' } }, scope)
+    projection.handle({ method: 'item/agentMessage/delta', params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'split-1', delta: 'KEY=split-secret' } }, scope)
+
+    expect(projection.list(scope.executionId)).toEqual([expect.objectContaining({
+      id: 'split-1',
+      text: 'OPENAI_API_KEY=<redacted>'
+    })])
+    expect(JSON.stringify(projection.list(scope.executionId))).not.toContain('split-secret')
+  })
+
+  it('reports ignored Item types without retaining their unreviewed fields', () => {
+    const onIgnoredItem = vi.fn()
+    const projection = createCodexItemProjection({ onIgnoredItem })
+    projection.handle({
+      method: 'item/started',
+      params: {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        item: { type: 'futureItem', id: 'unknown-1', secret: 'do not expose' }
+      }
+    }, scope)
+
+    expect(projection.list(scope.executionId)).toEqual([])
+    expect(projection.listIgnoredItems(scope.executionId)).toEqual([{
+      runId: 'run-1',
+      executionId: 'execution-1',
+      method: 'item/started',
+      itemId: 'unknown-1',
+      itemType: 'futureItem',
+      reason: 'unsupported_item_type'
+    }])
+    expect(onIgnoredItem).toHaveBeenCalledWith(expect.objectContaining({
+      itemId: 'unknown-1',
+      itemType: 'futureItem',
+      method: 'item/started'
+    }))
+    expect(JSON.stringify(onIgnoredItem.mock.calls)).not.toContain('do not expose')
+  })
+
+  it('reports malformed recognized Items without exposing their fields', () => {
+    const onIgnoredItem = vi.fn()
+    const projection = createCodexItemProjection({ onIgnoredItem })
+    projection.handle({ method: 'item/completed', params: { threadId: 'thread-1', turnId: 'turn-1', item: { type: 'commandExecution', id: 'malformed-1', secret: 'command-secret' } } }, scope)
+    projection.handle({ method: 'item/started', params: { threadId: 'thread-1', turnId: 'turn-1', item: { id: 'malformed-2', secret: 'missing-type-secret' } } }, scope)
+
+    expect(projection.list(scope.executionId)).toEqual([])
+    expect(projection.listIgnoredItems(scope.executionId)).toEqual([
+      expect.objectContaining({ itemId: 'malformed-1', itemType: 'commandExecution', reason: 'malformed_item' }),
+      expect.objectContaining({ itemId: 'malformed-2', itemType: null, reason: 'malformed_item' })
+    ])
+    expect(JSON.stringify(onIgnoredItem.mock.calls)).not.toMatch(/command-secret|missing-type-secret/)
   })
 })

@@ -3,7 +3,6 @@ import { XIcon } from 'lucide-react'
 import { Dialog as DialogPrimitive } from 'radix-ui'
 
 import { cn } from '@renderer/lib/utils'
-import { Button } from '@renderer/components/ui/button'
 
 function Dialog({
   ...props
@@ -49,11 +48,11 @@ function DialogContent({
   className,
   children,
   showCloseButton = true,
-  closeLabel = 'Close',
+  closeLabel,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
   showCloseButton?: boolean
-  closeLabel?: string
+  closeLabel: string
 }) {
   return (
     <DialogPortal data-slot="dialog-portal">
@@ -93,12 +92,9 @@ function DialogHeader({ className, ...props }: React.ComponentProps<'div'>) {
 
 function DialogFooter({
   className,
-  showCloseButton = false,
   children,
   ...props
-}: React.ComponentProps<'div'> & {
-  showCloseButton?: boolean
-}) {
+}: React.ComponentProps<'div'>) {
   return (
     <div
       data-slot="dialog-footer"
@@ -109,11 +105,6 @@ function DialogFooter({
       {...props}
     >
       {children}
-      {showCloseButton && (
-        <DialogPrimitive.Close asChild>
-          <Button variant="outline">Close</Button>
-        </DialogPrimitive.Close>
-      )}
     </div>
   )
 }

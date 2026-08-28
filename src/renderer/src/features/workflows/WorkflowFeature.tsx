@@ -354,25 +354,33 @@ export function WorkflowFeature({
                     <div className="mt-3 grid gap-1 text-xs text-muted-foreground">
                       {step.skill ? (
                         <span>
-                          <b className="mr-2 text-foreground">Skill</b>
+                          <b className="mr-2 text-foreground">
+                            {copy.workflow.stepSkill}
+                          </b>
                           {step.skill.name}@{step.skill.version}
                         </span>
                       ) : null}
                       {step.artifacts?.length ? (
                         <span>
-                          <b className="mr-2 text-foreground">Artifact</b>
+                          <b className="mr-2 text-foreground">
+                            {copy.workflow.stepArtifact}
+                          </b>
                           {step.artifacts.join(', ')}
                         </span>
                       ) : null}
                       {step.condition ? (
                         <span>
-                          <b className="mr-2 text-foreground">Condition</b>
+                          <b className="mr-2 text-foreground">
+                            {copy.workflow.stepCondition}
+                          </b>
                           {step.condition}
                         </span>
                       ) : null}
                       {step.approvalGate ? (
                         <span>
-                          <b className="mr-2 text-foreground">Approval Gate</b>
+                          <b className="mr-2 text-foreground">
+                            {copy.workflow.stepApprovalGate}
+                          </b>
                           {step.approvalGate}
                         </span>
                       ) : null}
@@ -405,7 +413,7 @@ export function WorkflowFeature({
                 <CardContent>
                   <dl className="grid gap-2 text-sm">
                     <Definition
-                      label="Runtime"
+                      label={copy.workflow.runtime}
                       value={manifest.supportedRuntimes.join(', ')}
                     />
                     <Definition

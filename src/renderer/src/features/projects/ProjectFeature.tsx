@@ -59,14 +59,6 @@ export function ProjectFeature({
 
   useEffect(() => {
     if (!selectedProject) return
-    void api
-      .listWorkflowRuns(selectedProject.id)
-      .then(setRuns)
-      .catch(() => setRuns([]))
-  }, [api, selectedProject?.id])
-
-  useEffect(() => {
-    if (!selectedProject) return
     let disposed = false
     const refresh = async (): Promise<void> => {
       try {
@@ -86,19 +78,27 @@ export function ProjectFeature({
     }
   }, [api, selectedProject?.id])
 
+  const openImportedProject = (
+    project: Project,
+    warning: string | null,
+    notice: DataTransferNotice | null,
+  ): void => {
+    setProjects((current) => [
+      project,
+      ...current.filter((candidate) => candidate.id !== project.id),
+    ])
+    setImportWarning(warning)
+    setTransferNotice(notice)
+    setCloneBlocked(null)
+    onNavigate({ name: 'projectDetail', project })
+  }
+
   const importProject = async (): Promise<void> => {
     setError(null)
     try {
       const result = await api.importProject()
       if (!result) return
-      setProjects((current) => [
-        result.project,
-        ...current.filter((project) => project.id !== result.project.id),
-      ])
-      setImportWarning(result.warning)
-      setTransferNotice(null)
-      setCloneBlocked(null)
-      onNavigate({ name: 'projectDetail', project: result.project })
+      openImportedProject(result.project, result.warning, null)
     } catch {
       setError(copy.projectEntry.importError)
     }
@@ -114,14 +114,7 @@ export function ProjectFeature({
         setTransferNotice(result.transferNotice)
         return
       }
-      setProjects((current) => [
-        result.project,
-        ...current.filter((project) => project.id !== result.project.id),
-      ])
-      setImportWarning(result.warning)
-      setTransferNotice(result.transferNotice)
-      setCloneBlocked(null)
-      onNavigate({ name: 'projectDetail', project: result.project })
+      openImportedProject(result.project, result.warning, result.transferNotice)
     } catch {
       setError(copy.projectEntry.importError)
     }

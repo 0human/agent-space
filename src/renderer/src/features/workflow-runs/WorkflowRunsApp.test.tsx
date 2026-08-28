@@ -232,6 +232,7 @@ describe('Workflow Run through the App seam', () => {
       },
     }
     let emitUpdate: ((item: RuntimeItem) => void) | undefined
+    const unsubscribe = vi.fn()
     window.appShell.listProjects = vi.fn().mockResolvedValue([project])
     window.appShell.listWorkflowRuns = vi.fn().mockResolvedValue([run])
     window.appShell.getWorkflowRun = vi.fn().mockResolvedValue(run)
@@ -246,7 +247,7 @@ describe('Workflow Run through the App seam', () => {
     ])
     window.appShell.subscribeRuntimeItemUpdates = vi.fn((listener) => {
       emitUpdate = listener
-      return () => undefined
+      return unsubscribe
     })
 
     render(<App />)
@@ -321,6 +322,23 @@ describe('Workflow Run through the App seam', () => {
     expect(commandCard).not.toHaveTextContent('partial output')
     expect(commandCard).toHaveTextContent('退出码 2')
     expect(commandCard).toHaveTextContent('耗时 1.25 秒')
+
+    act(() =>
+      emitUpdate?.({
+        id: 'other-execution-item',
+        ...itemMetadata,
+        executionId: 'execution-other',
+        type: 'agent_message',
+        status: 'completed',
+        text: '其他 Step Execution 的输出',
+      }),
+    )
+    expect(
+      screen.queryByText('其他 Step Execution 的输出'),
+    ).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: '返回 Project 详情' }))
+    expect(unsubscribe).toHaveBeenCalledOnce()
   })
 
   it('renders an Approval Gate as an actionable Run Board card', async () => {

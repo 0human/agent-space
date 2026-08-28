@@ -44,7 +44,7 @@ export default function App(): React.JSX.Element {
         <AppSidebar page={page} onNavigate={setPage} />
         <SidebarInset className="min-w-0 bg-background">
           <div className="sticky top-0 z-20 flex h-12 items-center border-b bg-background/95 px-4 backdrop-blur md:hidden">
-            <SidebarTrigger aria-label={zhCN.app.sidebarToggle} />
+            <SidebarTrigger label={zhCN.app.sidebarToggle} />
             <span className="ml-2 text-sm font-semibold">{zhCN.app.name}</span>
           </div>
           {content}

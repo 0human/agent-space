@@ -19,6 +19,7 @@ export const skillPackageCopy = {
     installSuccess: (name: string, version: string) =>
       `${name}@${version} 已安装。`,
     source: '来源',
+    skills: 'Skills',
     dependencies: '依赖',
     runtimes: '兼容 Runtime',
     permissions: '权限',

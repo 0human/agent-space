@@ -99,10 +99,7 @@ export function AppSidebar({
           </span>
         </div>
       </SidebarFooter>
-      <SidebarRail
-        aria-label={zhCN.app.sidebarToggle}
-        title={zhCN.app.sidebarToggle}
-      />
+      <SidebarRail label={zhCN.app.sidebarToggle} />
     </Sidebar>
   )
 }

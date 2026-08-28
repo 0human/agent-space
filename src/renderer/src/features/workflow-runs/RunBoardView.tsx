@@ -40,7 +40,7 @@ import { ScrollArea, ScrollBar } from '@renderer/components/ui/scroll-area'
 import { Textarea } from '@renderer/components/ui/textarea'
 import { zhCN as copy } from '@renderer/i18n/zh-CN'
 
-import { createRunBoardModel } from './run-board-model'
+import { createRunBoardModel, type DeliveryProjection } from './run-board-model'
 import { RuntimeItemList } from './RuntimeItemList'
 
 interface RunBoardViewProps {
@@ -146,7 +146,7 @@ export function RunBoardView(props: RunBoardViewProps): React.JSX.Element {
             <AlertDescription>{error}</AlertDescription>
           </Alert>
         ) : null}
-        <DeliveryCard run={run} />
+        <DeliveryCard delivery={model.delivery} />
         <ScrollArea
           className="mt-7 w-full whitespace-nowrap rounded-xl border"
           aria-label={copy.run.runBoardLabel}
@@ -618,7 +618,12 @@ function RunActionButtons({
   )
 }
 
-function DeliveryCard({ run }: { run: WorkflowRun }): React.JSX.Element {
+function DeliveryCard({
+  delivery,
+}: {
+  delivery: DeliveryProjection
+}): React.JSX.Element {
+  const { pullRequest } = delivery
   return (
     <Card className="mt-7" aria-labelledby="run-delivery-title">
       <CardHeader>
@@ -630,59 +635,55 @@ function DeliveryCard({ run }: { run: WorkflowRun }): React.JSX.Element {
         <dl className="grid gap-3 sm:grid-cols-2">
           <Metadata
             label={copy.run.baseCommit}
-            value={run.baseCommit ?? copy.projectDetail.noCommit}
+            value={delivery.baseCommit ?? copy.projectDetail.noCommit}
           />
           <Metadata
             label={copy.run.branch}
-            value={run.branch ?? copy.projectDetail.detached}
+            value={delivery.branch ?? copy.projectDetail.detached}
           />
-          {run.pullRequest ? (
+          {pullRequest ? (
             <>
               <Metadata
                 label={copy.run.pullRequest}
-                value={run.pullRequest.url || copy.run.noLocation}
+                value={pullRequest.url || copy.run.noLocation}
               />
               <Metadata
                 label={copy.run.checks}
                 value={
-                  run.pullRequest.checks.length > 0
-                    ? run.pullRequest.checks
-                        .map(
-                          (check) =>
-                            `${check.name}: ${check.conclusion ?? check.status}`,
-                        )
+                  pullRequest.checks.length > 0
+                    ? pullRequest.checks
+                        .map((check) => `${check.name}: ${check.result}`)
                         .join(', ')
                     : copy.run.noChecks
                 }
               />
               <Metadata
                 label={copy.run.reviews}
-                value={`${run.pullRequest.reviews.filter((review) => review.state.toUpperCase() === 'APPROVED').length} / ${run.pullRequest.reviews.length}`}
+                value={`${pullRequest.approvedReviews} / ${pullRequest.totalReviews}`}
               />
               <Metadata
                 label={copy.run.mergeability}
-                value={run.pullRequest.mergeable}
+                value={pullRequest.mergeable}
               />
             </>
           ) : null}
         </dl>
-        {run.pullRequest ? (
+        {pullRequest ? (
           <p
-            className={`mt-4 text-sm ${run.pullRequest.gate.canMerge ? 'text-primary' : 'text-destructive'}`}
+            className={`mt-4 text-sm ${pullRequest.canMerge ? 'text-primary' : 'text-destructive'}`}
           >
-            {run.pullRequest.gate.canMerge
+            {pullRequest.canMerge
               ? copy.run.mergeGateReady
-              : `${copy.run.mergeGateBlocked} ${run.pullRequest.gate.reason ?? ''}`}
+              : `${copy.run.mergeGateBlocked} ${pullRequest.blockedReason ?? ''}`}
           </p>
         ) : (
           <p className="mt-4 text-sm text-muted-foreground">
-            {run.artifacts.some((artifact) => artifact.type === 'commit') &&
-            !run.remote
+            {delivery.isLocalOnly
               ? copy.run.localDelivery
               : copy.run.remoteDelivery}
           </p>
         )}
-        {run.pullRequest ? (
+        {pullRequest ? (
           <p className="mt-2 text-xs text-muted-foreground">
             {copy.run.deliveryTransferNotice}
           </p>

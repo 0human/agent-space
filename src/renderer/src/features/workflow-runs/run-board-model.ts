@@ -12,6 +12,21 @@ export interface StepCardProjection {
   canApprove: boolean
 }
 
+export interface DeliveryProjection {
+  baseCommit: string | null
+  branch: string | null
+  isLocalOnly: boolean
+  pullRequest: {
+    url: string
+    checks: Array<{ name: string; result: string }>
+    approvedReviews: number
+    totalReviews: number
+    mergeable: string
+    canMerge: boolean
+    blockedReason: string | null
+  } | null
+}
+
 export interface RunBoardModel {
   selectedStep: WorkflowStep | null
   selectedExecution: StepExecution | null
@@ -26,6 +41,7 @@ export interface RunBoardModel {
   canResume: boolean
   canRetry: boolean
   canCancel: boolean
+  delivery: DeliveryProjection
   projectStep: (
     step: WorkflowStep,
     phaseIndex: number,
@@ -74,6 +90,7 @@ export function createRunBoardModel(
       run.snapshot.pendingQuestionDetails ||
         run.snapshot.pendingApprovalDetails,
     )
+  const pullRequest = run.pullRequest
 
   return {
     selectedStep,
@@ -100,6 +117,29 @@ export function createRunBoardModel(
     canCancel: ['running', 'paused', 'waiting', 'blocked', 'failed'].includes(
       run.status,
     ),
+    delivery: {
+      baseCommit: run.baseCommit,
+      branch: run.branch,
+      isLocalOnly:
+        run.artifacts.some((artifact) => artifact.type === 'commit') &&
+        !run.remote,
+      pullRequest: pullRequest
+        ? {
+            url: pullRequest.url,
+            checks: pullRequest.checks.map((check) => ({
+              name: check.name,
+              result: check.conclusion ?? check.status,
+            })),
+            approvedReviews: pullRequest.reviews.filter(
+              (review) => review.state.toUpperCase() === 'APPROVED',
+            ).length,
+            totalReviews: pullRequest.reviews.length,
+            mergeable: pullRequest.mergeable,
+            canMerge: pullRequest.gate.canMerge,
+            blockedReason: pullRequest.gate.reason,
+          }
+        : null,
+    },
     projectStep: (step, phaseIndex, stepIndex) => {
       const execution = latestExecutions.get(step.id) ?? null
       const isApprovalPending = Boolean(

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Download, ShieldAlert } from 'lucide-react'
 import { toast } from 'sonner'
 
@@ -45,6 +45,7 @@ export function SkillPackageManager(): React.JSX.Element {
   const [installed, setInstalled] = useState<InstalledSkillRecord[]>([])
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
+  const previewButtonRef = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
     void api
@@ -148,6 +149,7 @@ export function SkillPackageManager(): React.JSX.Element {
             placeholder={copy.skillPackages.sourcePlaceholder}
           />
           <Button
+            ref={previewButtonRef}
             className="w-fit"
             variant="outline"
             type="button"
@@ -202,7 +204,13 @@ export function SkillPackageManager(): React.JSX.Element {
         }}
       >
         {preview ? (
-          <DialogContent closeLabel={copy.skillPackages.dialogClose}>
+          <DialogContent
+            closeLabel={copy.skillPackages.dialogClose}
+            onCloseAutoFocus={(event) => {
+              event.preventDefault()
+              previewButtonRef.current?.focus()
+            }}
+          >
             <DialogHeader>
               <DialogTitle>{copy.skillPackages.previewLabel}</DialogTitle>
               <DialogDescription>
@@ -252,7 +260,10 @@ function PreviewDetails({
         label={copy.skillPackages.source}
         value={`${preview.source.type} ${preview.source.value}`}
       />
-      <Row label="Skills" value={summary.skills.join(', ')} />
+      <Row
+        label={copy.skillPackages.skills}
+        value={summary.skills.join(', ')}
+      />
       <Row
         label={copy.skillPackages.dependencies}
         value={summary.dependencies.join(', ') || copy.skillPackages.none}

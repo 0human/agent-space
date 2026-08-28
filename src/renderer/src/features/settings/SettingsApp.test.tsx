@@ -74,7 +74,8 @@ describe('Settings through the App seam', () => {
 
     expect(await screen.findByText('existing-skills@1.2.3')).toBeVisible()
     await user.type(screen.getByLabelText('来源地址或路径'), source.value)
-    await user.click(screen.getByRole('button', { name: '解析并预览' }))
+    const previewButton = screen.getByRole('button', { name: '解析并预览' })
+    await user.click(previewButton)
 
     const dialog = await screen.findByRole('dialog', {
       name: 'Skill Package 安装预览',
@@ -83,6 +84,16 @@ describe('Settings through the App seam', () => {
     expect(dialog).toHaveTextContent('code-review')
     expect(dialog).toHaveTextContent('workspace.read')
     expect(dialog).toHaveTextContent('检查来源可信性。')
+    expect(dialog).toContainElement(document.activeElement as HTMLElement)
+
+    await user.keyboard('{Escape}')
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(previewButton).toHaveFocus()
+
+    await user.click(previewButton)
+    await screen.findByRole('dialog', {
+      name: 'Skill Package 安装预览',
+    })
 
     await user.click(screen.getByRole('button', { name: '确认安装' }))
     expect(window.appShell.installSkill).toHaveBeenCalledWith(source)

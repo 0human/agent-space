@@ -271,8 +271,8 @@ export function RunBoardView(props: RunBoardViewProps): React.JSX.Element {
                             {projection.isApprovalPending &&
                             !projection.canApprove ? (
                               <p className="mt-2 text-xs text-destructive">
-                                {run.pullRequest?.gate.reason ??
-                                  copy.run.mergeGateBlocked}
+                          {projection.approvalBlockedReason ??
+                            copy.run.mergeGateBlocked}
                               </p>
                             ) : null}
                           </article>

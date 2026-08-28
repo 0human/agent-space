@@ -10,6 +10,7 @@ export interface StepCardProjection {
   isCurrent: boolean
   isApprovalPending: boolean
   canApprove: boolean
+  approvalBlockedReason: string | null
 }
 
 export interface DeliveryProjection {
@@ -151,14 +152,19 @@ export function createRunBoardModel(
       )
       const isPullRequestGate =
         step.kind === 'tool' && step.adapter === 'github.pull-request'
+      const canApprove =
+        !isPullRequestGate || run.pullRequest?.gate.canMerge === true
       return {
         execution,
         isCurrent:
           phaseIndex === run.snapshot.phaseIndex &&
           stepIndex === run.snapshot.stepIndex,
         isApprovalPending,
-        canApprove:
-          !isPullRequestGate || run.pullRequest?.gate.canMerge === true,
+        canApprove,
+        approvalBlockedReason:
+          isApprovalPending && !canApprove
+            ? (run.pullRequest?.gate.reason ?? null)
+            : null,
       }
     },
   }

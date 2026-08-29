@@ -60,6 +60,18 @@ export const workflowRunCopy = {
     outputTitle: 'Step 输出',
     runtimeItemsTitle: '实时 Runtime Item',
     noRuntimeItems: '当前还没有实时 Runtime Item。',
+    runtimeTimelineTrigger: '查看实时 Runtime Item',
+    runtimeTimelineTitle: 'Runtime Item 实时时间线',
+    runtimeTimelineDescription:
+      '按到达顺序查看当前 Step Execution 的安全 Runtime Item；增量更新会覆盖原记录。',
+    runtimeTimelineClose: '关闭 Runtime Item 时间线',
+    runtimeTimelinePhase: (name: string) => `Phase：${name}`,
+    runtimeTimelineStep: (name: string) => `Step：${name}`,
+    runtimeTimelineExecution: (id: string) => `Step Execution：${id}`,
+    runtimeTimelineRegion: 'Runtime Item 时间线',
+    runtimeTimelineBackToBottom: '回到底部',
+    runtimeTimelineUnavailable:
+      '当前无法读取 Runtime Item 历史；已接收的实时更新仍会展示。',
     agentMessageItem: 'Agent 消息',
     commandItemTitle: '命令执行',
     commandItem: (command: string) => `命令执行：${command}`,

@@ -258,6 +258,9 @@ describe('Workflow Run through the App seam', () => {
     await user.click(
       screen.getByRole('button', { name: new RegExp(step.name) }),
     )
+    await user.click(
+      screen.getByRole('button', { name: '查看实时 Runtime Item' }),
+    )
 
     const agentCard = await screen.findByRole('article', {
       name: 'Agent 消息',
@@ -337,6 +340,9 @@ describe('Workflow Run through the App seam', () => {
       screen.queryByText('其他 Step Execution 的输出'),
     ).not.toBeInTheDocument()
 
+    await user.click(
+      screen.getByRole('button', { name: '关闭 Runtime Item 时间线' }),
+    )
     await user.click(screen.getByRole('button', { name: '返回 Project 详情' }))
     expect(unsubscribe).toHaveBeenCalledOnce()
   })

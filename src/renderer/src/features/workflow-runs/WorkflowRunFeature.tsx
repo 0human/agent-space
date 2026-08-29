@@ -20,6 +20,7 @@ export function WorkflowRunFeature({
   const api = useAppShell()
   const [run, setRun] = useState(initialRun)
   const [runtimeItems, setRuntimeItems] = useState<RuntimeItem[]>([])
+  const [runtimeItemsUnavailable, setRuntimeItemsUnavailable] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -44,16 +45,21 @@ export function WorkflowRunFeature({
 
   useEffect(() => {
     let disposed = false
-    void Promise.all(
-      run.stepExecutions.map((execution) => api.listRuntimeItems(execution.id)),
+    const snapshotRequests = run.stepExecutions.map((execution) =>
+      Promise.resolve().then(() => api.listRuntimeItems(execution.id)),
     )
-      .then((snapshots) => {
-        if (!disposed)
-          setRuntimeItems((current) =>
-            mergeRuntimeItemTimeline(current, snapshots.flat()),
-          )
-      })
-      .catch(() => undefined)
+    void Promise.allSettled(snapshotRequests).then((results) => {
+      if (disposed) return
+      const snapshots = results.flatMap((result) =>
+        result.status === 'fulfilled' ? result.value : [],
+      )
+      setRuntimeItems((current) =>
+        mergeRuntimeItemTimeline(current, snapshots),
+      )
+      setRuntimeItemsUnavailable(
+        results.some((result) => result.status === 'rejected'),
+      )
+    })
     return () => {
       disposed = true
     }
@@ -87,6 +93,7 @@ export function WorkflowRunFeature({
     <RunBoardView
       run={run}
       runtimeItems={runtimeItems}
+      runtimeItemsUnavailable={runtimeItemsUnavailable}
       error={error}
       onBack={() => onNavigate({ name: 'projectDetail', project })}
       onPause={() => {

@@ -41,11 +41,12 @@ import { Textarea } from '@renderer/components/ui/textarea'
 import { zhCN as copy } from '@renderer/i18n/zh-CN'
 
 import { createRunBoardModel, type DeliveryProjection } from './run-board-model'
-import { RuntimeItemList } from './RuntimeItemList'
+import { RuntimeItemTimelineDialog } from './RuntimeItemTimelineDialog'
 
 interface RunBoardViewProps {
   run: WorkflowRun
   runtimeItems: RuntimeItem[]
+  runtimeItemsUnavailable?: boolean
   error: string | null
   onBack: () => void
   onPause: () => void
@@ -61,6 +62,7 @@ export function RunBoardView(props: RunBoardViewProps): React.JSX.Element {
   const {
     run,
     runtimeItems,
+    runtimeItemsUnavailable = false,
     error,
     onBack,
     onPause,
@@ -83,6 +85,11 @@ export function RunBoardView(props: RunBoardViewProps): React.JSX.Element {
     selectedRuntimeItems,
     selectedBlocker,
   } = model
+  const selectedPhase = selectedExecution
+    ? (run.definition.phases.find(
+        (phase) => phase.id === selectedExecution.phaseId,
+      ) ?? null)
+    : null
 
   return (
     <main
@@ -306,9 +313,7 @@ export function RunBoardView(props: RunBoardViewProps): React.JSX.Element {
                   <Detail title={copy.run.contextTitle}>
                     <p>
                       {selectedPhaseContext?.content ??
-                        run.definition.phases.find(
-                          (phase) => phase.id === selectedExecution.phaseId,
-                        )?.goal ??
+                        selectedPhase?.goal ??
                         copy.run.noContext}
                     </p>
                   </Detail>
@@ -325,7 +330,14 @@ export function RunBoardView(props: RunBoardViewProps): React.JSX.Element {
                     />
                   </Detail>
                   <Detail title={copy.run.runtimeItemsTitle}>
-                    <RuntimeItemList items={selectedRuntimeItems} />
+                    <RuntimeItemTimelineDialog
+                      runId={run.id}
+                      phaseName={selectedPhase?.name ?? selectedExecution.phaseId}
+                      stepName={selectedStep.name}
+                      executionId={selectedExecution.id}
+                      items={selectedRuntimeItems}
+                      historyUnavailable={runtimeItemsUnavailable}
+                    />
                   </Detail>
                   <p
                     className={`mt-5 text-sm ${selectedExecution.error ? 'text-destructive' : 'text-muted-foreground'}`}

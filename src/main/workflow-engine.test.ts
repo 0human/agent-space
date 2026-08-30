@@ -1,7 +1,7 @@
 // @vitest-environment node
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -10,6 +10,7 @@ import type { WorkflowView } from '../shared/workflow'
 import type { AgentRuntimeAdapter, RuntimeEvent, RuntimeExecutionContext } from '../shared/workflow-run'
 import { createWorkflowEngine, type WorkflowEngine } from './workflow-engine'
 import { createFakeRuntimeAdapter } from './fake-runtime'
+import { createProjectService } from './project-service'
 
 class FakeRuntime implements AgentRuntimeAdapter {
   readonly calls: string[] = []
@@ -117,6 +118,7 @@ describe('WorkflowEngine public API', () => {
 
     const run = await engine.startRun({ ...input, preflight: await engine.preflight(input) })
     expect(run.status).toBe('running')
+    await expect(engine.hasActiveRuns(project.id)).resolves.toBe(true)
     expect(run.snapshot.nextAction).toBe('等待 Runtime 完成当前 Step。')
     expect(run.stepExecutions[0]).toMatchObject({ input: { idea: 'Build a durable workflow run' }, skill: { name: 'grill-with-docs', version: '1.0.0' } })
     expect(run.events.map((event) => event.type)).toEqual(['started', 'step_started'])
@@ -130,6 +132,22 @@ describe('WorkflowEngine public API', () => {
     expect(completed.stepExecutions[0]).toMatchObject({ status: 'completed', attempt: 1 })
     expect(completed.artifacts).toHaveLength(1)
     expect(completed.events.map((event) => event.type)).toEqual(['started', 'step_started', 'step_completed', 'completed'])
+    await expect(engine.hasActiveRuns(project.id)).resolves.toBe(false)
+
+    const projectRegistryPath = join(directory, 'projects.json')
+    await writeFile(projectRegistryPath, JSON.stringify([{ ...project, workspacePath: directory }]))
+    const projectService = createProjectService({
+      readFile: async (path, encoding) => readFile(path, encoding),
+      writeFile: async (path, data, encoding) => writeFile(path, data, encoding),
+      mkdir: async (path, options) => { await mkdir(path, options) },
+      execGit: async () => ''
+    })
+    await expect(projectService.deleteProject(projectRegistryPath, project.id)).resolves.toMatchObject({ ok: true, status: 'deleted' })
+    await expect(access(directory)).resolves.toBeUndefined()
+    await expect(engine.getRun(run.id)).resolves.toMatchObject({
+      projectId: project.id,
+      artifacts: [expect.objectContaining({ name: 'domain-docs' })]
+    })
 
     await engine.close()
     engine = createWorkflowEngine({ databasePath: join(directory, 'runs.sqlite'), runtime: new FakeRuntime() })

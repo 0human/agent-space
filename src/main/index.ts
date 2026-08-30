@@ -97,8 +97,7 @@ const projectService = createProjectService({
     await execFile('git', ['-C', workspacePath, 'fetch', '--prune', 'origin'], { encoding: 'utf8' })
   },
   hasActiveWorkflowRuns: async (projectId) => {
-    const runs = await workflowEngine.listRuns(projectId)
-    return runs.some((run) => ['running', 'paused', 'waiting', 'blocked'].includes(run.status))
+    return workflowEngine.hasActiveRuns(projectId)
   }
 })
 const openInIde = createDefaultIdeLauncher()

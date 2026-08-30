@@ -12,6 +12,7 @@ import type {
   RuntimeEvent,
   RuntimeArtifact
 } from '../shared/workflow-run'
+import { isWorkflowRunInProgress } from '../shared/workflow-run'
 import type { GitMergeRequest, GitPullRequestRequest, GitPullRequestResult } from './git-delivery'
 import { createSqliteRunStore } from './workflow-store'
 import { zhCNMain } from '../shared/i18n/zh-CN'
@@ -132,6 +133,7 @@ export interface WorkflowEngine {
   startRun(input: StartWorkflowRunInput): Promise<WorkflowRun>
   getRun(runId: string): Promise<WorkflowRun | null>
   listRuns(projectId: string): Promise<WorkflowRun[]>
+  hasActiveRuns(projectId: string): Promise<boolean>
   pauseRun(runId: string): Promise<WorkflowRun>
   resumeRun(runId: string): Promise<WorkflowRun>
   retryStep(runId: string): Promise<WorkflowRun>
@@ -304,6 +306,12 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
     }
   }
 
+  async function listRuns(projectId: string): Promise<WorkflowRun[]> {
+    const runs = await store.listRuns(projectId)
+    const refreshed = await Promise.all(runs.map((run) => refreshPullRequest(run)))
+    return refreshed.filter((run): run is NonNullable<typeof run> => Boolean(run))
+  }
+
   function ensureRunning(runId: string): void {
     if (active.has(runId)) return
     const promise = execute(runId).finally(() => {
@@ -314,7 +322,7 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
 
   return {
     async preflight(input): Promise<WorkflowPreflightResult> {
-      if (isProjectDeleted(input.project)) return { passed: false, checks: [], errors: ['找不到这个 Project。'] }
+      if (isProjectDeleted(input.project)) return { passed: false, checks: [], errors: [zhCNMain.projectDelete.notFound] }
       const checks: string[] = []
       const errors: string[] = []
       if (input.project.workspaceAvailable === false) errors.push(zhCNMain.workflowRun.workspaceUnavailable)
@@ -399,10 +407,11 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
       return refreshPullRequest(await store.getRun(runId))
     },
 
-    async listRuns(projectId) {
-      const runs = await store.listRuns(projectId)
-      const refreshed = await Promise.all(runs.map((run) => refreshPullRequest(run)))
-      return refreshed.filter((run): run is NonNullable<typeof run> => Boolean(run))
+    listRuns,
+
+    async hasActiveRuns(projectId) {
+      const runs = await listRuns(projectId)
+      return runs.some((run) => isWorkflowRunInProgress(run.status))
     },
 
     async pauseRun(runId) {

@@ -287,7 +287,7 @@ describe('Project IPC handlers', () => {
     })
   })
 
-  it('does not open the Workspace for a soft-deleted Project', async () => {
+  it('keeps the Workspace reachable for a soft-deleted Project', async () => {
     const handlers = new Map<string, (...args: unknown[]) => unknown>()
     const openInIde = vi.fn()
     registerProjectHandlers({
@@ -304,9 +304,9 @@ describe('Project IPC handlers', () => {
     })
 
     await expect(handlers.get(APP_SHELL_CHANNELS.openProjectInIde)?.({}, 'project-1')).resolves.toEqual({
-      ok: false,
-      error: '这个 Project 已被删除，无法打开 Workspace。'
+      ok: true,
+      error: null
     })
-    expect(openInIde).not.toHaveBeenCalled()
+    expect(openInIde).toHaveBeenCalledWith('/work/demo')
   })
 })

@@ -28,7 +28,8 @@ export const zhCNMain = {
     notFound: '找不到这个 Project。',
     deleted: 'Project 已删除；本地 Workspace 和文件未受影响。',
     alreadyDeleted: 'Project 已经删除；本地 Workspace 和文件未受影响。',
-    unavailable: 'Project 删除功能暂不可用。'
+    unavailable: 'Project 删除功能暂不可用。',
+    deletedWorkspace: '这个 Project 已被删除，但本地 Workspace 仍然保留。'
   },
   workflowRun: {
     runtimeBlocked: 'Runtime 报告当前 Step blocked。',

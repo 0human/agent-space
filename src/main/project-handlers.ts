@@ -146,8 +146,7 @@ export function registerProjectHandlers({
   handle(APP_SHELL_CHANNELS.openProjectInIde, async (_event: unknown, value: unknown): Promise<OpenProjectResult> => {
     const projectId = typeof value === 'string' ? value : ''
     const project = await service.findById(filePath, projectId)
-    if (!project) return { ok: false, error: '找不到这个 Project。' }
-    if (isProjectDeleted(project)) return { ok: false, error: '这个 Project 已被删除，无法打开 Workspace。' }
+    if (!project) return { ok: false, error: copy.projectDelete.notFound }
 
     try {
       await openInIde(project.workspacePath)

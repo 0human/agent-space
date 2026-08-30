@@ -367,7 +367,7 @@ describe('Workspace inspection', () => {
     await expect(service.deleteProject('/data/projects.json', 'project-1')).resolves.toMatchObject({
       ok: false,
       status: 'blocked',
-      error: 'Project 存在进行中的 Workflow Run。'
+      error: '该 Project 有进行中的 Workflow Run，请先暂停、取消或完成 Run 后再删除。'
     })
     expect(writeFile).not.toHaveBeenCalled()
     expect(JSON.parse(stored)[0]).not.toHaveProperty('deletedAt')
@@ -434,5 +434,61 @@ describe('Workspace inspection', () => {
       project: { id: 'project-1', deletedAt: '2026-08-29T00:00:00.000Z' }
     })
     expect(writeFile).not.toHaveBeenCalled()
+  })
+
+  it('leaves the canonical registry unchanged when atomic replacement is interrupted', async () => {
+    const original = JSON.stringify([{
+      id: 'project-1',
+      name: 'demo',
+      workspacePath: '/work/demo',
+      updatedAt: '2026-08-29T00:00:00.000Z'
+    }])
+    let stored = original
+    const writeFile = vi.fn(async (path: string) => {
+      if (path === '/data/projects.json') stored = 'partial registry'
+    })
+    const rename = vi.fn().mockRejectedValue(new Error('interrupted'))
+    const unlink = vi.fn().mockResolvedValue(undefined)
+    const service = createProjectService({
+      readFile: async () => stored,
+      writeFile,
+      rename,
+      unlink,
+      mkdir: async () => undefined,
+      execGit: async () => ''
+    })
+
+    await expect(service.deleteProject('/data/projects.json', 'project-1')).rejects.toThrow('interrupted')
+    expect(stored).toBe(original)
+    expect(writeFile).toHaveBeenCalledWith(expect.stringMatching(/projects\.json\.tmp-/), expect.any(String), 'utf8')
+    expect(rename).toHaveBeenCalledWith(expect.stringMatching(/projects\.json\.tmp-/), '/data/projects.json')
+    expect(unlink).toHaveBeenCalledWith(expect.stringMatching(/projects\.json\.tmp-/))
+  })
+
+  it('serializes Project lifecycle operations by Project ID', async () => {
+    const service = createProjectService({
+      readFile: async () => '[]',
+      writeFile: async () => undefined,
+      mkdir: async () => undefined,
+      execGit: async () => ''
+    })
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    let firstEntered = false
+    let secondEntered = false
+    const first = service.withProjectLock('project-1', async () => {
+      firstEntered = true
+      await gate
+    })
+    await vi.waitFor(() => expect(firstEntered).toBe(true))
+    const second = service.withProjectLock('project-1', async () => {
+      secondEntered = true
+    })
+
+    await Promise.resolve()
+    expect(secondEntered).toBe(false)
+    release()
+    await Promise.all([first, second])
+    expect(secondEntered).toBe(true)
   })
 })

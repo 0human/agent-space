@@ -5,6 +5,7 @@ import { promisify } from 'node:util'
 import { randomUUID } from 'node:crypto'
 
 import { DEFAULT_PROJECT_PERMISSIONS, isProjectDeleted, type DirtyWorkspaceSummary, type Project, type ProjectDeletionResult, type WorkspaceState } from '../shared/project'
+import { zhCNMain } from '../shared/i18n/zh-CN'
 import { resolveGitHubRepository } from './git-delivery'
 import { sanitizeSensitiveText } from './sensitive-text'
 
@@ -142,6 +143,21 @@ export function createDefaultGitExecutor(): WorkspaceInspectionDependencies['exe
 export function createProjectService(dependencies: ProjectServiceDependencies) {
   const now = dependencies.now ?? (() => new Date().toISOString())
   const createId = dependencies.createId ?? randomUUID
+  const projectLocks = new Map<string, Promise<void>>()
+
+  async function withProjectLock<T>(projectId: string, action: () => Promise<T>): Promise<T> {
+    const previous = projectLocks.get(projectId) ?? Promise.resolve()
+    let release!: () => void
+    const current = new Promise<void>((resolve) => { release = resolve })
+    projectLocks.set(projectId, current)
+    await previous
+    try {
+      return await action()
+    } finally {
+      release()
+      if (projectLocks.get(projectId) === current) projectLocks.delete(projectId)
+    }
+  }
 
   async function load(filePath: string): Promise<Project[]> {
     let contents: string
@@ -157,7 +173,7 @@ export function createProjectService(dependencies: ProjectServiceDependencies) {
     return value.map((project) => ({
       ...project,
       workspaceAvailable: project.workspaceAvailable !== false,
-      status: project.status === 'deleted' || project.deletedAt ? 'deleted' : 'active',
+      status: isProjectDeleted(project) ? 'deleted' : 'active',
       deletedAt: typeof project.deletedAt === 'string' ? project.deletedAt : null,
       permissionPolicy: project.permissionPolicy ?? { grantedPermissions: [...DEFAULT_PROJECT_PERMISSIONS] }
     })) as Project[]
@@ -285,19 +301,23 @@ export function createProjectService(dependencies: ProjectServiceDependencies) {
       return projects.find((project) => project.id === projectId) ?? null
     },
 
-    async deleteProject(filePath: string, projectId: string): Promise<ProjectDeletionResult> {
-      const projects = await load(filePath)
-      const project = projects.find((candidate) => candidate.id === projectId)
-      if (!project) return { ok: false, status: 'not-found', project: null, error: '找不到这个 Project。' }
-      if (isProjectDeleted(project)) return { ok: true, status: 'already-deleted', project, error: null }
-      if (await (dependencies.hasActiveWorkflowRuns?.(project.id) ?? Promise.resolve(false))) {
-        return { ok: false, status: 'blocked', project, error: 'Project 存在进行中的 Workflow Run。' }
-      }
+    withProjectLock,
 
-      const timestamp = now()
-      const deletedProject: Project = { ...project, status: 'deleted', deletedAt: timestamp, updatedAt: timestamp }
-      await save(filePath, projects.map((candidate) => candidate.id === project.id ? deletedProject : candidate))
-      return { ok: true, status: 'deleted', project: deletedProject, error: null }
+    async deleteProject(filePath: string, projectId: string): Promise<ProjectDeletionResult> {
+      return withProjectLock(projectId, async () => {
+        const projects = await load(filePath)
+        const project = projects.find((candidate) => candidate.id === projectId)
+        if (!project) return { ok: false, status: 'not-found', project: null, error: zhCNMain.projectDelete.notFound }
+        if (isProjectDeleted(project)) return { ok: true, status: 'already-deleted', project, error: null }
+        if (await (dependencies.hasActiveWorkflowRuns?.(project.id) ?? Promise.resolve(false))) {
+          return { ok: false, status: 'blocked', project, error: zhCNMain.projectDelete.activeRunError }
+        }
+
+        const timestamp = now()
+        const deletedProject: Project = { ...project, status: 'deleted', deletedAt: timestamp, updatedAt: timestamp }
+        await save(filePath, projects.map((candidate) => candidate.id === project.id ? deletedProject : candidate))
+        return { ok: true, status: 'deleted', project: deletedProject, error: null }
+      })
     }
   }
 }

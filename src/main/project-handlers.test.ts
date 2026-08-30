@@ -228,7 +228,7 @@ describe('Project IPC handlers', () => {
       defaultId: 1,
       cancelId: 1
     }))
-    expect(deleteProject).toHaveBeenCalledWith(join('/data', 'projects.json'), 'project-1')
+    expect(deleteProject).toHaveBeenCalledWith(join('/data', 'projects.json'), 'project-1', { source: 'user-confirmation' })
   })
 
   it('does not delete when the confirmation is cancelled', async () => {

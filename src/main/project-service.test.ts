@@ -322,21 +322,41 @@ describe('Workspace inspection', () => {
       execGit: async () => ''
     })
 
-    const result = await service.deleteProject('/data/projects.json', 'project-1')
+    const result = await service.deleteProject('/data/projects.json', 'project-1', { source: 'user-confirmation' })
 
     expect(result).toMatchObject({ ok: true, status: 'deleted' })
     expect(result.project).toMatchObject({
       id: 'project-1',
       status: 'deleted',
-      deletedAt: '2026-08-30T00:00:00.000Z'
+      deletedAt: '2026-08-30T00:00:00.000Z',
+      deletionApproval: { source: 'user-confirmation', approvedAt: '2026-08-30T00:00:00.000Z' }
     })
     await expect(service.list('/data/projects.json')).resolves.toEqual([])
     await expect(service.findById('/data/projects.json', 'project-1')).resolves.toMatchObject({
       id: 'project-1',
       workspacePath: '/work/demo',
       status: 'deleted',
-      deletedAt: '2026-08-30T00:00:00.000Z'
+      deletedAt: '2026-08-30T00:00:00.000Z',
+      deletionApproval: { source: 'user-confirmation', approvedAt: '2026-08-30T00:00:00.000Z' }
     })
+  })
+
+  it('requires a user approval before deleting an active Project', async () => {
+    let stored = JSON.stringify([{ id: 'project-1', name: 'demo', workspacePath: '/work/demo', updatedAt: '2026-08-14T00:00:00.000Z' }])
+    const writeFile = vi.fn(async (_path: string, data: string) => { stored = data })
+    const service = createProjectService({
+      readFile: async () => stored,
+      writeFile,
+      mkdir: async () => undefined,
+      execGit: async () => ''
+    })
+
+    await expect(service.deleteProject('/data/projects.json', 'project-1')).resolves.toMatchObject({
+      ok: false,
+      status: 'approval-required',
+      error: '删除 Project 需要明确的用户确认。'
+    })
+    expect(writeFile).not.toHaveBeenCalled()
   })
 
   it('blocks deletion while a Workflow Run is still in progress', async () => {
@@ -364,7 +384,7 @@ describe('Workspace inspection', () => {
       execGit: async () => ''
     })
 
-    await expect(service.deleteProject('/data/projects.json', 'project-1')).resolves.toMatchObject({
+    await expect(service.deleteProject('/data/projects.json', 'project-1', { source: 'user-confirmation' })).resolves.toMatchObject({
       ok: false,
       status: 'blocked',
       error: '该 Project 有进行中的 Workflow Run，请先暂停、取消或完成 Run 后再删除。'
@@ -458,7 +478,7 @@ describe('Workspace inspection', () => {
       execGit: async () => ''
     })
 
-    await expect(service.deleteProject('/data/projects.json', 'project-1')).rejects.toThrow('interrupted')
+    await expect(service.deleteProject('/data/projects.json', 'project-1', { source: 'user-confirmation' })).rejects.toThrow('interrupted')
     expect(stored).toBe(original)
     expect(writeFile).toHaveBeenCalledWith(expect.stringMatching(/projects\.json\.tmp-/), expect.any(String), 'utf8')
     expect(rename).toHaveBeenCalledWith(expect.stringMatching(/projects\.json\.tmp-/), '/data/projects.json')

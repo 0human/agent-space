@@ -100,7 +100,16 @@ export function registerWorkflowHandlers({ handle, projectService, workflowServi
   })
   handle(APP_SHELL_CHANNELS.pauseWorkflowRun, async (_event: unknown, runId: unknown) => workflowEngine!.pauseRun(String(runId)))
   handle(APP_SHELL_CHANNELS.resumeWorkflowRun, async (_event: unknown, runId: unknown) => workflowEngine!.resumeRun(String(runId)))
-  handle(APP_SHELL_CHANNELS.retryWorkflowStep, async (_event: unknown, runId: unknown) => workflowEngine!.retryStep(String(runId)))
+  handle(APP_SHELL_CHANNELS.retryWorkflowStep, async (_event: unknown, runId: unknown) => {
+    const id = String(runId)
+    const current = await workflowEngine!.getRun(id)
+    if (!current) return workflowEngine!.retryStep(id)
+    return withProjectRegistryLock(async () => {
+      const project = await findActiveProject(current.projectId)
+      if (!project) throw new Error(zhCNMain.projectDelete.notFound)
+      return workflowEngine!.retryStep(id)
+    })
+  })
   handle(APP_SHELL_CHANNELS.cancelWorkflowRun, async (_event: unknown, runId: unknown) => workflowEngine!.cancelRun(String(runId)))
   handle(APP_SHELL_CHANNELS.answerWorkflowQuestion, async (_event: unknown, runId: unknown, answer: unknown) => workflowEngine!.answerQuestion(String(runId), typeof answer === 'string' ? answer : ''))
   handle(APP_SHELL_CHANNELS.approveWorkflowApproval, async (_event: unknown, runId: unknown) => workflowEngine!.approve(String(runId)))

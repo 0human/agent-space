@@ -4,7 +4,7 @@ import { basename, dirname, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import { randomUUID } from 'node:crypto'
 
-import { DEFAULT_PROJECT_PERMISSIONS, isProjectDeleted, type DirtyWorkspaceSummary, type Project, type ProjectDeletionResult, type WorkspaceState } from '../shared/project'
+import { DEFAULT_PROJECT_PERMISSIONS, isProjectDeleted, type DirtyWorkspaceSummary, type Project, type ProjectDeletionConfirmation, type ProjectDeletionResult, type WorkspaceState } from '../shared/project'
 import { zhCNMain } from '../shared/i18n/zh-CN'
 import { resolveGitHubRepository } from './git-delivery'
 import { sanitizeSensitiveText } from './sensitive-text'
@@ -311,18 +311,25 @@ export function createProjectService(dependencies: ProjectServiceDependencies) {
 
     withProjectRegistryLock,
 
-    async deleteProject(filePath: string, projectId: string): Promise<ProjectDeletionResult> {
+    async deleteProject(filePath: string, projectId: string, confirmation?: ProjectDeletionConfirmation): Promise<ProjectDeletionResult> {
       return withProjectRegistryLock(async () => {
         const projects = await load(filePath)
         const project = projects.find((candidate) => candidate.id === projectId)
         if (!project) return { ok: false, status: 'not-found', project: null, error: zhCNMain.projectDelete.notFound }
         if (isProjectDeleted(project)) return { ok: true, status: 'already-deleted', project, error: null }
+        if (confirmation?.source !== 'user-confirmation') return { ok: false, status: 'approval-required', project, error: zhCNMain.projectDelete.approvalRequired }
         if (await (dependencies.hasActiveWorkflowRuns?.(project.id) ?? Promise.resolve(false))) {
           return { ok: false, status: 'blocked', project, error: zhCNMain.projectDelete.activeRunError }
         }
 
         const timestamp = now()
-        const deletedProject: Project = { ...project, status: 'deleted', deletedAt: timestamp, updatedAt: timestamp }
+        const deletedProject: Project = {
+          ...project,
+          status: 'deleted',
+          deletedAt: timestamp,
+          deletionApproval: { source: confirmation.source, approvedAt: timestamp },
+          updatedAt: timestamp
+        }
         await save(filePath, projects.map((candidate) => candidate.id === project.id ? deletedProject : candidate))
         return { ok: true, status: 'deleted', project: deletedProject, error: null }
       })

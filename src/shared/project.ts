@@ -70,6 +70,7 @@ export interface Project extends WorkspaceState {
   updatedAt: string
   status?: ProjectStatus
   deletedAt?: string | null
+  deletionApproval?: ProjectDeletionApproval
   permissionPolicy?: PermissionPolicy
   deliveryPolicy?: ProjectDeliveryPolicy
   release?: ProjectReleaseConfig
@@ -77,11 +78,20 @@ export interface Project extends WorkspaceState {
 
 export type ProjectStatus = 'active' | 'deleted'
 
+export interface ProjectDeletionApproval {
+  source: 'user-confirmation'
+  approvedAt: string
+}
+
+export interface ProjectDeletionConfirmation {
+  source: ProjectDeletionApproval['source']
+}
+
 export function isProjectDeleted(project: Pick<Project, 'status' | 'deletedAt'>): boolean {
   return project.status === 'deleted' || Boolean(project.deletedAt)
 }
 
-export type ProjectDeletionStatus = 'deleted' | 'already-deleted' | 'blocked' | 'not-found'
+export type ProjectDeletionStatus = 'deleted' | 'already-deleted' | 'blocked' | 'approval-required' | 'not-found'
 
 export interface ProjectDeletionResult {
   ok: boolean

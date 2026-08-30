@@ -142,7 +142,7 @@ describe('WorkflowEngine public API', () => {
       mkdir: async (path, options) => { await mkdir(path, options) },
       execGit: async () => ''
     })
-    await expect(projectService.deleteProject(projectRegistryPath, project.id)).resolves.toMatchObject({ ok: true, status: 'deleted' })
+    await expect(projectService.deleteProject(projectRegistryPath, project.id, { source: 'user-confirmation' })).resolves.toMatchObject({ ok: true, status: 'deleted' })
     await expect(access(directory)).resolves.toBeUndefined()
     await expect(engine.getRun(run.id)).resolves.toMatchObject({
       projectId: project.id,

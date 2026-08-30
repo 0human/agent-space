@@ -2,14 +2,14 @@ import { join, resolve } from 'node:path'
 
 import { APP_SHELL_CHANNELS } from '../shared/app-shell'
 import { zhCNMain as copy } from '../shared/i18n/zh-CN'
-import { isProjectDeleted, type GitHubProjectCloneResponse, type OpenProjectResult, type Project, type ProjectDeletionResult, type ProjectImportResult } from '../shared/project'
+import { isProjectDeleted, type GitHubProjectCloneResponse, type OpenProjectResult, type Project, type ProjectDeletionConfirmation, type ProjectDeletionResult, type ProjectImportResult } from '../shared/project'
 
 interface ProjectService {
   list: (filePath: string) => Promise<Project[]>
   inspectDirectory: (workspacePath: string) => Promise<{ dirty: boolean }>
   importDirectory: (filePath: string, workspacePath: string) => Promise<Project>
   findById: (filePath: string, projectId: string) => Promise<Project | null>
-  deleteProject?: (filePath: string, projectId: string) => Promise<ProjectDeletionResult>
+  deleteProject?: (filePath: string, projectId: string, confirmation?: ProjectDeletionConfirmation) => Promise<ProjectDeletionResult>
   cloneGitHub?: (filePath: string, repositoryUrl: string, destinationPath: string) => Promise<Project>
 }
 
@@ -137,8 +137,9 @@ export function registerProjectHandlers({
       if (confirmation.response !== 0) return null
     }
 
-    const result = await service.deleteProject(filePath, projectId)
+    const result = await service.deleteProject(filePath, projectId, { source: 'user-confirmation' })
     if (result.status === 'blocked') return { ...result, error: copy.projectDelete.activeRunError }
+    if (result.status === 'approval-required') return { ...result, error: copy.projectDelete.approvalRequired }
     if (result.status === 'not-found') return { ...result, error: copy.projectDelete.notFound }
     return result
   })

@@ -26,10 +26,7 @@ export const zhCNMain = {
     cancelAction: '取消',
     activeRunError: '该 Project 有进行中的 Workflow Run，请先暂停、取消或完成 Run 后再删除。',
     notFound: '找不到这个 Project。',
-    deleted: 'Project 已删除；本地 Workspace 和文件未受影响。',
-    alreadyDeleted: 'Project 已经删除；本地 Workspace 和文件未受影响。',
-    unavailable: 'Project 删除功能暂不可用。',
-    deletedWorkspace: '这个 Project 已被删除，但本地 Workspace 仍然保留。'
+    unavailable: 'Project 删除功能暂不可用。'
   },
   workflowRun: {
     runtimeBlocked: 'Runtime 报告当前 Step blocked。',

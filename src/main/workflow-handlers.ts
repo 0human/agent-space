@@ -18,7 +18,7 @@ interface WorkflowHandlerDependencies {
   handle: (channel: string, listener: (...args: unknown[]) => unknown) => void
   projectService: {
     findById: (filePath: string, projectId: string) => Promise<Project | null>
-    withProjectLock?: <T>(projectId: string, action: () => Promise<T>) => Promise<T>
+    withProjectRegistryLock?: <T>(action: () => Promise<T>) => Promise<T>
   }
   workflowService: WorkflowService
   workflowEngine?: WorkflowEngine
@@ -35,9 +35,9 @@ export function registerWorkflowHandlers({ handle, projectService, workflowServi
     const project = await findProject(projectId)
     return project && !isProjectDeleted(project) ? project : null
   }
-  const withProjectLock = async <T>(projectId: string, action: () => Promise<T>): Promise<T> => {
-    return projectService.withProjectLock
-      ? projectService.withProjectLock(projectId, action)
+  const withProjectRegistryLock = async <T>(action: () => Promise<T>): Promise<T> => {
+    return projectService.withProjectRegistryLock
+      ? projectService.withProjectRegistryLock(action)
       : action()
   }
   const permissionsFor = (project: Project): string[] => project.permissionPolicy?.grantedPermissions ?? [...DEFAULT_PROJECT_PERMISSIONS]
@@ -74,7 +74,7 @@ export function registerWorkflowHandlers({ handle, projectService, workflowServi
   })
   handle(APP_SHELL_CHANNELS.startWorkflowRun, async (_event: unknown, projectId: unknown, idea: unknown): Promise<WorkflowRunActionResult> => {
     if (typeof projectId !== 'string' || !projectId) return { ok: false, error: zhCNMain.projectDelete.notFound, run: null }
-    return withProjectLock(projectId, async () => {
+    return withProjectRegistryLock(async () => {
       const project = await findActiveProject(projectId)
       if (!project) return { ok: false, error: zhCNMain.projectDelete.notFound, run: null }
       if (!workflowEngine) {

@@ -465,7 +465,7 @@ describe('Workspace inspection', () => {
     expect(unlink).toHaveBeenCalledWith(expect.stringMatching(/projects\.json\.tmp-/))
   })
 
-  it('serializes Project lifecycle operations by Project ID', async () => {
+  it('serializes Project registry lifecycle operations', async () => {
     const service = createProjectService({
       readFile: async () => '[]',
       writeFile: async () => undefined,
@@ -476,12 +476,12 @@ describe('Workspace inspection', () => {
     const gate = new Promise<void>((resolve) => { release = resolve })
     let firstEntered = false
     let secondEntered = false
-    const first = service.withProjectLock('project-1', async () => {
+    const first = service.withProjectRegistryLock(async () => {
       firstEntered = true
       await gate
     })
     await vi.waitFor(() => expect(firstEntered).toBe(true))
-    const second = service.withProjectLock('project-1', async () => {
+    const second = service.withProjectRegistryLock(async () => {
       secondEntered = true
     })
 

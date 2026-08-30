@@ -1,4 +1,4 @@
-import type { GitHubProjectCloneResponse, OpenProjectResult, Project, ProjectImportResult } from './project'
+import type { GitHubProjectCloneResponse, OpenProjectResult, Project, ProjectDeletionResult, ProjectImportResult } from './project'
 import type { WorkflowView } from './workflow'
 import type { RuntimeItem, WorkflowPreflightResult, WorkflowRun, WorkflowRunActionResult } from './workflow-run'
 import type { InstalledSkillRecord, SkillInstallPreview, SkillSource } from './skill-package'
@@ -13,6 +13,7 @@ export const APP_SHELL_CHANNELS = {
   listProjects: 'project:list',
   importProject: 'project:import',
   cloneGitHubProject: 'project:clone-github',
+  deleteProject: 'project:delete',
   openProjectInIde: 'project:open-in-ide',
   getWorkflow: 'workflow:get',
   copyWorkflow: 'workflow:copy',
@@ -41,6 +42,7 @@ export interface AppShellApi {
   listProjects: () => Promise<Project[]>
   importProject: () => Promise<ProjectImportResult | null>
   cloneGitHubProject: (repositoryUrl: string) => Promise<GitHubProjectCloneResponse | null>
+  deleteProject: (projectId: string) => Promise<ProjectDeletionResult | null>
   openProjectInIde: (projectId: string) => Promise<OpenProjectResult>
   getWorkflow: (projectId: string) => Promise<WorkflowView>
   copyWorkflow: (projectId: string) => Promise<WorkflowView | null>

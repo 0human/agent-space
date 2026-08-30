@@ -4,7 +4,8 @@ import { basename, dirname, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import { randomUUID } from 'node:crypto'
 
-import { DEFAULT_PROJECT_PERMISSIONS, type DirtyWorkspaceSummary, type Project, type WorkspaceState } from '../shared/project'
+import { DEFAULT_PROJECT_PERMISSIONS, isProjectDeleted, type DirtyWorkspaceSummary, type Project, type ProjectDeletionConfirmation, type ProjectDeletionResult, type WorkspaceState } from '../shared/project'
+import { zhCNMain } from '../shared/i18n/zh-CN'
 import { resolveGitHubRepository } from './git-delivery'
 import { sanitizeSensitiveText } from './sensitive-text'
 
@@ -18,12 +19,15 @@ export interface WorkspaceInspectionDependencies {
 export interface ProjectServiceDependencies {
   readFile: (path: string, encoding: 'utf8') => Promise<string>
   writeFile: (path: string, data: string, encoding: 'utf8') => Promise<void>
+  rename?: (source: string, destination: string) => Promise<void>
+  unlink?: (path: string) => Promise<void>
   mkdir: (path: string, options: { recursive: true }) => Promise<void>
   execGit: (workspacePath: string, args: string[]) => Promise<string>
   readDirectory?: (workspacePath: string) => Promise<string[]>
   cloneGitHub?: (repositoryUrl: string, destinationPath: string) => Promise<void>
   fetchGitHub?: (workspacePath: string) => Promise<void>
   resolveSshHost?: (host: string) => Promise<string | null>
+  hasActiveWorkflowRuns?: (projectId: string) => Promise<boolean>
   now?: () => string
   createId?: () => string
 }
@@ -139,6 +143,25 @@ export function createDefaultGitExecutor(): WorkspaceInspectionDependencies['exe
 export function createProjectService(dependencies: ProjectServiceDependencies) {
   const now = dependencies.now ?? (() => new Date().toISOString())
   const createId = dependencies.createId ?? randomUUID
+  const projectLocks = new Map<string, Promise<void>>()
+
+  async function withProjectLock<T>(projectId: string, action: () => Promise<T>): Promise<T> {
+    const previous = projectLocks.get(projectId) ?? Promise.resolve()
+    let release!: () => void
+    const current = new Promise<void>((resolve) => { release = resolve })
+    projectLocks.set(projectId, current)
+    await previous
+    try {
+      return await action()
+    } finally {
+      release()
+      if (projectLocks.get(projectId) === current) projectLocks.delete(projectId)
+    }
+  }
+
+  async function withProjectRegistryLock<T>(action: () => Promise<T>): Promise<T> {
+    return withProjectLock('__project-registry__', action)
+  }
 
   async function load(filePath: string): Promise<Project[]> {
     let contents: string
@@ -154,35 +177,55 @@ export function createProjectService(dependencies: ProjectServiceDependencies) {
     return value.map((project) => ({
       ...project,
       workspaceAvailable: project.workspaceAvailable !== false,
+      status: isProjectDeleted(project) ? 'deleted' : 'active',
+      deletedAt: typeof project.deletedAt === 'string' ? project.deletedAt : null,
       permissionPolicy: project.permissionPolicy ?? { grantedPermissions: [...DEFAULT_PROJECT_PERMISSIONS] }
     })) as Project[]
   }
 
   async function save(filePath: string, projects: Project[]): Promise<void> {
     await dependencies.mkdir(dirname(filePath), { recursive: true })
-    await dependencies.writeFile(filePath, JSON.stringify(projects, null, 2), 'utf8')
+    const serialized = JSON.stringify(projects, null, 2)
+    if (!dependencies.rename) {
+      await dependencies.writeFile(filePath, serialized, 'utf8')
+      return
+    }
+
+    const temporaryPath = `${filePath}.tmp-${createId()}`
+    let replaced = false
+    try {
+      await dependencies.writeFile(temporaryPath, serialized, 'utf8')
+      await dependencies.rename(temporaryPath, filePath)
+      replaced = true
+    } finally {
+      if (!replaced && dependencies.unlink) await dependencies.unlink(temporaryPath).catch(() => undefined)
+    }
   }
 
   async function importDirectory(filePath: string, workspacePath: string): Promise<Project> {
-    const normalizedWorkspacePath = resolve(workspacePath)
-    const state = await inspectWorkspace(normalizedWorkspacePath, dependencies)
-    const projects = await load(filePath)
-    const existing = projects.find((project) => resolve(project.workspacePath) === normalizedWorkspacePath)
-    const project: Project = {
-      id: existing?.id ?? createId(),
-      name: existing?.name ?? (basename(normalizedWorkspacePath) || normalizedWorkspacePath),
-      workspacePath: normalizedWorkspacePath,
-      ...state,
-      permissionPolicy: existing?.permissionPolicy ?? { grantedPermissions: [...DEFAULT_PROJECT_PERMISSIONS] },
-      deliveryPolicy: existing?.deliveryPolicy,
-      release: existing?.release,
-      updatedAt: now()
-    }
-    const next = existing
-      ? projects.map((candidate) => candidate.id === existing.id ? project : candidate)
-      : [...projects, project]
-    await save(filePath, next)
-    return project
+    return withProjectRegistryLock(async () => {
+      const normalizedWorkspacePath = resolve(workspacePath)
+      const state = await inspectWorkspace(normalizedWorkspacePath, dependencies)
+      const projects = await load(filePath)
+      const existing = projects.find((project) => !isProjectDeleted(project) && resolve(project.workspacePath) === normalizedWorkspacePath)
+      const project: Project = {
+        id: existing?.id ?? createId(),
+        name: existing?.name ?? (basename(normalizedWorkspacePath) || normalizedWorkspacePath),
+        workspacePath: normalizedWorkspacePath,
+        ...state,
+        permissionPolicy: existing?.permissionPolicy ?? { grantedPermissions: [...DEFAULT_PROJECT_PERMISSIONS] },
+        deliveryPolicy: existing?.deliveryPolicy,
+        release: existing?.release,
+        status: 'active',
+        deletedAt: null,
+        updatedAt: now()
+      }
+      const next = existing
+        ? projects.map((candidate) => candidate.id === existing.id ? project : candidate)
+        : [...projects, project]
+      await save(filePath, next)
+      return project
+    })
   }
 
   async function refresh(project: Project): Promise<Project> {
@@ -196,17 +239,20 @@ export function createProjectService(dependencies: ProjectServiceDependencies) {
     },
 
     async list(filePath: string): Promise<Project[]> {
-      const projects = await load(filePath)
-      const refreshed = await Promise.all(projects.map(async (project) => {
-        try {
-          return await refresh(project)
-        } catch {
-          // Keep the durable registration available when the workspace is offline or moved.
-          return { ...project, workspaceAvailable: false }
-        }
-      }))
-      await save(filePath, refreshed)
-      return refreshed
+      return withProjectRegistryLock(async () => {
+        const projects = await load(filePath)
+        const refreshed = await Promise.all(projects.map(async (project) => {
+          if (isProjectDeleted(project)) return project
+          try {
+            return await refresh(project)
+          } catch {
+            // Keep the durable registration available when the workspace is offline or moved.
+            return { ...project, workspaceAvailable: false }
+          }
+        }))
+        await save(filePath, refreshed)
+        return refreshed.filter((project) => !isProjectDeleted(project))
+      })
     },
 
     async importDirectory(filePath: string, workspacePath: string): Promise<Project> {
@@ -261,6 +307,32 @@ export function createProjectService(dependencies: ProjectServiceDependencies) {
     async findById(filePath: string, projectId: string): Promise<Project | null> {
       const projects = await load(filePath)
       return projects.find((project) => project.id === projectId) ?? null
+    },
+
+    withProjectRegistryLock,
+
+    async deleteProject(filePath: string, projectId: string, confirmation?: ProjectDeletionConfirmation): Promise<ProjectDeletionResult> {
+      return withProjectRegistryLock(async () => {
+        const projects = await load(filePath)
+        const project = projects.find((candidate) => candidate.id === projectId)
+        if (!project) return { ok: false, status: 'not-found', project: null, error: zhCNMain.projectDelete.notFound }
+        if (isProjectDeleted(project)) return { ok: true, status: 'already-deleted', project, error: null }
+        if (confirmation?.source !== 'user-confirmation') return { ok: false, status: 'approval-required', project, error: zhCNMain.projectDelete.approvalRequired }
+        if (await (dependencies.hasActiveWorkflowRuns?.(project.id) ?? Promise.resolve(false))) {
+          return { ok: false, status: 'blocked', project, error: zhCNMain.projectDelete.activeRunError }
+        }
+
+        const timestamp = now()
+        const deletedProject: Project = {
+          ...project,
+          status: 'deleted',
+          deletedAt: timestamp,
+          deletionApproval: { source: confirmation.source, approvedAt: timestamp },
+          updatedAt: timestamp
+        }
+        await save(filePath, projects.map((candidate) => candidate.id === project.id ? deletedProject : candidate))
+        return { ok: true, status: 'deleted', project: deletedProject, error: null }
+      })
     }
   }
 }

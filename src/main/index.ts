@@ -1,5 +1,5 @@
 import { execFile as execFileCallback } from 'node:child_process'
-import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, readdir, rename, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
@@ -14,6 +14,7 @@ import { registerSkillHandlers } from './skill-handlers'
 import { createSkillInstaller } from './skill-installer'
 import { createWorkflowService } from './workflow-service'
 import { createWorkflowEngine } from './workflow-engine'
+import type { WorkflowEngine } from './workflow-engine'
 import { createCodexRuntimeAdapter } from './codex-runtime'
 import { createCodexItemProjection } from './codex-item-projection'
 import { publishRuntimeItemUpdate, registerRuntimeItemHandlers } from './runtime-item-ipc'
@@ -78,9 +79,12 @@ registerAppShellHandlers({
   platform: process.platform
 })
 
+let workflowEngine: WorkflowEngine
 const projectService = createProjectService({
   readFile,
   writeFile,
+  rename,
+  unlink,
   mkdir: async (path, options) => {
     await mkdir(path, options)
   },
@@ -91,6 +95,9 @@ const projectService = createProjectService({
   },
   fetchGitHub: async (workspacePath) => {
     await execFile('git', ['-C', workspacePath, 'fetch', '--prune', 'origin'], { encoding: 'utf8' })
+  },
+  hasActiveWorkflowRuns: async (projectId) => {
+    return workflowEngine.hasActiveRuns(projectId)
   }
 })
 const openInIde = createDefaultIdeLauncher()
@@ -113,7 +120,7 @@ registerRuntimeItemHandlers({
   handle: (channel, listener) => ipcMain.handle(channel, listener),
   projection: runtimeItemProjection
 })
-const workflowEngine = createWorkflowEngine({
+workflowEngine = createWorkflowEngine({
   databasePath: join(app.getPath('userData'), 'workflow-runs.sqlite'),
   runtime: createCodexRuntimeAdapter({
     skillManifests: BUILT_IN_SKILL_MANIFESTS,

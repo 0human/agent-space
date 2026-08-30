@@ -184,4 +184,129 @@ describe('Project IPC handlers', () => {
       error: '没有找到可用的外部 IDE。请安装并启用 IDE 的命令行启动器。'
     })
   })
+
+  it('requires explicit confirmation before soft-deleting a Project', async () => {
+    const handlers = new Map<string, (...args: unknown[]) => unknown>()
+    const deletedProject = { ...project, status: 'deleted' as const, deletedAt: '2026-08-30T00:00:00.000Z' }
+    const deleteProject = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 'deleted',
+      project: deletedProject,
+      error: null
+    })
+    const dialog = {
+      showOpenDialog: vi.fn(),
+      showMessageBox: vi.fn().mockResolvedValue({ response: 0 })
+    }
+
+    registerProjectHandlers({
+      handle: (channel, listener) => handlers.set(channel, listener),
+      dialog,
+      openInIde: vi.fn(),
+      userDataPath: '/data',
+      service: {
+        list: vi.fn(),
+        inspectDirectory: vi.fn(),
+        importDirectory: vi.fn(),
+        findById: vi.fn().mockResolvedValue(project),
+        deleteProject
+      }
+    })
+
+    await expect(handlers.get(APP_SHELL_CHANNELS.deleteProject)?.({}, 'project-1')).resolves.toEqual({
+      ok: true,
+      status: 'deleted',
+      project: deletedProject,
+      error: null
+    })
+    expect(dialog.showMessageBox).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'warning',
+      title: '删除 Project',
+      message: expect.stringContaining('不会删除本地 Workspace 目录或其中任何文件'),
+      detail: expect.stringContaining('不会删除本地 Workspace 目录或其中任何文件'),
+      buttons: ['删除 Project', '取消'],
+      defaultId: 1,
+      cancelId: 1
+    }))
+    expect(deleteProject).toHaveBeenCalledWith(join('/data', 'projects.json'), 'project-1', { source: 'user-confirmation' })
+  })
+
+  it('does not delete when the confirmation is cancelled', async () => {
+    const handlers = new Map<string, (...args: unknown[]) => unknown>()
+    const deleteProject = vi.fn()
+
+    registerProjectHandlers({
+      handle: (channel, listener) => handlers.set(channel, listener),
+      dialog: {
+        showOpenDialog: vi.fn(),
+        showMessageBox: vi.fn().mockResolvedValue({ response: 1 })
+      },
+      openInIde: vi.fn(),
+      userDataPath: '/data',
+      service: {
+        list: vi.fn(),
+        inspectDirectory: vi.fn(),
+        importDirectory: vi.fn(),
+        findById: vi.fn().mockResolvedValue(project),
+        deleteProject
+      }
+    })
+
+    await expect(handlers.get(APP_SHELL_CHANNELS.deleteProject)?.({}, 'project-1')).resolves.toBeNull()
+    expect(deleteProject).not.toHaveBeenCalled()
+  })
+
+  it('returns an explainable blocked result when a Project has an active Run', async () => {
+    const handlers = new Map<string, (...args: unknown[]) => unknown>()
+    registerProjectHandlers({
+      handle: (channel, listener) => handlers.set(channel, listener),
+      dialog: {
+        showOpenDialog: vi.fn(),
+        showMessageBox: vi.fn().mockResolvedValue({ response: 0 })
+      },
+      openInIde: vi.fn(),
+      userDataPath: '/data',
+      service: {
+        list: vi.fn(),
+        inspectDirectory: vi.fn(),
+        importDirectory: vi.fn(),
+        findById: vi.fn().mockResolvedValue(project),
+        deleteProject: vi.fn().mockResolvedValue({
+          ok: false,
+          status: 'blocked',
+          project,
+          error: 'Project 存在进行中的 Workflow Run。'
+        })
+      }
+    })
+
+    await expect(handlers.get(APP_SHELL_CHANNELS.deleteProject)?.({}, 'project-1')).resolves.toMatchObject({
+      ok: false,
+      status: 'blocked',
+      error: '该 Project 有进行中的 Workflow Run，请先暂停、取消或完成 Run 后再删除。'
+    })
+  })
+
+  it('keeps the Workspace reachable for a soft-deleted Project', async () => {
+    const handlers = new Map<string, (...args: unknown[]) => unknown>()
+    const openInIde = vi.fn()
+    registerProjectHandlers({
+      handle: (channel, listener) => handlers.set(channel, listener),
+      dialog: { showOpenDialog: vi.fn(), showMessageBox: vi.fn() },
+      openInIde,
+      userDataPath: '/data',
+      service: {
+        list: vi.fn(),
+        inspectDirectory: vi.fn(),
+        importDirectory: vi.fn(),
+        findById: vi.fn().mockResolvedValue({ ...project, status: 'deleted', deletedAt: '2026-08-30T00:00:00.000Z' })
+      }
+    })
+
+    await expect(handlers.get(APP_SHELL_CHANNELS.openProjectInIde)?.({}, 'project-1')).resolves.toEqual({
+      ok: true,
+      error: null
+    })
+    expect(openInIde).toHaveBeenCalledWith('/work/demo')
+  })
 })

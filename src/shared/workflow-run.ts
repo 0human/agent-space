@@ -5,6 +5,10 @@ import type { WorkflowDefinition, WorkflowSource, WorkflowView } from './workflo
 export type WorkflowRunStatus = 'running' | 'paused' | 'waiting' | 'blocked' | 'failed' | 'completed' | 'cancelled'
 export type StepExecutionStatus = 'pending' | 'running' | 'waiting' | 'blocked' | 'failed' | 'completed' | 'skipped' | 'cancelled'
 
+export function isWorkflowRunInProgress(status: WorkflowRunStatus): boolean {
+  return ['running', 'paused', 'waiting', 'blocked'].includes(status)
+}
+
 export interface RuntimeLocator {
   runtimeProvider: string
   threadId: string

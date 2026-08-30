@@ -40,6 +40,7 @@ describe('App Shell preload contract', () => {
 
     await api.listProjects()
     await api.importProject()
+    await api.deleteProject('project-1')
     await api.openProjectInIde('project-1')
     await api.getWorkflow('project-1')
     await api.copyWorkflow('project-1')
@@ -59,6 +60,7 @@ describe('App Shell preload contract', () => {
     await api.listInstalledSkills()
     expect(invoke).toHaveBeenCalledWith('project:list')
     expect(invoke).toHaveBeenCalledWith('project:import')
+    expect(invoke).toHaveBeenCalledWith('project:delete', 'project-1')
     expect(invoke).toHaveBeenCalledWith('project:open-in-ide', 'project-1')
     expect(invoke).toHaveBeenCalledWith('workflow:get', 'project-1')
     expect(invoke).toHaveBeenCalledWith('workflow:copy', 'project-1')

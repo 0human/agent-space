@@ -18,6 +18,17 @@ export const zhCNMain = {
   projectOpen: {
     error: '没有找到可用的外部 IDE。请安装并启用 IDE 的命令行启动器。'
   },
+  projectDelete: {
+    title: '删除 Project',
+    message: '删除只会移除 Agent Space 中的 Project 登记，不会删除本地 Workspace 目录或其中任何文件。',
+    detail: '不会删除本地 Workspace 目录或其中任何文件，也不会移动、清空 Git 分支、worktree 或 Artifact。',
+    confirmAction: '删除 Project',
+    cancelAction: '取消',
+    approvalRequired: '删除 Project 需要明确的用户确认。',
+    activeRunError: '该 Project 有进行中的 Workflow Run，请先暂停、取消或完成 Run 后再删除。',
+    notFound: '找不到这个 Project。',
+    unavailable: 'Project 删除功能暂不可用。'
+  },
   workflowRun: {
     runtimeBlocked: 'Runtime 报告当前 Step blocked。',
     workspaceUnavailable: 'Project Workspace 不可访问。',

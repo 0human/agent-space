@@ -5,6 +5,7 @@ import {
   FolderClock,
   FolderKanban,
   Plus,
+  Trash2,
   Workflow,
 } from 'lucide-react'
 
@@ -42,6 +43,7 @@ export function ProjectFeature({
   const api = useAppShell()
   const [projects, setProjects] = useState<Project[]>([])
   const [error, setError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
   const [openError, setOpenError] = useState<string | null>(null)
   const [importWarning, setImportWarning] = useState<string | null>(null)
   const [transferNotice, setTransferNotice] =
@@ -130,23 +132,49 @@ export function ProjectFeature({
     }
   }
 
+  const deleteProject = async (project: Project): Promise<void> => {
+    setOpenError(null)
+    try {
+      const result = await api.deleteProject(project.id)
+      if (!result) return
+      if (!result.ok) {
+        setOpenError(result.error ?? copy.projectDetail.deleteBlocked)
+        return
+      }
+
+      setProjects((current) => current.filter((candidate) => candidate.id !== project.id))
+      setNotice(
+        result.status === 'already-deleted'
+          ? copy.projectDetail.deleteAlreadyDeleted
+          : copy.projectDetail.deleteSuccess,
+      )
+      onNavigate({ name: 'projectOverview' })
+    } catch {
+      setOpenError(copy.projectDetail.deleteBlocked)
+    }
+  }
+
   if (page.name === 'projectOverview') {
     return (
       <ProjectOverview
         projects={projects}
         error={error}
+        notice={notice}
         onCreate={() => {
           setError(null)
+          setNotice(null)
           onNavigate({ name: 'createProject' })
         }}
         onResume={() => {
           setError(null)
+          setNotice(null)
           onNavigate({ name: 'resumeWork' })
         }}
         onOpen={(project) => {
           setOpenError(null)
           setImportWarning(null)
           setTransferNotice(null)
+          setNotice(null)
           onNavigate({ name: 'projectDetail', project })
         }}
       />
@@ -182,6 +210,9 @@ export function ProjectFeature({
       onOpenInIde={() => {
         void openProjectInIde(page.project)
       }}
+      onDelete={() => {
+        void deleteProject(page.project)
+      }}
       onViewWorkflow={() =>
         onNavigate({ name: 'workflow', project: page.project })
       }
@@ -210,12 +241,14 @@ function PageHeader({
 function ProjectOverview({
   projects,
   error,
+  notice,
   onCreate,
   onResume,
   onOpen,
 }: {
   projects: Project[]
   error: string | null
+  notice: string | null
   onCreate: () => void
   onResume: () => void
   onOpen: (project: Project) => void
@@ -232,6 +265,11 @@ function ProjectOverview({
       {error ? (
         <Alert variant="destructive" className="mt-5" role="alert">
           <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      ) : null}
+      {notice ? (
+        <Alert className="mt-5" role="status">
+          <AlertDescription>{notice}</AlertDescription>
         </Alert>
       ) : null}
       {projects.length > 0 ? (
@@ -457,6 +495,7 @@ function ProjectDetail({
   transferNotice,
   onBack,
   onOpenInIde,
+  onDelete,
   onViewWorkflow,
   onOpenRun,
 }: {
@@ -467,6 +506,7 @@ function ProjectDetail({
   transferNotice: DataTransferNotice | null
   onBack: () => void
   onOpenInIde: () => void
+  onDelete: () => void
   onViewWorkflow: () => void
   onOpenRun: (run: WorkflowRun) => void
 }): React.JSX.Element {
@@ -517,6 +557,10 @@ function ProjectDetail({
             >
               <FolderKanban aria-hidden="true" />
               {copy.projectDetail.openInIde}
+            </Button>
+            <Button variant="destructive" type="button" onClick={onDelete}>
+              <Trash2 aria-hidden="true" />
+              {copy.projectDetail.deleteAction}
             </Button>
           </div>
         </div>

@@ -63,5 +63,9 @@ export const projectCopy = {
     openError: '打开外部 IDE 失败。',
     transferNoticeTitle: 'Data Transfer Notice',
     transferDestination: 'External Destination',
+    deleteAction: '删除 Project',
+    deleteBlocked: '无法删除 Project。',
+    deleteSuccess: 'Project 已删除；本地 Workspace 和文件未受影响。',
+    deleteAlreadyDeleted: 'Project 已经删除；本地 Workspace 和文件未受影响。',
   },
 } as const

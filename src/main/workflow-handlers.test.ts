@@ -136,4 +136,77 @@ describe('Workflow IPC handlers', () => {
     await expect(handlers.get(APP_SHELL_CHANNELS.startWorkflowRun)?.({}, 'project-1', 'An idea')).resolves.toEqual({ ok: true, error: null, run: { id: 'run-1' } })
     expect(engine.startRun).toHaveBeenCalledWith(expect.objectContaining({ idea: 'An idea', workflow }))
   })
+
+  it('does not start new Workflow Runs for a soft-deleted Project', async () => {
+    const handlers = new Map<string, (...args: unknown[]) => unknown>()
+    const engine = {
+      preflight: vi.fn(),
+      startRun: vi.fn()
+    }
+    const projectService = {
+      findById: vi.fn().mockResolvedValue({
+        id: 'project-1',
+        workspacePath: '/work/demo',
+        status: 'deleted',
+        deletedAt: '2026-08-30T00:00:00.000Z'
+      })
+    }
+
+    registerWorkflowHandlers({
+      handle: (channel, listener) => handlers.set(channel, listener),
+      projectService,
+      workflowService: {
+        getBuiltIn: vi.fn(),
+        copyToProject: vi.fn(),
+        loadProject: vi.fn(),
+        startProjectRun: vi.fn()
+      },
+      workflowEngine: engine as never
+    })
+
+    await expect(handlers.get(APP_SHELL_CHANNELS.preflightWorkflowRun)?.({}, 'project-1', 'An idea')).resolves.toEqual({
+      passed: false,
+      checks: [],
+      errors: ['找不到这个 Project。']
+    })
+    await expect(handlers.get(APP_SHELL_CHANNELS.startWorkflowRun)?.({}, 'project-1', 'An idea')).resolves.toEqual({
+      ok: false,
+      error: '找不到这个 Project。',
+      run: null
+    })
+    expect(engine.preflight).not.toHaveBeenCalled()
+    expect(engine.startRun).not.toHaveBeenCalled()
+  })
+
+  it('does not retry a Run after its Project has been soft-deleted', async () => {
+    const handlers = new Map<string, (...args: unknown[]) => unknown>()
+    const engine = {
+      getRun: vi.fn().mockResolvedValue({ projectId: 'project-1' }),
+      retryStep: vi.fn().mockResolvedValue({ id: 'run-1', status: 'running' })
+    }
+    const projectService = {
+      findById: vi.fn().mockResolvedValue({
+        id: 'project-1',
+        workspacePath: '/work/demo',
+        status: 'deleted',
+        deletedAt: '2026-08-30T00:00:00.000Z'
+      }),
+      withProjectRegistryLock: <T>(action: () => Promise<T>) => action()
+    }
+
+    registerWorkflowHandlers({
+      handle: (channel, listener) => handlers.set(channel, listener),
+      projectService,
+      workflowService: {
+        getBuiltIn: vi.fn(),
+        copyToProject: vi.fn(),
+        loadProject: vi.fn(),
+        startProjectRun: vi.fn()
+      },
+      workflowEngine: engine as never
+    })
+
+    await expect(handlers.get(APP_SHELL_CHANNELS.retryWorkflowStep)?.({}, 'run-1')).rejects.toThrow('找不到这个 Project。')
+    expect(engine.retryStep).not.toHaveBeenCalled()
+  })
 })

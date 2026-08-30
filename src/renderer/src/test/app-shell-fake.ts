@@ -14,6 +14,7 @@ export function createAppShellApi(): AppShellApi {
     listProjects: vi.fn().mockResolvedValue([]),
     importProject: vi.fn().mockResolvedValue(null),
     cloneGitHubProject: vi.fn().mockResolvedValue(null),
+    deleteProject: vi.fn().mockResolvedValue({ ok: true, status: 'deleted', project: null, error: null }),
     openProjectInIde: vi.fn().mockResolvedValue({ ok: true, error: null }),
     getWorkflow: vi.fn().mockResolvedValue({
       definition: BUILT_IN_DEVELOPMENT_WORKFLOW,

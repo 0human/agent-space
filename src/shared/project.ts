@@ -68,9 +68,26 @@ export interface Project extends WorkspaceState {
   name: string
   workspacePath: string
   updatedAt: string
+  status?: ProjectStatus
+  deletedAt?: string | null
   permissionPolicy?: PermissionPolicy
   deliveryPolicy?: ProjectDeliveryPolicy
   release?: ProjectReleaseConfig
+}
+
+export type ProjectStatus = 'active' | 'deleted'
+
+export function isProjectDeleted(project: Pick<Project, 'status' | 'deletedAt'>): boolean {
+  return project.status === 'deleted' || Boolean(project.deletedAt)
+}
+
+export type ProjectDeletionStatus = 'deleted' | 'already-deleted' | 'blocked' | 'not-found'
+
+export interface ProjectDeletionResult {
+  ok: boolean
+  status: ProjectDeletionStatus
+  project: Project | null
+  error: string | null
 }
 
 export interface ProjectImportResult {

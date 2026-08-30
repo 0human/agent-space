@@ -298,4 +298,141 @@ describe('Workspace inspection', () => {
     expect(second.workspacePath).toBe(resolve('/work/demo'))
     expect(JSON.parse(stored)).toHaveLength(1)
   })
+
+  it('soft-deletes a Project while keeping its durable registration readable', async () => {
+    let stored = JSON.stringify([{
+      id: 'project-1',
+      name: 'demo',
+      workspacePath: '/work/demo',
+      workspaceAvailable: true,
+      remote: null,
+      currentBranch: 'main',
+      head: 'abc123',
+      defaultBranch: 'main',
+      isGreenfield: false,
+      dirty: false,
+      dirtySummary: { staged: 0, unstaged: 0, untracked: 0, files: [] },
+      updatedAt: '2026-08-14T00:00:00.000Z'
+    }])
+    const service = createProjectService({
+      readFile: async () => stored,
+      writeFile: async (_path, data) => { stored = data },
+      mkdir: async () => undefined,
+      now: () => '2026-08-30T00:00:00.000Z',
+      execGit: async () => ''
+    })
+
+    const result = await service.deleteProject('/data/projects.json', 'project-1')
+
+    expect(result).toMatchObject({ ok: true, status: 'deleted' })
+    expect(result.project).toMatchObject({
+      id: 'project-1',
+      status: 'deleted',
+      deletedAt: '2026-08-30T00:00:00.000Z'
+    })
+    await expect(service.list('/data/projects.json')).resolves.toEqual([])
+    await expect(service.findById('/data/projects.json', 'project-1')).resolves.toMatchObject({
+      id: 'project-1',
+      workspacePath: '/work/demo',
+      status: 'deleted',
+      deletedAt: '2026-08-30T00:00:00.000Z'
+    })
+  })
+
+  it('blocks deletion while a Workflow Run is still in progress', async () => {
+    let stored = JSON.stringify([{
+      id: 'project-1',
+      name: 'demo',
+      workspacePath: '/work/demo',
+      workspaceAvailable: true,
+      remote: null,
+      currentBranch: 'main',
+      head: 'abc123',
+      defaultBranch: 'main',
+      isGreenfield: false,
+      dirty: false,
+      dirtySummary: { staged: 0, unstaged: 0, untracked: 0, files: [] },
+      updatedAt: '2026-08-14T00:00:00.000Z'
+    }])
+    const writeFile = vi.fn(async (_path: string, data: string) => { stored = data })
+    const service = createProjectService({
+      readFile: async () => stored,
+      writeFile,
+      mkdir: async () => undefined,
+      hasActiveWorkflowRuns: vi.fn().mockResolvedValue(true),
+      now: () => '2026-08-30T00:00:00.000Z',
+      execGit: async () => ''
+    })
+
+    await expect(service.deleteProject('/data/projects.json', 'project-1')).resolves.toMatchObject({
+      ok: false,
+      status: 'blocked',
+      error: 'Project 存在进行中的 Workflow Run。'
+    })
+    expect(writeFile).not.toHaveBeenCalled()
+    expect(JSON.parse(stored)[0]).not.toHaveProperty('deletedAt')
+  })
+
+  it('does not reuse a deleted registration when the same Workspace is imported again', async () => {
+    let stored = JSON.stringify([{
+      id: 'deleted-project-1',
+      name: 'old-demo',
+      workspacePath: resolve('/work/demo'),
+      workspaceAvailable: true,
+      remote: null,
+      currentBranch: 'main',
+      head: 'abc123',
+      defaultBranch: 'main',
+      isGreenfield: false,
+      dirty: false,
+      dirtySummary: { staged: 0, unstaged: 0, untracked: 0, files: [] },
+      status: 'deleted',
+      deletedAt: '2026-08-30T00:00:00.000Z',
+      updatedAt: '2026-08-30T00:00:00.000Z'
+    }])
+    let nextId = 0
+    const service = createProjectService({
+      readFile: async () => stored,
+      writeFile: async (_path, data) => { stored = data },
+      mkdir: async () => undefined,
+      createId: () => `project-${++nextId}`,
+      execGit: async (_path, args) => {
+        if (args.join(' ') === 'rev-parse --is-inside-work-tree') return 'true\n'
+        return ''
+      }
+    })
+
+    const imported = await service.importDirectory('/data/projects.json', '/work/demo')
+
+    expect(imported.id).toBe('project-1')
+    expect(imported.status).toBe('active')
+    expect(JSON.parse(stored)).toHaveLength(2)
+    expect(JSON.parse(stored)[0]).toMatchObject({ id: 'deleted-project-1', status: 'deleted' })
+  })
+
+  it('reports an already deleted Project without changing its deletion timestamp', async () => {
+    const stored = JSON.stringify([{
+      id: 'project-1',
+      name: 'demo',
+      workspacePath: '/work/demo',
+      status: 'deleted',
+      deletedAt: '2026-08-29T00:00:00.000Z',
+      updatedAt: '2026-08-29T00:00:00.000Z'
+    }])
+    const writeFile = vi.fn()
+    const service = createProjectService({
+      readFile: async () => stored,
+      writeFile,
+      mkdir: async () => undefined,
+      hasActiveWorkflowRuns: vi.fn().mockRejectedValue(new Error('must not inspect terminal Project runs')),
+      execGit: async () => ''
+    })
+
+    await expect(service.deleteProject('/data/projects.json', 'project-1')).resolves.toMatchObject({
+      ok: true,
+      status: 'already-deleted',
+      project: { id: 'project-1', deletedAt: '2026-08-29T00:00:00.000Z' }
+    })
+    expect(writeFile).not.toHaveBeenCalled()
+  })
 })

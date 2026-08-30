@@ -8,6 +8,7 @@ const appShellApi: AppShellApi = Object.freeze({
   listProjects: () => ipcRenderer.invoke(APP_SHELL_CHANNELS.listProjects),
   importProject: () => ipcRenderer.invoke(APP_SHELL_CHANNELS.importProject),
   cloneGitHubProject: (repositoryUrl) => ipcRenderer.invoke(APP_SHELL_CHANNELS.cloneGitHubProject, repositoryUrl),
+  deleteProject: (projectId) => ipcRenderer.invoke(APP_SHELL_CHANNELS.deleteProject, projectId),
   openProjectInIde: (projectId) => ipcRenderer.invoke(APP_SHELL_CHANNELS.openProjectInIde, projectId),
   getWorkflow: (projectId) => ipcRenderer.invoke(APP_SHELL_CHANNELS.getWorkflow, projectId),
   copyWorkflow: (projectId) => ipcRenderer.invoke(APP_SHELL_CHANNELS.copyWorkflow, projectId),

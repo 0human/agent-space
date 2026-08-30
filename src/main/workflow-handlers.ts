@@ -1,7 +1,7 @@
 import { join } from 'node:path'
 
 import { APP_SHELL_CHANNELS } from '../shared/app-shell'
-import { DEFAULT_PROJECT_PERMISSIONS, type Project } from '../shared/project'
+import { DEFAULT_PROJECT_PERMISSIONS, isProjectDeleted, type Project } from '../shared/project'
 import type { WorkflowView } from '../shared/workflow'
 import type { WorkflowPreflightResult, WorkflowRunActionResult } from '../shared/workflow-run'
 import type { WorkflowEngine } from './workflow-engine'
@@ -25,7 +25,8 @@ interface WorkflowHandlerDependencies {
 export function registerWorkflowHandlers({ handle, projectService, workflowService, workflowEngine, userDataPath = '', openInIde }: WorkflowHandlerDependencies): void {
   const findProject = async (projectId: unknown): Promise<Project | null> => {
     if (typeof projectId !== 'string' || !projectId) return null
-    return projectService.findById(join(userDataPath, 'projects.json'), projectId)
+    const project = await projectService.findById(join(userDataPath, 'projects.json'), projectId)
+    return project && !isProjectDeleted(project) ? project : null
   }
   const permissionsFor = (project: Project): string[] => project.permissionPolicy?.grantedPermissions ?? [...DEFAULT_PROJECT_PERMISSIONS]
   const loadForProject = async (project: Project): Promise<WorkflowView> => {

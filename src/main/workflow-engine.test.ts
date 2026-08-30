@@ -88,6 +88,21 @@ describe('WorkflowEngine public API', () => {
     if (directory) await rm(directory, { recursive: true, force: true })
   })
 
+  it('does not preflight a soft-deleted Project', async () => {
+    directory = await mkdtemp(join(tmpdir(), 'agent-space-run-'))
+    engine = createWorkflowEngine({ databasePath: join(directory, 'runs.sqlite'), runtime: new FakeRuntime() })
+
+    await expect(engine.preflight({
+      project: { ...project, status: 'deleted', deletedAt: '2026-08-30T00:00:00.000Z' },
+      workflow,
+      idea: 'An idea'
+    })).resolves.toEqual({
+      passed: false,
+      checks: [],
+      errors: ['找不到这个 Project。']
+    })
+  })
+
   it('preflights, persists a completed Run, and restores it after restart', async () => {
     directory = await mkdtemp(join(tmpdir(), 'agent-space-run-'))
     const runtime = new FakeRuntime()

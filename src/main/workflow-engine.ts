@@ -15,7 +15,7 @@ import type {
 import type { GitMergeRequest, GitPullRequestRequest, GitPullRequestResult } from './git-delivery'
 import { createSqliteRunStore } from './workflow-store'
 import { zhCNMain } from '../shared/i18n/zh-CN'
-import { DEFAULT_PROJECT_PERMISSIONS, RELEASE_OPERATIONS, RELEASE_PLATFORMS, type PermissionPolicy, type ProjectDeliveryPolicy } from '../shared/project'
+import { DEFAULT_PROJECT_PERMISSIONS, isProjectDeleted, RELEASE_OPERATIONS, RELEASE_PLATFORMS, type PermissionPolicy, type ProjectDeliveryPolicy } from '../shared/project'
 import type { ReleaseOperation, ReleasePlatform, ProjectReleaseStep } from '../shared/project'
 import { createDefaultReleaseManager, resolveProjectReleaseStep, type ReleaseManager } from './release-manager'
 
@@ -314,6 +314,7 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
 
   return {
     async preflight(input): Promise<WorkflowPreflightResult> {
+      if (isProjectDeleted(input.project)) return { passed: false, checks: [], errors: ['找不到这个 Project。'] }
       const checks: string[] = []
       const errors: string[] = []
       if (input.project.workspaceAvailable === false) errors.push(zhCNMain.workflowRun.workspaceUnavailable)

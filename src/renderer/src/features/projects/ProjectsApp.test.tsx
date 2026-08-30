@@ -207,6 +207,41 @@ describe('Project through the App seam', () => {
     expect(screen.getByText('Clean Workspace')).toBeVisible()
   })
 
+  it('removes a Project from the active overview after soft deletion', async () => {
+    const user = userEvent.setup()
+    const project = {
+      id: 'project-1',
+      name: 'demo',
+      workspacePath: '/work/demo',
+      workspaceAvailable: true,
+      remote: null,
+      currentBranch: 'main',
+      head: 'abc123',
+      defaultBranch: 'main',
+      isGreenfield: false,
+      dirty: false,
+      dirtySummary: { staged: 0, unstaged: 0, untracked: 0, files: [] },
+      updatedAt: '2026-08-30T00:00:00.000Z',
+    }
+    window.appShell.listProjects = vi.fn().mockResolvedValue([project])
+    window.appShell.deleteProject = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 'deleted',
+      project: { ...project, status: 'deleted', deletedAt: '2026-08-30T00:00:00.000Z' },
+      error: null,
+    })
+
+    render(<App />)
+    await user.click(await screen.findByRole('button', { name: /demo/ }))
+    await user.click(screen.getByRole('button', { name: '删除 Project' }))
+
+    expect(window.appShell.deleteProject).toHaveBeenCalledWith('project-1')
+    expect(await screen.findByRole('heading', { name: '还没有 Project' })).toBeVisible()
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Project 已删除；本地 Workspace 和文件未受影响。',
+    )
+  })
+
   it('shows an error when the Workspace cannot be opened externally', async () => {
     const user = userEvent.setup()
     window.appShell.listProjects = vi.fn().mockResolvedValue([

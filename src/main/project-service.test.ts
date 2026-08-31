@@ -177,13 +177,26 @@ describe('Workspace inspection', () => {
     })
   })
 
-  it('rejects a non-empty non-Git directory', async () => {
-    await expect(inspectWorkspace('/work/not-empty', {
-      execGit: async () => {
+  it('accepts a non-empty non-Git directory without modifying its contents', async () => {
+    const execGit = vi.fn(async () => {
         throw new Error('not a git repository')
-      },
+      })
+
+    await expect(inspectWorkspace('/work/not-empty', {
+      execGit,
       readDirectory: async () => ['README.md']
-    })).rejects.toThrow('目录不是 Git Workspace，也不是空目录')
+    })).resolves.toEqual({
+      workspaceAvailable: true,
+      remote: null,
+      currentBranch: null,
+      head: null,
+      defaultBranch: null,
+      isGreenfield: true,
+      dirty: true,
+      dirtySummary: { staged: 0, unstaged: 0, untracked: 1, files: ['README.md'] }
+    })
+    expect(execGit).toHaveBeenCalledTimes(1)
+    expect(execGit).toHaveBeenCalledWith('/work/not-empty', ['rev-parse', '--is-inside-work-tree'])
   })
 
   it('persists imported metadata and refreshes Git state when listed again', async () => {
@@ -292,11 +305,42 @@ describe('Workspace inspection', () => {
     })
 
     const first = await service.importDirectory('/data/projects.json', '/work/demo')
-    const second = await service.importDirectory('/data/projects.json', '/work/demo/')
+    const second = await service.importDirectoryWithStatus('/data/projects.json', '/work/demo/')
 
-    expect(second.id).toBe(first.id)
-    expect(second.workspacePath).toBe(resolve('/work/demo'))
+    expect(second.alreadyRegistered).toBe(true)
+    expect(second.project.id).toBe(first.id)
+    expect(second.project.workspacePath).toBe(resolve('/work/demo'))
     expect(JSON.parse(stored)).toHaveLength(1)
+  })
+
+  it('leaves the canonical registry unchanged when importing a Project cannot be committed', async () => {
+    const original = JSON.stringify([{
+      id: 'project-1',
+      name: 'existing',
+      workspacePath: '/work/existing',
+      updatedAt: '2026-08-29T00:00:00.000Z'
+    }])
+    let stored = original
+    const writeFile = vi.fn(async (path: string) => {
+      if (path === '/data/projects.json') stored = 'partial registry'
+    })
+    const rename = vi.fn().mockRejectedValue(new Error('interrupted'))
+    const unlink = vi.fn().mockResolvedValue(undefined)
+    const service = createProjectService({
+      readFile: async () => stored,
+      writeFile,
+      rename,
+      unlink,
+      mkdir: async () => undefined,
+      readDirectory: async () => ['README.md'],
+      execGit: async () => { throw new Error('not a git repository') }
+    })
+
+    await expect(service.importDirectory('/data/projects.json', '/work/new-project')).rejects.toThrow('interrupted')
+    expect(stored).toBe(original)
+    expect(writeFile).toHaveBeenCalledWith(expect.stringMatching(/projects\.json\.tmp-/), expect.any(String), 'utf8')
+    expect(rename).toHaveBeenCalledWith(expect.stringMatching(/projects\.json\.tmp-/), '/data/projects.json')
+    expect(unlink).toHaveBeenCalledWith(expect.stringMatching(/projects\.json\.tmp-/))
   })
 
   it('soft-deletes a Project while keeping its durable registration readable', async () => {

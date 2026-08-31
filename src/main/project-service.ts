@@ -79,8 +79,11 @@ export async function inspectWorkspace(
   } catch {
     const entries = await (dependencies.readDirectory ?? (async (path: string) => readdir(path)))
       (workspacePath)
-    if (entries.length > 0) {
-      throw new Error('目录不是 Git Workspace，也不是空目录')
+    const dirtySummary: DirtyWorkspaceSummary = {
+      staged: 0,
+      unstaged: 0,
+      untracked: entries.length,
+      files: entries
     }
 
     return {
@@ -90,8 +93,8 @@ export async function inspectWorkspace(
       head: null,
       defaultBranch: null,
       isGreenfield: true,
-      dirty: false,
-      dirtySummary: emptyDirtySummary()
+      dirty: entries.length > 0,
+      dirtySummary
     }
   }
 
@@ -202,7 +205,7 @@ export function createProjectService(dependencies: ProjectServiceDependencies) {
     }
   }
 
-  async function importDirectory(filePath: string, workspacePath: string): Promise<Project> {
+  async function registerDirectory(filePath: string, workspacePath: string): Promise<{ project: Project; alreadyRegistered: boolean }> {
     return withProjectRegistryLock(async () => {
       const normalizedWorkspacePath = resolve(workspacePath)
       const state = await inspectWorkspace(normalizedWorkspacePath, dependencies)
@@ -224,7 +227,7 @@ export function createProjectService(dependencies: ProjectServiceDependencies) {
         ? projects.map((candidate) => candidate.id === existing.id ? project : candidate)
         : [...projects, project]
       await save(filePath, next)
-      return project
+      return { project, alreadyRegistered: Boolean(existing) }
     })
   }
 
@@ -256,7 +259,11 @@ export function createProjectService(dependencies: ProjectServiceDependencies) {
     },
 
     async importDirectory(filePath: string, workspacePath: string): Promise<Project> {
-      return importDirectory(filePath, workspacePath)
+      return (await registerDirectory(filePath, workspacePath)).project
+    },
+
+    async importDirectoryWithStatus(filePath: string, workspacePath: string): Promise<{ project: Project; alreadyRegistered: boolean }> {
+      return registerDirectory(filePath, workspacePath)
     },
 
     async cloneGitHub(filePath: string, repositoryUrl: string, destinationPath: string): Promise<Project> {
@@ -272,7 +279,7 @@ export function createProjectService(dependencies: ProjectServiceDependencies) {
       let existingRemote: string | null = null
       try {
         const state = await inspectWorkspace(workspacePath, dependencies)
-        existing = !state.isGreenfield
+        existing = !state.isGreenfield || state.dirty
         existingRemote = state.remote
       } catch {
         const entries = await (dependencies.readDirectory?.(workspacePath) ?? Promise.resolve([])).catch(() => [])
@@ -301,7 +308,7 @@ export function createProjectService(dependencies: ProjectServiceDependencies) {
       } catch (reason) {
         throw sanitizeGitError(reason)
       }
-      return importDirectory(filePath, workspacePath)
+      return (await registerDirectory(filePath, workspacePath)).project
     },
 
     async findById(filePath: string, projectId: string): Promise<Project | null> {

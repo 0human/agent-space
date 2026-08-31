@@ -96,6 +96,16 @@ function workspaceAllowed(project: WorkflowPreflightInput['project']): boolean {
   return isPathAllowed(project.workspacePath, project.permissionPolicy?.allowedPaths)
 }
 
+function workspacePreflightSummary(project: WorkflowPreflightInput['project']): string {
+  const branch = project.currentBranch ?? (project.isGreenfield ? '未初始化 Git' : 'Detached HEAD')
+  const head = project.head ?? '暂无 commit'
+  if (!project.dirty) return `Workspace 基线：branch ${branch}；HEAD ${head}；Clean Workspace。`
+
+  const summary = project.dirtySummary
+  const files = summary.files.length > 0 ? `；未提交文件：${summary.files.join(', ')}` : ''
+  return `Workspace 基线：branch ${branch}；HEAD ${head}；Dirty Workspace（staged ${summary.staged}，unstaged ${summary.unstaged}，untracked ${summary.untracked}）${files}。`
+}
+
 function verifiedCommit(run: Pick<WorkflowRun, 'artifacts'> | null): string | null {
   return run?.artifacts.find((artifact) => artifact.type === 'commit' && artifact.versionHash)?.versionHash ?? null
 }
@@ -326,7 +336,10 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
       const checks: string[] = []
       const errors: string[] = []
       if (input.project.workspaceAvailable === false) errors.push(zhCNMain.workflowRun.workspaceUnavailable)
-      else checks.push(zhCNMain.workflowRun.workspaceAvailable)
+      else {
+        checks.push(zhCNMain.workflowRun.workspaceAvailable)
+        checks.push(workspacePreflightSummary(input.project))
+      }
       if (!workspaceAllowed(input.project)) errors.push('Permission Policy 阻止访问 Project Workspace 目录。')
       if (!input.workflow.canStart || !input.workflow.validation.valid) errors.push(zhCNMain.workflowRun.workflowInvalid(input.workflow.validation.errors.join(' ')))
       else checks.push(zhCNMain.workflowRun.workflowValid)

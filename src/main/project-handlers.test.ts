@@ -46,6 +46,7 @@ describe('Project IPC handlers', () => {
 
     await expect(handlers.get(APP_SHELL_CHANNELS.importProject)?.({})).resolves.toEqual({
       project,
+      notice: null,
       warning: '该 Workspace 有未提交修改。继续导入不会 stash、reset 或丢弃这些修改。'
     })
     expect(dialog.showMessageBox).toHaveBeenCalledWith(expect.objectContaining({
@@ -53,6 +54,37 @@ describe('Project IPC handlers', () => {
       cancelId: 1
     }))
     expect(service.importDirectory).toHaveBeenCalledWith(join('/data', 'projects.json'), '/work/demo')
+  })
+
+  it('opens an existing registration with an explainable notice instead of creating a duplicate', async () => {
+    const handlers = new Map<string, (...args: unknown[]) => unknown>()
+    const importDirectoryWithStatus = vi.fn().mockResolvedValue({
+      project: { ...project, dirty: false },
+      alreadyRegistered: true
+    })
+    registerProjectHandlers({
+      handle: (channel, listener) => handlers.set(channel, listener),
+      dialog: {
+        showOpenDialog: vi.fn().mockResolvedValue({ canceled: false, filePaths: ['/work/demo'] }),
+        showMessageBox: vi.fn()
+      },
+      openInIde: vi.fn(),
+      userDataPath: '/data',
+      service: {
+        list: vi.fn(),
+        inspectDirectory: vi.fn().mockResolvedValue({ dirty: false }),
+        importDirectory: vi.fn(),
+        importDirectoryWithStatus,
+        findById: vi.fn()
+      }
+    })
+
+    await expect(handlers.get(APP_SHELL_CHANNELS.importProject)?.({})).resolves.toMatchObject({
+      project: { id: 'project-1' },
+      notice: '该 Workspace 已登记为 Project，已打开现有 Project，没有创建重复记录。',
+      warning: null
+    })
+    expect(importDirectoryWithStatus).toHaveBeenCalledTimes(1)
   })
 
   it('shows a Data Transfer Notice before cloning a GitHub Project', async () => {

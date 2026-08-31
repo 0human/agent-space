@@ -131,6 +131,42 @@ describe('Project through the App seam', () => {
     expect(window.appShell.openProjectInIde).toHaveBeenCalledWith('project-1')
   })
 
+  it('explains when an imported Workspace reuses an existing Project registration', async () => {
+    const user = userEvent.setup()
+    const project = {
+      id: 'project-1',
+      name: 'demo',
+      workspacePath: '/work/demo',
+      workspaceAvailable: true,
+      remote: null,
+      currentBranch: null,
+      head: null,
+      defaultBranch: null,
+      isGreenfield: true,
+      dirty: false,
+      dirtySummary: { staged: 0, unstaged: 0, untracked: 0, files: [] },
+      updatedAt: '2026-08-14T00:00:00.000Z',
+    }
+    window.appShell.importProject = vi.fn().mockResolvedValue({
+      project,
+      warning: null,
+      notice:
+        '该 Workspace 已登记为 Project，已打开现有 Project，没有创建重复记录。',
+    })
+
+    render(<App />)
+    await user.click(screen.getByRole('button', { name: '创建 Project' }))
+    await user.click(
+      screen.getByRole('button', { name: '选择 Workspace 目录' }),
+    )
+
+    expect(screen.getByRole('heading', { name: 'demo' })).toBeVisible()
+    expect(screen.getByRole('status')).toHaveTextContent(
+      '该 Workspace 已登记为 Project，已打开现有 Project，没有创建重复记录。',
+    )
+    expect(screen.getByText('未初始化 Git 的本地 Project')).toBeVisible()
+  })
+
   it('clones a GitHub Project only after showing its transfer boundary', async () => {
     const user = userEvent.setup()
     const project = {

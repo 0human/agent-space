@@ -21,7 +21,7 @@ export const projectCopy = {
     resumeEyebrow: '恢复工作',
     resumeTitle: '恢复工作',
     backAction: '返回 Project 概览',
-    description: '选择已有 Git 目录，或选择空目录创建 Greenfield Project。',
+    description: '选择已有 Git 目录、普通本地目录或空目录作为 Project Workspace。',
     chooseAction: '选择 Workspace 目录',
     githubAction: '从 GitHub clone Project',
     githubUrlLabel: 'GitHub 仓库地址',
@@ -37,7 +37,7 @@ export const projectCopy = {
     openInIde: '在外部 IDE 中打开',
     type: 'Project 类型',
     gitProject: 'Git Project',
-    greenfieldProject: 'Greenfield Project',
+    greenfieldProject: '未初始化 Git 的本地 Project',
     dirtyTitle: 'Dirty Workspace',
     dirtyDescription:
       '此 Workspace 有未提交修改。Agent Space 不会 stash、reset 或丢弃这些修改。',

@@ -103,6 +103,7 @@ export interface ProjectDeletionResult {
 export interface ProjectImportResult {
   project: Project
   warning: string | null
+  notice?: string | null
 }
 
 export interface DataTransferNotice {

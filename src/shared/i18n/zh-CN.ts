@@ -5,6 +5,7 @@ export const zhCNMain = {
     dirtyMessage: '该 Workspace 有未提交修改。',
     dirtyDetail: '继续导入不会 stash、reset 或丢弃这些修改。',
     dirtyWarning: '该 Workspace 有未提交修改。继续导入不会 stash、reset 或丢弃这些修改。',
+    alreadyRegistered: '该 Workspace 已登记为 Project，已打开现有 Project，没有创建重复记录。',
     continueAction: '继续导入',
     cancelAction: '取消',
     githubDestinationTitle: '选择 GitHub Project 的本地目录',

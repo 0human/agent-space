@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import type { Project } from '../shared/project'
-import type { WorkflowView } from '../shared/workflow'
+import { BUILT_IN_DEVELOPMENT_WORKFLOW, type WorkflowView } from '../shared/workflow'
 import type { AgentRuntimeAdapter, RuntimeEvent, RuntimeExecutionContext } from '../shared/workflow-run'
 import { createWorkflowEngine, type WorkflowEngine } from './workflow-engine'
 import { createFakeRuntimeAdapter } from './fake-runtime'
@@ -112,7 +112,12 @@ describe('WorkflowEngine public API', () => {
     const input = { project, workflow, idea: 'Build a durable workflow run' }
     await expect(engine.preflight(input)).resolves.toEqual({
       passed: true,
-      checks: ['Project Workspace 可访问。', 'Project Workflow Validation 通过。', 'Idea 已填写。'],
+      checks: [
+        'Project Workspace 可访问。',
+        'Workspace 基线：branch main；HEAD abc123；Clean Workspace。',
+        'Project Workflow Validation 通过。',
+        'Idea 已填写。'
+      ],
       errors: []
     })
 
@@ -158,6 +163,103 @@ describe('WorkflowEngine public API', () => {
       stepExecutions: [expect.objectContaining({ runtimeLocator })],
       artifacts: [expect.objectContaining({ name: 'domain-docs' })]
     })
+  })
+
+  it('shows non-Git Workspace contents in Run Preflight without blocking the Run', async () => {
+    directory = await mkdtemp(join(tmpdir(), 'agent-space-run-'))
+    engine = createWorkflowEngine({ databasePath: join(directory, 'runs.sqlite'), runtime: new FakeRuntime() })
+
+    const result = await engine.preflight({
+      project: {
+        ...project,
+        currentBranch: null,
+        head: null,
+        defaultBranch: null,
+        isGreenfield: true,
+        dirty: true,
+        dirtySummary: { staged: 0, unstaged: 0, untracked: 2, files: ['README.md', 'src'] }
+      },
+      workflow,
+      idea: 'Continue an existing local project'
+    })
+
+    expect(result).toMatchObject({ passed: true, errors: [] })
+    expect(result.checks).toContain(
+      'Workspace 基线：branch 未初始化 Git；HEAD 暂无 commit；Dirty Workspace（staged 0，unstaged 0，untracked 2）；未提交文件：README.md, src。'
+    )
+  })
+
+  it('runs the built-in Development Workflow from Idea through local delivery', async () => {
+    directory = await mkdtemp(join(tmpdir(), 'agent-space-run-'))
+    const runtime = new FakeRuntime()
+    const commitAfterReview = vi.fn().mockResolvedValue({
+      commit: 'commit-main-flow',
+      artifact: { type: 'commit', name: 'commit-main-flow', versionHash: 'commit-main-flow' }
+    })
+    engine = createWorkflowEngine({
+      databasePath: join(directory, 'runs.sqlite'),
+      runtime,
+      gitDeliveryManager: { commitAfterReview }
+    })
+    const builtInWorkflow: WorkflowView = {
+      definition: BUILT_IN_DEVELOPMENT_WORKFLOW,
+      source: 'built-in',
+      path: null,
+      validation: { valid: true, errors: [], warnings: [] },
+      canStart: true,
+      skillManifests: []
+    }
+
+    const run = await engine.startRun({ project, workflow: builtInWorkflow, idea: 'Ship the complete local flow' })
+    const finishRuntimeStep = async (callCount: number, artifact?: RuntimeEvent): Promise<void> => {
+      await vi.waitFor(() => expect(runtime.calls).toHaveLength(callCount))
+      runtime.finish([
+        ...(artifact ? [artifact] : []),
+        { type: 'status_changed', status: 'completed' }
+      ])
+    }
+    const approveCurrentGate = async (approval: string): Promise<void> => {
+      await vi.waitFor(async () => {
+        await expect(engine.getRun(run.id)).resolves.toMatchObject({
+          status: 'waiting',
+          snapshot: { pendingApproval: approval }
+        })
+      })
+      await engine.approve(run.id)
+    }
+
+    await finishRuntimeStep(1, {
+      type: 'artifact_produced',
+      artifact: { type: 'document', name: 'domain-docs', location: '/work/demo/CONTEXT.md' }
+    })
+    await approveCurrentGate('确认测试 seam 并发布 GitHub 规格')
+    await finishRuntimeStep(2, {
+      type: 'artifact_produced',
+      artifact: { type: 'specification', name: 'specification', status: 'ready' }
+    })
+    await approveCurrentGate('批准发布带 blocking edges 的 GitHub tickets')
+    await finishRuntimeStep(3, {
+      type: 'artifact_produced',
+      artifact: { type: 'tickets', name: 'tickets', status: 'ready' }
+    })
+    await approveCurrentGate('高风险写操作确认')
+    await finishRuntimeStep(4)
+    await finishRuntimeStep(5, {
+      type: 'artifact_produced',
+      artifact: { type: 'review-report', name: 'automatic-review', status: 'passed' }
+    })
+
+    const completed = await engine.waitForIdle(run.id)
+    expect(completed).toMatchObject({ status: 'completed', snapshot: { nextAction: 'Workflow Run 已完成。' } })
+    expect(completed.artifacts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'domain-docs' }),
+      expect.objectContaining({ name: 'specification' }),
+      expect.objectContaining({ name: 'tickets' }),
+      expect.objectContaining({ name: 'automatic-review' }),
+      expect.objectContaining({ type: 'commit', versionHash: 'commit-main-flow' })
+    ]))
+    expect(commitAfterReview).toHaveBeenCalledTimes(1)
+    expect(completed.events.filter((event) => event.type === 'step_skipped')).toHaveLength(4)
   })
 
   it('persists a Runtime Locator before the Runtime execution completes', async () => {

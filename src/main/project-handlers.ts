@@ -8,6 +8,7 @@ interface ProjectService {
   list: (filePath: string) => Promise<Project[]>
   inspectDirectory: (workspacePath: string) => Promise<{ dirty: boolean }>
   importDirectory: (filePath: string, workspacePath: string) => Promise<Project>
+  importDirectoryWithStatus?: (filePath: string, workspacePath: string) => Promise<{ project: Project; alreadyRegistered: boolean }>
   findById: (filePath: string, projectId: string) => Promise<Project | null>
   deleteProject?: (filePath: string, projectId: string, confirmation?: ProjectDeletionConfirmation) => Promise<ProjectDeletionResult>
   cloneGitHub?: (filePath: string, repositoryUrl: string, destinationPath: string) => Promise<Project>
@@ -68,9 +69,13 @@ export function registerProjectHandlers({
       if (confirmation.response !== 0) return null
     }
 
-    const project = await service.importDirectory(filePath, workspacePath)
+    const imported = service.importDirectoryWithStatus
+      ? await service.importDirectoryWithStatus(filePath, workspacePath)
+      : { project: await service.importDirectory(filePath, workspacePath), alreadyRegistered: false }
+    const project = imported.project
     return {
       project,
+      notice: imported.alreadyRegistered ? copy.projectImport.alreadyRegistered : null,
       warning: project.dirty
         ? copy.projectImport.dirtyWarning
         : null

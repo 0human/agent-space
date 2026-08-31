@@ -46,6 +46,7 @@ export function ProjectFeature({
   const [notice, setNotice] = useState<string | null>(null)
   const [openError, setOpenError] = useState<string | null>(null)
   const [importWarning, setImportWarning] = useState<string | null>(null)
+  const [importNotice, setImportNotice] = useState<string | null>(null)
   const [transferNotice, setTransferNotice] =
     useState<DataTransferNotice | null>(null)
   const [cloneBlocked, setCloneBlocked] = useState<string | null>(null)
@@ -83,6 +84,7 @@ export function ProjectFeature({
   const openImportedProject = (
     project: Project,
     warning: string | null,
+    importNotice: string | null,
     notice: DataTransferNotice | null,
   ): void => {
     setProjects((current) => [
@@ -90,6 +92,7 @@ export function ProjectFeature({
       ...current.filter((candidate) => candidate.id !== project.id),
     ])
     setImportWarning(warning)
+    setImportNotice(importNotice)
     setTransferNotice(notice)
     setCloneBlocked(null)
     onNavigate({ name: 'projectDetail', project })
@@ -100,7 +103,7 @@ export function ProjectFeature({
     try {
       const result = await api.importProject()
       if (!result) return
-      openImportedProject(result.project, result.warning, null)
+      openImportedProject(result.project, result.warning, result.notice ?? null, null)
     } catch {
       setError(copy.projectEntry.importError)
     }
@@ -116,7 +119,7 @@ export function ProjectFeature({
         setTransferNotice(result.transferNotice)
         return
       }
-      openImportedProject(result.project, result.warning, result.transferNotice)
+      openImportedProject(result.project, result.warning, result.notice ?? null, result.transferNotice)
     } catch {
       setError(copy.projectEntry.importError)
     }
@@ -173,6 +176,7 @@ export function ProjectFeature({
         onOpen={(project) => {
           setOpenError(null)
           setImportWarning(null)
+          setImportNotice(null)
           setTransferNotice(null)
           setNotice(null)
           onNavigate({ name: 'projectDetail', project })
@@ -205,6 +209,7 @@ export function ProjectFeature({
       runs={runs}
       openError={openError}
       importWarning={importWarning}
+      importNotice={importNotice}
       transferNotice={transferNotice}
       onBack={() => onNavigate({ name: 'projectOverview' })}
       onOpenInIde={() => {
@@ -492,6 +497,7 @@ function ProjectDetail({
   runs,
   openError,
   importWarning,
+  importNotice,
   transferNotice,
   onBack,
   onOpenInIde,
@@ -503,6 +509,7 @@ function ProjectDetail({
   runs: WorkflowRun[]
   openError: string | null
   importWarning: string | null
+  importNotice: string | null
   transferNotice: DataTransferNotice | null
   onBack: () => void
   onOpenInIde: () => void
@@ -582,6 +589,11 @@ function ProjectDetail({
         {openError ? (
           <Alert variant="destructive" className="mt-5" role="alert">
             <AlertDescription>{openError}</AlertDescription>
+          </Alert>
+        ) : null}
+        {importNotice ? (
+          <Alert className="mt-5" role="status">
+            <AlertDescription>{importNotice}</AlertDescription>
           </Alert>
         ) : null}
         {transferNotice ? (

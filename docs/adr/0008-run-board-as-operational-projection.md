@@ -4,4 +4,4 @@ Run 主界面采用 Jira 风格的 Run Board：以 Phase 为列、以 Step 或 A
 
 ## Status
 
-accepted
+superseded by ADR-0018

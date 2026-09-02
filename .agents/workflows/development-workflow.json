@@ -14,13 +14,13 @@
       "id": "requirements",
       "name": "需求与领域文档",
       "goal": "将已确认的上下文形成可审阅规格。",
-      "steps": [{ "id": "spec", "name": "形成规格", "kind": "skill", "skill": { "name": "to-spec", "version": "1.0.0" }, "artifacts": ["specification"], "approvalGate": "确认测试 seam 并发布 GitHub 规格" }]
+      "steps": [{ "id": "spec", "name": "形成规格", "kind": "skill", "skill": { "name": "to-spec", "version": "1.0.0" }, "artifacts": ["specification"] }]
     },
     {
       "id": "planning",
       "name": "规划",
       "goal": "将规格拆分为有依赖关系的交付切片。",
-      "steps": [{ "id": "tickets", "name": "拆分 tickets", "kind": "skill", "skill": { "name": "to-tickets", "version": "1.0.0" }, "artifacts": ["tickets"], "condition": "planning.required", "approvalGate": "批准发布带 blocking edges 的 GitHub tickets" }]
+      "steps": [{ "id": "tickets", "name": "拆分 tickets", "kind": "skill", "skill": { "name": "to-tickets", "version": "1.0.0" }, "artifacts": ["tickets"], "condition": "planning.required" }]
     },
     {
       "id": "implementation",
@@ -30,9 +30,9 @@
     },
     {
       "id": "verification",
-      "name": "验证与 Review",
-      "goal": "检查结果并等待外部验证。",
-      "steps": [{ "id": "review", "name": "自动 Review", "kind": "skill", "skill": { "name": "code-review", "version": "1.0.0" }, "artifacts": ["review-report"] }]
+      "name": "产品验证",
+      "goal": "验证所有 Implementation Ticket 集成后的完整产品。",
+      "steps": [{ "id": "verify", "name": "产品级验证", "kind": "skill", "skill": { "name": "product-verification", "version": "1.0.0" }, "artifacts": ["verification-report"] }]
     },
     {
       "id": "delivery",

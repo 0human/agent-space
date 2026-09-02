@@ -39,6 +39,7 @@ interface CodexRuntimeDependencies {
 const QUESTION_PREFIX = 'QUESTION:'
 const APPROVAL_PREFIX = 'APPROVAL_REQUIRED:'
 const ARTIFACT_PREFIX = 'ARTIFACT:'
+const TICKET_PROGRESS_PREFIX = 'TICKET_PROGRESS:'
 const VERIFICATION_ARTIFACT_TYPES = ['check-result', 'test-result', 'review-report', 'commit'] as const
 
 const GIT_GUARD_SCRIPT = String.raw`#!/usr/bin/env node
@@ -228,6 +229,22 @@ function isArtifactInsideWorkspace(artifact: RuntimeArtifact, workspacePath: str
 function parseAgentMessage(text: string, sessionId?: string): RuntimeEvent {
   if (text.startsWith(QUESTION_PREFIX)) return { type: 'question', question: text.slice(QUESTION_PREFIX.length).trim(), ...(sessionId ? { sessionId } : {}) }
   if (text.startsWith(APPROVAL_PREFIX)) return { type: 'approval_required', approval: text.slice(APPROVAL_PREFIX.length).trim(), ...(sessionId ? { sessionId } : {}) }
+  if (text.startsWith(TICKET_PROGRESS_PREFIX)) {
+    try {
+      const progress = JSON.parse(text.slice(TICKET_PROGRESS_PREFIX.length).trim()) as Record<string, unknown>
+      if (['implementation', 'testing', 'review', 'commit'].includes(String(progress.stage)) && ['pending', 'running', 'completed', 'failed', 'skipped'].includes(String(progress.status))) {
+        return {
+          type: 'ticket_progress',
+          stage: progress.stage as Extract<RuntimeEvent, { type: 'ticket_progress' }>['stage'],
+          status: progress.status as Extract<RuntimeEvent, { type: 'ticket_progress' }>['status'],
+          ...(sessionId ? { sessionId } : {})
+        }
+      }
+    } catch {
+      // Preserve malformed protocol messages as displayable text.
+    }
+    return { type: 'text_delta', text, ...(sessionId ? { sessionId } : {}) }
+  }
   if (text.startsWith(ARTIFACT_PREFIX)) {
     try {
       const artifact = JSON.parse(text.slice(ARTIFACT_PREFIX.length).trim()) as RuntimeArtifact
@@ -270,6 +287,8 @@ function sanitizeRuntimeEvent(event: RuntimeEvent): RuntimeEvent {
       return { type: 'question', ...metadata, question: sanitizeSensitiveText(event.question) }
     case 'approval_required':
       return { type: 'approval_required', ...metadata, approval: sanitizeSensitiveText(event.approval) }
+    case 'ticket_progress':
+      return { type: 'ticket_progress', ...metadata, stage: event.stage, status: event.status }
     case 'status_changed':
       return { type: 'status_changed', ...metadata, status: event.status, ...(typeof event.reason === 'string' ? { reason: sanitizeSensitiveText(event.reason) } : {}) }
     case 'error':
@@ -398,6 +417,7 @@ function promptFor(context: RuntimeExecutionContext, skillInstructions: string):
     `Workflow Run ID: ${context.runId}（所有 GitHub spec、ticket、Decision Record 和 URL 必须在正文或 Artifact 元数据中关联此 Run ID。）`,
     `Idea: ${context.idea}`,
     `Phase: ${context.workflow.phases[context.phaseIndex]?.id ?? 'unknown'}`,
+    `Implementation Ticket: ${context.implementationTicket ? `${context.implementationTicket.id} · ${context.implementationTicket.position} · ${context.implementationTicket.title}` : '(none)'}`,
     `Workspace: ${context.workspace.path}`,
     `Phase Context: ${context.phaseContext?.content ?? '(empty)'}`,
     `Input Artifacts: ${JSON.stringify(context.inputArtifacts)}`,
@@ -407,6 +427,7 @@ function promptFor(context: RuntimeExecutionContext, skillInstructions: string):
     'Fixed Skill instructions:',
     skillInstructions,
     '需要用户回答时，最后一条消息必须以 QUESTION: 开头；需要审批时以 APPROVAL_REQUIRED: 开头。',
+    '执行 Implementation Ticket 时，在实现、测试、Review、Commit 子流程变化后输出 TICKET_PROGRESS: {"stage":"implementation|testing|review|commit","status":"running|completed|failed|skipped"}。',
     '确认写入 CONTEXT.md 或 docs/adr/*.md，或已获批准发布 GitHub spec/ticket 后，输出 ARTIFACT: 后跟 JSON 对象。GitHub URL 仅允许 https://github.com/；普通聊天、日志和临时文件不要标记为 Artifact。implement 和 code-review 完成时必须将 typecheck、相关测试、全量测试和 review 结果写入 Workspace，并分别输出 type 为 check-result、test-result、review-report 的 Artifact。code-review 发现问题时必须先在当前 Workspace 修复，再重新运行相关检查和 review，直到结果通过后才报告 completed。'
   ].join('\n')
 }
@@ -473,6 +494,7 @@ export function createCodexRuntimeAdapter(dependencies: CodexRuntimeDependencies
   const getManifests = dependencies.getSkillManifests ?? (() => dependencies.skillManifests ?? [])
   const readSkill = dependencies.readSkill ?? ((path: string, encoding: 'utf8') => readFile(path, encoding))
   const createTransport = dependencies.createTransport ?? ((options: ProcessOptions & { command: string }) => createStdioCodexAppServerTransport(options))
+  const activeTurns = new Map<string, { runId: string; runtimeLocator: RuntimeLocator; transport: CodexAppServerTransport }>()
 
   async function loadSkillInstructions(manifest: SkillManifest, packagePath: string, visited = new Set<string>()): Promise<string> {
     const key = `${manifest.name}@${manifest.version}`
@@ -561,7 +583,7 @@ export function createCodexRuntimeAdapter(dependencies: CodexRuntimeDependencies
           return [{ type: 'error', error: sanitizeSensitiveText(`无法读取固定 Skill：${error instanceof Error ? error.message : String(error)}`) }]
         }
       }
-      const persistedThreadId = context.execution.runtimeLocator?.threadId ?? context.execution.runtimeSessionId
+      const persistedThreadId = context.execution.runtimeLocators?.at(-1)?.threadId ?? context.execution.runtimeSessionId
       let gitGuard: GitGuard | null = null
       let transport: CodexAppServerTransport | null = null
       let runtimeLocator: RuntimeLocator | null = null
@@ -588,6 +610,7 @@ export function createCodexRuntimeAdapter(dependencies: CodexRuntimeDependencies
         const locator = { runtimeProvider: 'codex', threadId, turnId, runtimeVersion: codexVersion(initialized) }
         runtimeLocator = locator
         await context.persistRuntimeLocator?.(locator)
+        activeTurns.set(context.execution.id, { runId: context.runId, runtimeLocator: locator, transport })
         const events: RuntimeEvent[] = []
         while (true) {
           const notification = await transport.nextNotification()
@@ -613,7 +636,7 @@ export function createCodexRuntimeAdapter(dependencies: CodexRuntimeDependencies
           if (!turn) continue
           const status = asString(turn.status)
           if (status === 'completed') events.push({ type: 'status_changed', status: 'completed' })
-          else if (status === 'interrupted') events.push({ type: 'status_changed', status: 'blocked', reason: 'Codex Turn 已中断。' })
+          else if (status === 'interrupted') events.push({ type: 'status_changed', status: 'paused' })
           else {
             const error = asRecord(turn.error)
             if (!events.some((event) => event.type === 'error')) events.push({ type: 'error', error: asString(error?.message) ?? 'Codex Turn 执行失败。' })
@@ -626,9 +649,20 @@ export function createCodexRuntimeAdapter(dependencies: CodexRuntimeDependencies
           ? [{ type: 'status_changed', status: 'blocked', reason: message, provider: 'codex', source: 'codex app-server', permissionPolicy: sanitizePermissionPolicy(context.permissionPolicy), ...(runtimeLocator ? { runtimeLocator } : {}) }]
           : [{ type: 'error', error: message, provider: 'codex', source: 'codex app-server', permissionPolicy: sanitizePermissionPolicy(context.permissionPolicy), ...(runtimeLocator ? { runtimeLocator } : {}) }]
       } finally {
+        const activeTurn = activeTurns.get(context.execution.id)
+        if (activeTurn?.transport === transport) activeTurns.delete(context.execution.id)
         await transport?.close().catch(() => undefined)
         await gitGuard?.cleanup().catch(() => undefined)
       }
+    },
+    async interrupt(context): Promise<void> {
+      const activeTurn = activeTurns.get(context.executionId)
+      if (!activeTurn || activeTurn.runId !== context.runId) throw new Error('找不到可中断的 active Runtime Turn。')
+      const locator = activeTurn.runtimeLocator
+      if (locator.runtimeProvider !== context.runtimeLocator.runtimeProvider || locator.threadId !== context.runtimeLocator.threadId || locator.turnId !== context.runtimeLocator.turnId) {
+        throw new Error('Runtime Locator 与 active Turn 不一致。')
+      }
+      await activeTurn.transport.request('turn/interrupt', { threadId: locator.threadId, turnId: locator.turnId })
     }
   }
 }

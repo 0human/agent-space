@@ -99,15 +99,16 @@ export function registerWorkflowHandlers({ handle, projectService, workflowServi
     return workflowEngine.getRun(runId)
   })
   handle(APP_SHELL_CHANNELS.pauseWorkflowRun, async (_event: unknown, runId: unknown) => workflowEngine!.pauseRun(String(runId)))
-  handle(APP_SHELL_CHANNELS.resumeWorkflowRun, async (_event: unknown, runId: unknown) => workflowEngine!.resumeRun(String(runId)))
-  handle(APP_SHELL_CHANNELS.retryWorkflowStep, async (_event: unknown, runId: unknown) => {
+  handle(APP_SHELL_CHANNELS.resumeWorkflowRun, async (_event: unknown, runId: unknown, guidance: unknown) => workflowEngine!.resumeRun(String(runId), typeof guidance === 'string' ? guidance : undefined))
+  handle(APP_SHELL_CHANNELS.retryWorkflowStep, async (_event: unknown, runId: unknown, guidance: unknown) => {
     const id = String(runId)
     const current = await workflowEngine!.getRun(id)
-    if (!current) return workflowEngine!.retryStep(id)
+    const retryGuidance = typeof guidance === 'string' ? guidance : undefined
+    if (!current) return workflowEngine!.retryStep(id, retryGuidance)
     return withProjectRegistryLock(async () => {
       const project = await findActiveProject(current.projectId)
       if (!project) throw new Error(zhCNMain.projectDelete.notFound)
-      return workflowEngine!.retryStep(id)
+      return workflowEngine!.retryStep(id, retryGuidance)
     })
   })
   handle(APP_SHELL_CHANNELS.cancelWorkflowRun, async (_event: unknown, runId: unknown) => workflowEngine!.cancelRun(String(runId)))

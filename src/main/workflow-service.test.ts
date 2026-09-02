@@ -25,6 +25,34 @@ describe('Workflow service', () => {
     expect(BUILT_IN_SKILL_MANIFESTS[1]).toMatchObject({ name: 'implement', entry: 'skills/implement/SKILL.md' })
   })
 
+  it('returns the continuously running Development Workflow with product-level Verification', async () => {
+    const service = createWorkflowService({
+      readFile: async () => '',
+      writeFile: async () => undefined,
+      mkdir: async () => undefined,
+      manifests: BUILT_IN_SKILL_MANIFESTS
+    })
+
+    const view = await service.getBuiltIn()
+    const requirements = view.definition.phases.find((phase) => phase.id === 'requirements')
+    const planning = view.definition.phases.find((phase) => phase.id === 'planning')
+    const implementation = view.definition.phases.find((phase) => phase.id === 'implementation')
+    const verification = view.definition.phases.find((phase) => phase.id === 'verification')
+
+    expect(view).toMatchObject({ source: 'built-in', canStart: true, validation: { valid: true } })
+    expect(requirements?.steps.every((step) => !step.approvalGate)).toBe(true)
+    expect(planning?.steps.every((step) => !step.approvalGate)).toBe(true)
+    expect(implementation?.steps).toEqual([
+      expect.objectContaining({ skill: { name: 'implement', version: '1.0.0' }, approvalGate: '高风险写操作确认' })
+    ])
+    expect(verification?.steps).toEqual([
+      expect.objectContaining({ skill: { name: 'product-verification', version: '1.0.0' } })
+    ])
+    expect(view.skillManifests).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'product-verification', entry: 'skills/product-verification/SKILL.md' })
+    ]))
+  })
+
   it('rejects missing skills, unsupported versions, permissions, and embedded prompts', () => {
     const result = validateWorkflow({
       schemaVersion: 2,

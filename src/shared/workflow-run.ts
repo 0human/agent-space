@@ -3,10 +3,41 @@ import type { PermissionPolicy } from './project'
 import type { WorkflowDefinition, WorkflowSource, WorkflowView } from './workflow'
 
 export type WorkflowRunStatus = 'running' | 'paused' | 'waiting' | 'blocked' | 'failed' | 'completed' | 'cancelled'
-export type StepExecutionStatus = 'pending' | 'running' | 'waiting' | 'blocked' | 'failed' | 'completed' | 'skipped' | 'cancelled'
+export type StepExecutionStatus = 'pending' | 'running' | 'paused' | 'waiting' | 'blocked' | 'failed' | 'completed' | 'skipped' | 'cancelled'
+export type ImplementationTicketStatus = 'pending' | 'running' | 'paused' | 'waiting' | 'blocked' | 'failed' | 'completed' | 'cancelled'
+export type ImplementationTicketStage = 'implementation' | 'testing' | 'review' | 'commit'
+export type ImplementationTicketStageStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped'
+
+export interface ImplementationTicketStages {
+  implementation: ImplementationTicketStageStatus
+  testing: ImplementationTicketStageStatus
+  review: ImplementationTicketStageStatus
+  commit: ImplementationTicketStageStatus
+}
+
+export interface ImplementationTicketResult {
+  attemptCount: number
+  failedAttemptCount: number
+  artifactIds: string[]
+}
+
+export interface ImplementationTicket {
+  id: string
+  runId: string
+  sourceArtifactId: string | null
+  title: string
+  location: string | null
+  position: number
+  status: ImplementationTicketStatus
+  stages: ImplementationTicketStages
+  threadId: string | null
+  result: ImplementationTicketResult
+  startedAt: string | null
+  finishedAt: string | null
+}
 
 export function isWorkflowRunInProgress(status: WorkflowRunStatus): boolean {
-  return ['running', 'paused', 'waiting', 'blocked'].includes(status)
+  return ['running', 'paused', 'waiting', 'blocked', 'failed'].includes(status)
 }
 
 export interface RuntimeLocator {
@@ -129,7 +160,8 @@ export interface StepExecution {
   status: StepExecutionStatus
   input: Record<string, unknown> | null
   skill: { name: string; version: string } | null
-  runtimeLocator?: RuntimeLocator | null
+  implementationTicketId?: string | null
+  runtimeLocators: RuntimeLocator[]
   runtimeSessionId?: string | null
   error: string | null
   output: Record<string, unknown> | null
@@ -197,7 +229,14 @@ export interface RunSnapshot {
   pendingQuestionDetails: PendingQuestion | null
   pendingApprovalDetails: PendingApproval | null
   blockedBy: RunBlocker | null
+  ticketProgress?: ImplementationTicketProgress | null
   nextAction: string
+}
+
+export interface ImplementationTicketProgress {
+  current: number
+  total: number
+  currentTicketId: string | null
 }
 
 export interface RunContinuation {
@@ -238,6 +277,7 @@ export interface WorkflowRun {
   status: WorkflowRunStatus
   error: string | null
   snapshot: RunSnapshot
+  implementationTickets?: ImplementationTicket[]
   stepExecutions: StepExecution[]
   events: WorkflowEvent[]
   logs: WorkflowLog[]
@@ -264,6 +304,7 @@ export interface RuntimeExecutionContext {
   phaseIndex: number
   stepIndex: number
   execution: StepExecution
+  implementationTicket?: ImplementationTicket | null
   skill: StepExecution['skill']
   phaseContext: PhaseContext | null
   inputArtifacts: ArtifactIndex[]
@@ -289,7 +330,8 @@ export type RuntimeEvent =
   | ({ type: 'question'; question: string } & RuntimeEventMetadata)
   | ({ type: 'approval_required'; approval: string } & RuntimeEventMetadata)
   | ({ type: 'artifact_produced'; artifact: RuntimeArtifact } & RuntimeEventMetadata)
-  | ({ type: 'status_changed'; status: 'running' | 'completed' | 'blocked'; reason?: string } & RuntimeEventMetadata)
+  | ({ type: 'ticket_progress'; stage: ImplementationTicketStage; status: ImplementationTicketStageStatus } & RuntimeEventMetadata)
+  | ({ type: 'status_changed'; status: 'running' | 'paused' | 'completed' | 'blocked'; reason?: string } & RuntimeEventMetadata)
   | ({ type: 'error'; error: string } & RuntimeEventMetadata)
 
 export interface RuntimeEventMetadata {
@@ -306,6 +348,13 @@ export type WorkflowLogType = RuntimeEvent['type']
 export interface AgentRuntimeAdapter {
   preflight?(context: RuntimePreflightContext): Promise<RuntimePreflightResult>
   execute(context: RuntimeExecutionContext): Promise<RuntimeEvent[]>
+  interrupt?(context: RuntimeInterruptContext): Promise<void>
+}
+
+export interface RuntimeInterruptContext {
+  runId: string
+  executionId: string
+  runtimeLocator: RuntimeLocator
 }
 
 export interface RuntimePreflightContext {

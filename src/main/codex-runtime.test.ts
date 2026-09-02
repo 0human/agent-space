@@ -20,7 +20,7 @@ function context(overrides: Partial<RuntimeExecutionContext> = {}): RuntimeExecu
     workflow: { phases: [] } as never,
     phaseIndex: 0,
     stepIndex: 0,
-    execution: { id: 'execution-1', runtimeLocator: null } as never,
+    execution: { id: 'execution-1', runtimeLocators: [] } as never,
     skill: null,
     phaseContext: null,
     inputArtifacts: [],

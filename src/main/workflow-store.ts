@@ -211,7 +211,9 @@ function resolveRuntimeEvents(events: RuntimeEvent[]):
   if (paused) return { type: 'paused' }
   const blocked = events.find((event): event is Extract<RuntimeEvent, { type: 'status_changed' }> => event.type === 'status_changed' && event.status === 'blocked')
   if (blocked) return { type: 'blocked', reason: blocked.reason ?? zhCNMain.workflowRun.runtimeBlocked }
-  const status = events.find((event): event is Extract<RuntimeEvent, { type: 'status_changed' }> => event.type === 'status_changed')
+  // Runtime adapters may emit intermediate `running` updates before the
+  // terminal status. Resolve the final status rather than the first one.
+  const status = [...events].reverse().find((event): event is Extract<RuntimeEvent, { type: 'status_changed' }> => event.type === 'status_changed')
   if (!status || status.status !== 'completed') return { type: 'failed', error: zhCNMain.workflowRun.runtimeInvalid }
   const toolCall = events.find((event): event is Extract<RuntimeEvent, { type: 'tool_call' }> => event.type === 'tool_call')
   const text = events.filter((event): event is Extract<RuntimeEvent, { type: 'text_delta' }> => event.type === 'text_delta').map((event) => event.text).join('')
@@ -600,12 +602,14 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
     await run(db, 'INSERT INTO workflow_events (run_id, type, idempotency_key, data_json, created_at) SELECT ?, ?, ?, ?, ? WHERE ? IS NULL OR NOT EXISTS (SELECT 1 FROM workflow_events WHERE run_id = ? AND idempotency_key = ?)', [runId, type, key, json(data), createdAt, key, runId, key])
   }
 
-  async function appendRuntimeRecords(current: StoredRun, executionId: string, events: RuntimeEvent[], createdAt: string): Promise<void> {
+  async function appendRuntimeRecords(current: StoredRun, executionId: string, events: RuntimeEvent[], createdAt: string): Promise<RuntimeEvent[]> {
+    const insertedEvents: RuntimeEvent[] = []
     for (const [index, event] of events.entries()) {
-      const idempotencyKey = event.idempotencyKey ?? `${executionId}:runtime:${index}:${createdAt}`
-      await run(db, 'INSERT INTO workflow_logs (run_id, execution_id, type, message, data_json, idempotency_key, created_at) SELECT ?, ?, ?, ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM workflow_logs WHERE run_id = ? AND idempotency_key = ?)', [
+      const idempotencyKey = event.idempotencyKey ?? `${executionId}:runtime:${index}:${json(event)}`
+      const result = await run(db, 'INSERT INTO workflow_logs (run_id, execution_id, type, message, data_json, idempotency_key, created_at) SELECT ?, ?, ?, ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM workflow_logs WHERE run_id = ? AND idempotency_key = ?)', [
         current.id, executionId, event.type, runtimeLogMessage(event), json(event), idempotencyKey, createdAt, current.id, idempotencyKey
       ])
+      if (result.changes > 0) insertedEvents.push(event)
     }
 
     const sessionId = events.find((event) => event.sessionId)?.sessionId
@@ -614,21 +618,22 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
       if (event.runtimeLocator) await appendRuntimeLocator(executionId, event.runtimeLocator)
     }
 
-    const content = events
+    const content = insertedEvents
       .filter((event): event is Extract<RuntimeEvent, { type: 'text_delta' }> => event.type === 'text_delta')
       .map((event) => event.text)
       .join('')
       .trim()
-    if (!content) return
+    if (!content) return insertedEvents
 
     const phaseId = current.workflow.phases[current.snapshot.phaseIndex]?.id
-    if (!phaseId) return
+    if (!phaseId) return insertedEvents
     const existing = await get<{ id: string; content: string }>(db, 'SELECT id, content FROM phase_contexts WHERE run_id = ? AND phase_id = ?', [current.id, phaseId])
     if (existing) {
       await run(db, 'UPDATE phase_contexts SET content = ?, updated_at = ? WHERE id = ?', [`${existing.content}\n${content}`.trim(), createdAt, existing.id])
     } else {
       await run(db, 'INSERT INTO phase_contexts (id, run_id, phase_id, content, updated_at) VALUES (?, ?, ?, ?, ?)', [createId(), current.id, phaseId, content, createdAt])
     }
+    return insertedEvents
   }
 
   async function appendRuntimeLocator(executionId: string, runtimeLocator: RuntimeLocator): Promise<void> {
@@ -651,29 +656,6 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
       const existing = await get<{ thread_id: string | null }>(db, 'SELECT thread_id FROM implementation_tickets WHERE id = ?', [ticket.implementation_ticket_id])
       if (existing?.thread_id && existing.thread_id !== runtimeLocator.threadId) throw new Error('同一 Implementation Ticket 必须复用已有 Runtime Thread。')
       await run(db, 'UPDATE implementation_tickets SET thread_id = COALESCE(thread_id, ?) WHERE id = ?', [runtimeLocator.threadId, ticket.implementation_ticket_id])
-    }
-  }
-
-  async function ensureImplementationTicket(current: StoredRun): Promise<ImplementationTicket> {
-    const existing = current.implementationTickets?.[0]
-    if (existing) return existing
-    const id = createId()
-    await run(db, 'INSERT INTO implementation_tickets (id, run_id, source_artifact_id, title, location, position, status, stages_json, thread_id, started_at, finished_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', [
-      id, current.id, null, current.idea, null, 1, 'pending', json(PENDING_TICKET_STAGES), null, null, null
-    ])
-    return {
-      id,
-      runId: current.id,
-      sourceArtifactId: null,
-      title: current.idea,
-      location: null,
-      position: 1,
-      status: 'pending',
-      stages: { ...PENDING_TICKET_STAGES },
-      threadId: null,
-      result: { attemptCount: 0, failedAttemptCount: 0, artifactIds: [] },
-      startedAt: null,
-      finishedAt: null
     }
   }
 
@@ -829,13 +811,20 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
       return locked(async () => transaction(async () => {
         const current = await load(runId)
         if (!current) throw new Error('找不到 Workflow Run。')
-        if (current.snapshot.currentStepExecutionId !== executionId || current.status === 'cancelled') return current
+        // Ignore late adapter results after a user pause/cancel or another
+        // control transition has taken ownership of the execution.
+        if (current.snapshot.currentStepExecutionId !== executionId || !['running', 'paused'].includes(current.status)) return current
         const timestamp = now()
         const activeExecution = current.stepExecutions.find((execution) => execution.id === executionId)
         const implementationTicketId = activeExecution?.implementationTicketId ?? null
-        await appendRuntimeRecords(current, executionId, events, timestamp)
+        const insertedEvents = await appendRuntimeRecords(current, executionId, events, timestamp)
+        if (insertedEvents.length === 0) return current
         if (implementationTicketId) await updateImplementationTicketFromEvents(implementationTicketId, events)
         const result = resolveRuntimeEvents(events)
+        // A pause may race with an already-running adapter. Preserve the
+        // paused Run for non-terminal outcomes, while still recording a
+        // terminal completion so the durable cursor can advance safely.
+        if (current.status === 'paused' && result.type !== 'completed') return current
         const declaredApproval = current.workflow.phases[current.snapshot.phaseIndex]?.steps[current.snapshot.stepIndex]?.approvalGate
         const alreadyApproved = current.events.some((event) => event.type === 'approval_approved' && event.data.executionId === executionId)
         if (result.type === 'completed') await appendArtifacts(runId, executionId, result.artifacts, timestamp)
@@ -897,12 +886,12 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
           await appendEvent(runId, 'completed', {}, timestamp)
         } else if (current.status === 'paused') {
           const tickets = completedRun.implementationTickets ?? []
-          const targetTicket = nextTicket ?? (completedRun.workflow.phases[cursor.phaseIndex]?.id === 'implementation' ? tickets.find((ticket) => ticket.status === 'pending') ?? await ensureImplementationTicket(completedRun) : null)
+          const targetTicket = nextTicket ?? (completedRun.workflow.phases[cursor.phaseIndex]?.id === 'implementation' ? tickets.find((ticket) => ticket.status === 'pending') ?? null : null)
           await updateSnapshot(runId, { ...current.snapshot, ...cursor, currentStepExecutionId: null, pendingQuestion: null, pendingApproval: null, pendingQuestionDetails: null, pendingApprovalDetails: null, blockedBy: null, ticketProgress: targetTicket ? { current: targetTicket.position, total: Math.max(tickets.length, targetTicket.position), currentTicketId: targetTicket.id } : current.snapshot.ticketProgress ?? null, nextAction: statusNextAction('paused') })
         } else {
           const implementationPhase = completedRun.workflow.phases[cursor.phaseIndex]?.id === 'implementation'
           const tickets = completedRun.implementationTickets ?? []
-          const targetTicket = nextTicket ?? (implementationPhase ? tickets.find((ticket) => ticket.status === 'pending') ?? await ensureImplementationTicket(completedRun) : null)
+          const targetTicket = nextTicket ?? (implementationPhase ? tickets.find((ticket) => ticket.status === 'pending') ?? null : null)
           if (targetTicket) await startImplementationTicket(targetTicket, timestamp)
           const nextExecutionId = await insertExecution(runId, completedRun.workflow, cursor.phaseIndex, cursor.stepIndex, 1, 'running', timestamp, {}, targetTicket?.id ?? null)
           await updateSnapshot(runId, { ...current.snapshot, ...cursor, currentStepExecutionId: nextExecutionId, pendingQuestion: null, pendingApproval: null, pendingQuestionDetails: null, pendingApprovalDetails: null, blockedBy: null, ticketProgress: targetTicket ? { current: targetTicket.position, total: Math.max(tickets.length, targetTicket.position), currentTicketId: targetTicket.id } : current.snapshot.ticketProgress ?? null, nextAction: statusNextAction('running') })
@@ -969,7 +958,9 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
         if (status === 'cancelled' && ['completed', 'cancelled'].includes(current.status)) return current
         const timestamp = now()
         await updateRunStatus(runId, status, null, timestamp)
-        if (status === 'cancelled' && current.snapshot.currentStepExecutionId) await run(db, 'UPDATE step_executions SET status = ?, finished_at = ? WHERE id = ?', ['cancelled', timestamp, current.snapshot.currentStepExecutionId])
+        if (current.snapshot.currentStepExecutionId) {
+          await run(db, 'UPDATE step_executions SET status = ?, finished_at = ? WHERE id = ?', [status === 'cancelled' ? 'cancelled' : 'paused', status === 'cancelled' ? timestamp : null, current.snapshot.currentStepExecutionId])
+        }
         const activeExecution = current.snapshot.currentStepExecutionId ? current.stepExecutions.find((execution) => execution.id === current.snapshot.currentStepExecutionId) : null
         if (activeExecution?.implementationTicketId) await finishImplementationTicket(activeExecution.implementationTicketId, status, timestamp)
         await updateSnapshot(runId, { ...current.snapshot, blockedBy: status === 'cancelled' ? null : current.snapshot.blockedBy, nextAction: statusNextAction(status) })
@@ -1082,7 +1073,7 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
 
     async recoverableRuns(): Promise<StoredRun[]> {
       return locked(async () => {
-        const rows = await all<{ id: string }>(db, "SELECT id FROM runs WHERE status IN ('running', 'waiting', 'blocked', 'completed') ORDER BY updated_at", [])
+        const rows = await all<{ id: string }>(db, "SELECT id FROM runs WHERE status IN ('running', 'paused', 'waiting', 'blocked', 'failed', 'completed') ORDER BY updated_at", [])
         const runs: StoredRun[] = []
         for (const row of rows) {
           const stored = await load(row.id)

@@ -121,5 +121,18 @@ export const workflowRunCopy = {
       'Data Transfer Notice：External Destination: GitHub；数据：feature branch、commit、Run ID、PR checks 和 review 状态；权限：network.github；断网后从持久化 Pull Request Artifact 恢复。',
     localDelivery: '本地 Git 交付已完成；Project 没有 remote，不会创建 PR。',
     remoteDelivery: 'GitHub delivery 尚未创建 Pull Request。',
+    guidanceTitle: '继续指导',
+    guidanceDescription: '补充指导后继续当前 Run，或创建新的 attempt。',
+    guidancePlaceholder: '输入给 Agent 的补充指导（可选）',
+    guidanceResumeAction: '发送并继续',
+    guidanceRetryAction: '发送指导并重试',
+    ticketProgressTitle: 'Implementation Ticket 进度',
+    ticketProgress: (current: number, total: number) => `Ticket ${current}/${total}`,
+    ticketStage: {
+      implementation: '实现',
+      testing: '测试',
+      review: 'Review',
+      commit: 'Commit',
+    },
   },
 } as const

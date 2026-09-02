@@ -99,11 +99,11 @@ export function WorkflowRunFeature({
       onPause={() => {
         void updateRun(() => api.pauseWorkflowRun(run.id))
       }}
-      onResume={() => {
-        void updateRun(() => api.resumeWorkflowRun(run.id))
+      onResume={(guidance) => {
+        void updateRun(() => api.resumeWorkflowRun(run.id, guidance))
       }}
-      onRetry={() => {
-        void updateRun(() => api.retryWorkflowStep(run.id))
+      onRetry={(guidance) => {
+        void updateRun(() => api.retryWorkflowStep(run.id, guidance))
       }}
       onCancel={() => {
         void updateRun(() => api.cancelWorkflowRun(run.id))

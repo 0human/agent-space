@@ -7,9 +7,34 @@ import initSqlJs from 'sql.js'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { createSqliteRunStore } from './workflow-store'
+import type { Project } from '../shared/project'
+import type { RuntimeEvent } from '../shared/workflow-run'
 
 const require = createRequire(import.meta.url)
 const temporaryDirectories: string[] = []
+
+const project: Project = {
+  id: 'project-1',
+  name: 'Demo',
+  workspacePath: '/work/demo',
+  workspaceAvailable: true,
+  remote: null,
+  currentBranch: 'main',
+  head: 'abc123',
+  defaultBranch: 'main',
+  isGreenfield: false,
+  dirty: false,
+  dirtySummary: { staged: 0, unstaged: 0, untracked: 0, files: [] },
+  updatedAt: '2026-09-02T00:00:00.000Z'
+}
+
+const workflow = {
+  schemaVersion: 1 as const,
+  id: 'workflow-store-test',
+  name: 'Workflow Store Test',
+  version: '1.0.0',
+  phases: [{ id: 'phase', name: 'Phase', goal: 'Test', steps: [{ id: 'step', name: 'Step', kind: 'skill' as const }] }]
+}
 
 afterEach(async () => {
   await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })))
@@ -148,5 +173,74 @@ describe('Workflow Store forward migrations', () => {
       }]
     })
     await expect(store.close()).resolves.toBeUndefined()
+  })
+
+  it('keeps paused and failed Runs in the recoverable set', async () => {
+    const directory = await mkdtemp(join(process.cwd(), '.tmp-workflow-store-'))
+    temporaryDirectories.push(directory)
+    const store = createSqliteRunStore({ databasePath: join(directory, 'workflow-runs.sqlite') })
+    const paused = await store.createRun({
+      id: 'run-paused', project, workflow,
+      workflowSource: { source: 'project', path: '/work/demo/.agent-space/workflow.json' },
+      idea: 'Pause me', now: '2026-09-02T00:00:00.000Z'
+    })
+    await store.setStatus(paused.id, 'paused')
+    const failed = await store.createRun({
+      id: 'run-failed', project, workflow,
+      workflowSource: { source: 'project', path: '/work/demo/.agent-space/workflow.json' },
+      idea: 'Fail me', now: '2026-09-02T00:00:01.000Z'
+    })
+    await store.recordRuntimeResult(failed.id, failed.snapshot.currentStepExecutionId!, [{ type: 'error', error: 'runtime failed' }])
+
+    const recoverable = await store.recoverableRuns()
+    expect(recoverable.map((run) => run.id)).toEqual(expect.arrayContaining(['run-paused', 'run-failed']))
+    expect(recoverable.find((run) => run.id === 'run-paused')?.stepExecutions[0]).toMatchObject({ status: 'paused' })
+    expect(recoverable.find((run) => run.id === 'run-failed')?.stepExecutions[0]).toMatchObject({ status: 'failed' })
+    await store.close()
+  })
+
+  it('deduplicates replayed Runtime logs without relying on timestamps', async () => {
+    const directory = await mkdtemp(join(process.cwd(), '.tmp-workflow-store-'))
+    temporaryDirectories.push(directory)
+    let tick = 0
+    const store = createSqliteRunStore({
+      databasePath: join(directory, 'workflow-runs.sqlite'),
+      now: () => `2026-09-02T00:00:0${tick++}.000Z`
+    })
+    const created = await store.createRun({
+      id: 'run-replay', project, workflow,
+      workflowSource: { source: 'project', path: '/work/demo/.agent-space/workflow.json' },
+      idea: 'Replay me', now: '2026-09-02T00:00:00.000Z'
+    })
+    const events: RuntimeEvent[] = [{ type: 'text_delta', text: 'Durable context.' }, { type: 'question', question: 'Continue?' }]
+    const first = await store.recordRuntimeResult(created.id, created.snapshot.currentStepExecutionId!, events)
+    const replayed = await store.recordRuntimeResult(created.id, created.snapshot.currentStepExecutionId!, events)
+    expect(first.logs).toHaveLength(2)
+    expect(replayed.logs).toHaveLength(2)
+    expect(replayed.phaseContexts).toEqual([expect.objectContaining({ content: 'Durable context.' })])
+    expect(replayed.events.filter((event) => event.type === 'waiting')).toHaveLength(1)
+    await store.close()
+  })
+
+  it('uses the terminal status when Runtime emits running before completed', async () => {
+    const directory = await mkdtemp(join(process.cwd(), '.tmp-workflow-store-'))
+    temporaryDirectories.push(directory)
+    const store = createSqliteRunStore({ databasePath: join(directory, 'workflow-runs.sqlite') })
+    const created = await store.createRun({
+      id: 'run-terminal-status', project, workflow,
+      workflowSource: { source: 'project', path: '/work/demo/.agent-space/workflow.json' },
+      idea: 'Terminal status', now: '2026-09-02T00:00:00.000Z'
+    })
+    const result = await store.recordRuntimeResult(
+      created.id,
+      created.snapshot.currentStepExecutionId!,
+      [
+        { type: 'status_changed', status: 'running' },
+        { type: 'status_changed', status: 'completed' },
+      ],
+    )
+    expect(result.status).toBe('completed')
+    expect(result.stepExecutions[0]?.status).toBe('completed')
+    await store.close()
   })
 })

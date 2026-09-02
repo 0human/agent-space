@@ -42,6 +42,8 @@ export interface RunBoardModel {
   canResume: boolean
   canRetry: boolean
   canCancel: boolean
+  implementationTickets: NonNullable<WorkflowRun['implementationTickets']>
+  ticketProgress: NonNullable<WorkflowRun['snapshot']['ticketProgress']> | null
   delivery: DeliveryProjection
   projectStep: (
     step: WorkflowStep,
@@ -92,6 +94,30 @@ export function createRunBoardModel(
         run.snapshot.pendingApprovalDetails,
     )
   const pullRequest = run.pullRequest
+  const implementationTickets = [...(run.implementationTickets ?? [])].sort(
+    (left, right) => left.position - right.position,
+  )
+  const ticketProgress =
+    run.snapshot.ticketProgress ??
+    (implementationTickets.length > 0
+      ? {
+          current: Math.min(
+            implementationTickets.findIndex((ticket) =>
+              ['running', 'paused', 'waiting', 'blocked', 'failed'].includes(
+                ticket.status,
+              ),
+            ) + 1 || implementationTickets.length,
+            implementationTickets.length,
+          ),
+          total: implementationTickets.length,
+          currentTicketId:
+            implementationTickets.find((ticket) =>
+              ['running', 'paused', 'waiting', 'blocked', 'failed'].includes(
+                ticket.status,
+              ),
+            )?.id ?? null,
+        }
+      : null)
 
   return {
     selectedStep,
@@ -118,6 +144,8 @@ export function createRunBoardModel(
     canCancel: ['running', 'paused', 'waiting', 'blocked', 'failed'].includes(
       run.status,
     ),
+    implementationTickets,
+    ticketProgress,
     delivery: {
       baseCommit: run.baseCommit,
       branch: run.branch,

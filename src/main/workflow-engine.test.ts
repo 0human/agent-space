@@ -938,6 +938,7 @@ describe('WorkflowEngine public API', () => {
     expect(paused.status).toBe('paused')
     expect(paused.snapshot).toMatchObject({ phaseIndex: 0, stepIndex: 1, currentStepExecutionId: null })
     expect(paused.stepExecutions).toHaveLength(1)
+    expect(paused.stepExecutions[0]).toMatchObject({ status: 'completed' })
     expect(paused.events.map((event) => event.type)).toContain('paused')
 
     await engine.close()

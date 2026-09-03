@@ -39,7 +39,13 @@ function appServerTransport(items: Array<Record<string, unknown>> = [], extraNot
   ]
   return {
     async request(method: string) {
-      if (method === 'initialize') return { userAgent: 'codex-cli/0.144.3' }
+      if (method === 'initialize') return {
+        userAgent: 'codex-cli/0.144.3',
+        capabilities: {
+          methods: ['thread/start', 'thread/resume', 'thread/read', 'turn/start', 'turn/interrupt'],
+          events: ['item/started', 'item/completed', 'turn/completed']
+        }
+      }
       if (method === 'thread/start' || method === 'thread/resume') return { thread: { id: 'thread-1' } }
       if (method === 'turn/start') return { turn: { id: 'turn-1' } }
       throw new Error(`Unexpected request: ${method}`)
@@ -194,7 +200,8 @@ describe('Codex Runtime Adapter policy contract', () => {
       skillManifests: [{ name: 'grill-with-docs', version: '1.0.0', entry: 'skills/grill-with-docs/SKILL.md', dependencies: [], supportedRuntimes: ['codex'], capabilities: ['question'], requiredPermissions: ['workspace.read'] }],
       skillPackagePath: '/package',
       readSkill: async () => '# grill-with-docs',
-      runProcess: async (_command, args) => ({ code: 0, stdout: args.includes('--version') ? 'codex-cli 0.144.3' : 'Logged in', stderr: '' })
+      runProcess: async (_command, args) => ({ code: 0, stdout: args.includes('--version') ? 'codex-cli 0.144.3' : 'Logged in', stderr: '' }),
+      createTransport: async () => appServerTransport()
     })
 
     await expect(adapter.preflight?.({
@@ -202,12 +209,13 @@ describe('Codex Runtime Adapter policy contract', () => {
       skill: { name: 'grill-with-docs', version: '1.0.0' },
       permissionPolicy: { grantedPermissions: ['workspace.read'] }
     })).resolves.toEqual({
-      checks: [
+      checks: expect.arrayContaining([
         'Codex CLI 可用。',
         'Codex 凭据可用。',
         '固定 Skill grill-with-docs@1.0.0 可用。',
-        expect.stringContaining('External Destination: Codex Agent Runtime')
-      ],
+        expect.stringContaining('External Destination: Codex Agent Runtime'),
+        expect.stringContaining('Codex App Server 能力协商通过（')
+      ]),
       errors: []
     })
   })

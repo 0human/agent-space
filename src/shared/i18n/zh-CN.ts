@@ -51,5 +51,37 @@ export const zhCNMain = {
       cancelled: 'Workflow Run 已取消。',
       completed: 'Workflow Run 已完成。'
     }
+  },
+  codexSession: {
+    capabilityNegotiationFailed: (command: string, version: string, missing: string) => `Codex App Server 能力协商失败（路径：${command}；版本：${version}；缺失能力：${missing}）。请更新本机 Codex CLI 后重试。`,
+    capabilitySuggestion: '请安装或更新 Codex CLI，使其支持所需的 App Server 方法和事件。',
+    preflightSuggestion: '请确认本机已安装并登录 Codex CLI，然后更新到支持 App Server 的版本。',
+    approvalExpired: 'Runtime Approval 请求已失效，无法响应原始请求。',
+    approvalContinuationExpired: 'Runtime Approval 请求已失效，无法继续原始 Turn。',
+    invalidApprovalDecision: (method: string) => `Runtime Approval 响应无效（${method}）：必须是 Codex 支持的 decision。`,
+    turnClosed: 'Codex App Server 在 Turn 完成前关闭。',
+    missingThreadId: 'Codex App Server 未返回 Thread ID。',
+    missingTurnId: 'Codex App Server 未返回 Turn ID。',
+    invalidThreadHistory: 'Codex App Server 返回的 Thread 历史无效。',
+    missingTurnHistory: 'Codex App Server 未返回指定的 Turn 历史。',
+    turnNotActive: '当前 Runtime Turn 不可中断。'
+  },
+  codexRuntime: {
+    cliAvailable: 'Codex CLI 可用。',
+    cliUnavailable: 'Codex CLI 不可用。',
+    credentialsAvailable: 'Codex 凭据可用。',
+    credentialsUnavailable: 'Codex 凭据不可用。',
+    fixedSkillUnavailable: (name: string, version: string) => `固定 Skill ${name}@${version} 不可用。`,
+    fixedSkillAvailable: (name: string, version: string) => `固定 Skill ${name}@${version} 可用。`,
+    fixedSkillReadFailed: (reason: string) => `无法读取固定 Skill：${reason}`,
+    transferNotice: (permissions: string) => `Data Transfer Notice：External Destination: Codex Agent Runtime；发送 Idea、Phase Context、Artifact、Decision Record；权限：${permissions}；断网后从持久化 Step Execution 恢复。`,
+    capabilityNegotiated: (command: string, version: string) => `Codex App Server 能力协商通过（${command} ${version}）。`,
+    capabilityUnavailable: (missing: string) => `Codex App Server 能力不可用：${missing}`,
+    runtimeApproval: (command: string, method: string) => `Runtime Approval：${command || method}`,
+    unknownServerError: 'Codex App Server 返回未知错误。',
+    turnFailed: 'Codex Turn 执行失败。',
+    permissionBlockedGit: 'Permission Policy 阻止 Git 操作。',
+    capabilitySource: 'codex capability negotiation',
+    appServerSource: 'codex app-server'
   }
 } as const

@@ -9,7 +9,7 @@ import type {
   WorkflowRun,
   StartWorkflowRunInput,
   PullRequestState,
-  RuntimeEvent,
+  RuntimeEventInput,
   RuntimeArtifact
 } from '../shared/workflow-run'
 import { isWorkflowRunInProgress } from '../shared/workflow-run'
@@ -118,8 +118,8 @@ function transientNetworkCode(error: unknown): boolean {
   return Boolean(error && typeof error === 'object' && 'code' in error && typeof error.code === 'string' && /^(?:EAI_AGAIN|ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENETUNREACH|EHOSTUNREACH|ENETDOWN|ERR_NETWORK)$/i.test(error.code))
 }
 
-function normalizeExternalFailure(events: RuntimeEvent[]): RuntimeEvent[] {
-  const error = events.find((event): event is Extract<RuntimeEvent, { type: 'error' }> => event.type === 'error')
+function normalizeExternalFailure(events: RuntimeEventInput[]): RuntimeEventInput[] {
+  const error = events.find((event): event is Extract<RuntimeEventInput, { type: 'error' }> => event.type === 'error')
   if (!error || !transientNetworkError(error.error)) return events
   return [
     ...events.filter((event) => event.type !== 'error'),
@@ -145,8 +145,8 @@ export interface WorkflowEngine {
   listRuns(projectId: string): Promise<WorkflowRun[]>
   hasActiveRuns(projectId: string): Promise<boolean>
   pauseRun(runId: string): Promise<WorkflowRun>
-  resumeRun(runId: string): Promise<WorkflowRun>
-  retryStep(runId: string): Promise<WorkflowRun>
+  resumeRun(runId: string, guidance?: string): Promise<WorkflowRun>
+  retryStep(runId: string, guidance?: string): Promise<WorkflowRun>
   cancelRun(runId: string): Promise<WorkflowRun>
   answerQuestion(runId: string, answer: string): Promise<WorkflowRun>
   approve(runId: string): Promise<WorkflowRun>
@@ -189,6 +189,9 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
         phaseIndex: run.snapshot.phaseIndex,
         stepIndex: run.snapshot.stepIndex,
         execution,
+        implementationTicket: execution.implementationTicketId
+          ? run.implementationTickets?.find((ticket) => ticket.id === execution.implementationTicketId) ?? null
+          : null,
         skill: execution.skill,
         phaseContext: phaseContext
           ? { ...phaseContext, content: [contextContent, phaseContext.content].filter(Boolean).join('\n') }
@@ -203,7 +206,7 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
           await store.recordRuntimeLocator(runId, execution.id, runtimeLocator)
         }
       }
-      let events: RuntimeEvent[]
+      let events: RuntimeEventInput[]
       let delivery: GitPullRequestResult | null = null
       try {
         if (pullRequestStep) {
@@ -330,6 +333,24 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
     active.set(runId, promise)
   }
 
+  async function requireRunStatus(runId: string, action: string, allowed: WorkflowRun['status'][]): Promise<NonNullable<Awaited<ReturnType<typeof store.getRun>>>> {
+    const run = await store.getRun(runId)
+    if (!run) throw new Error('找不到 Workflow Run。')
+    if (!allowed.includes(run.status)) throw new Error(`${run.status} 状态不允许${action}。`)
+    return run
+  }
+
+  async function interruptActiveTurn(run: WorkflowRun): Promise<boolean> {
+    const execution = run.snapshot.currentStepExecutionId
+      ? run.stepExecutions.find((candidate) => candidate.id === run.snapshot.currentStepExecutionId)
+      : null
+    const runtimeLocator = execution?.runtimeLocators.at(-1)
+    if (!execution || !runtimeLocator || !dependencies.runtime.interrupt) return false
+    await dependencies.runtime.interrupt({ runId: run.id, executionId: execution.id, runtimeLocator })
+    await active.get(run.id)
+    return true
+  }
+
   return {
     async preflight(input): Promise<WorkflowPreflightResult> {
       if (isProjectDeleted(input.project)) return { passed: false, checks: [], errors: [zhCNMain.projectDelete.notFound] }
@@ -428,34 +449,47 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
     },
 
     async pauseRun(runId) {
-      return store.setStatus(runId, 'paused')
+      const current = await requireRunStatus(runId, '暂停', ['running'])
+      if (await interruptActiveTurn(current)) return (await store.getRun(runId)) ?? current
+      throw new Error('当前 Runtime Turn 无法安全暂停。')
     },
 
-    async resumeRun(runId) {
-      const run = await store.resume(runId)
+    async resumeRun(runId, guidance) {
+      const current = await requireRunStatus(runId, '继续', ['paused', 'blocked'])
+      if (current.status === 'blocked' && current.snapshot.blockedBy?.recoveryAction !== 'resume') {
+        throw new Error('blocked 状态没有可执行的恢复动作。')
+      }
+      const run = await store.resume(runId, guidance)
       if (run.status === 'running') ensureRunning(runId)
       return run
     },
 
-    async retryStep(runId) {
-      const run = await store.retry(runId)
+    async retryStep(runId, guidance) {
+      await requireRunStatus(runId, '重试', ['failed'])
+      const run = await store.retry(runId, guidance)
       ensureRunning(runId)
       return run
     },
 
     async cancelRun(runId) {
+      const current = await requireRunStatus(runId, '结束 Run', ['running', 'paused', 'waiting', 'blocked', 'failed'])
+      if (current.status === 'running' && !(await interruptActiveTurn(current))) {
+        throw new Error('当前 Runtime Turn 无法安全结束。')
+      }
       return store.setStatus(runId, 'cancelled')
     },
 
     async answerQuestion(runId, answer) {
+      const current = await requireRunStatus(runId, '回答', ['waiting'])
+      if (!current.snapshot.pendingQuestionDetails || !current.snapshot.pendingQuestion) throw new Error('waiting 状态没有可回答的 Agent Question。')
       const run = await store.answerQuestion(runId, answer)
       ensureRunning(runId)
       return run
     },
 
     async approve(runId) {
-      const stored = await store.getRun(runId)
-      if (!stored) throw new Error('找不到 Workflow Run。')
+      const stored = await requireRunStatus(runId, '批准', ['waiting'])
+      if (!stored.snapshot.pendingApprovalDetails || !stored.snapshot.pendingApproval) throw new Error('waiting 状态没有可决定的 Approval。')
       const execution = stored.snapshot.currentStepExecutionId ? stored.stepExecutions.find((candidate) => candidate.id === stored.snapshot.currentStepExecutionId) : null
       const step = execution ? stored.workflow.phases[stored.snapshot.phaseIndex]?.steps[stored.snapshot.stepIndex] : undefined
       const current = await refreshPullRequest(stored, isPullRequestStep(step))
@@ -467,6 +501,8 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
     },
 
     async reject(runId) {
+      const current = await requireRunStatus(runId, '拒绝', ['waiting'])
+      if (!current.snapshot.pendingApprovalDetails || !current.snapshot.pendingApproval) throw new Error('waiting 状态没有可决定的 Approval。')
       return store.decideApproval(runId, 'rejected')
     },
 

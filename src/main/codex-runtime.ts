@@ -4,7 +4,7 @@ import { access, chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promise
 import { tmpdir } from 'node:os'
 import { basename, delimiter, join, normalize, relative, resolve } from 'node:path'
 
-import type { AgentRuntimeAdapter, RuntimeArtifact, RuntimeEvent, RuntimeEventMetadata, RuntimeExecutionContext, RuntimeLocator, RuntimePreflightContext, RuntimePreflightResult } from '../shared/workflow-run'
+import type { AgentRuntimeAdapter, RuntimeArtifact, RuntimeEvent, RuntimeEventInput, RuntimeEventInputMetadata, RuntimeExecutionContext, RuntimeLocator, RuntimePreflightContext, RuntimePreflightResult } from '../shared/workflow-run'
 import type { SkillManifest } from '../shared/workflow'
 import { isCommandAllowed, isNetworkHostAllowed, isPathAllowed } from './permission-policy'
 import { createStdioCodexAppServerTransport, type CodexAppServerTransport, type JsonRpcNotification } from './codex-app-server-transport'
@@ -39,7 +39,8 @@ interface CodexRuntimeDependencies {
 const QUESTION_PREFIX = 'QUESTION:'
 const APPROVAL_PREFIX = 'APPROVAL_REQUIRED:'
 const ARTIFACT_PREFIX = 'ARTIFACT:'
-const VERIFICATION_ARTIFACT_TYPES = ['check-result', 'test-result', 'review-report', 'commit'] as const
+const TICKET_PROGRESS_PREFIX = 'TICKET_PROGRESS:'
+const VERIFICATION_ARTIFACT_TYPES = ['check-result', 'test-result', 'review-report', 'verification-report', 'commit'] as const
 
 const GIT_GUARD_SCRIPT = String.raw`#!/usr/bin/env node
 const { spawnSync } = require('node:child_process')
@@ -169,7 +170,7 @@ function codexVersion(initializeResponse: unknown): string {
   return userAgent.match(/\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?/)?.[0] ?? userAgent
 }
 
-function appServerItemEvent(notification: JsonRpcNotification): RuntimeEvent | null {
+function appServerItemEvent(notification: JsonRpcNotification): RuntimeEventInput | null {
   if (notification.method !== 'item/completed') return null
   const item = asRecord(notification.params?.item)
   if (!item) return null
@@ -225,9 +226,25 @@ function isArtifactInsideWorkspace(artifact: RuntimeArtifact, workspacePath: str
   return isVerificationArtifact(artifact) && !relativeLocation.startsWith('../')
 }
 
-function parseAgentMessage(text: string, sessionId?: string): RuntimeEvent {
+function parseAgentMessage(text: string, sessionId?: string): RuntimeEventInput {
   if (text.startsWith(QUESTION_PREFIX)) return { type: 'question', question: text.slice(QUESTION_PREFIX.length).trim(), ...(sessionId ? { sessionId } : {}) }
   if (text.startsWith(APPROVAL_PREFIX)) return { type: 'approval_required', approval: text.slice(APPROVAL_PREFIX.length).trim(), ...(sessionId ? { sessionId } : {}) }
+  if (text.startsWith(TICKET_PROGRESS_PREFIX)) {
+    try {
+      const progress = JSON.parse(text.slice(TICKET_PROGRESS_PREFIX.length).trim()) as Record<string, unknown>
+      if (['implementation', 'testing', 'review', 'commit'].includes(String(progress.stage)) && ['pending', 'running', 'completed', 'failed', 'skipped'].includes(String(progress.status))) {
+        return {
+          type: 'ticket_progress',
+          stage: progress.stage as Extract<RuntimeEventInput, { type: 'ticket_progress' }>['stage'],
+          status: progress.status as Extract<RuntimeEventInput, { type: 'ticket_progress' }>['status'],
+          ...(sessionId ? { sessionId } : {})
+        }
+      }
+    } catch {
+      // Preserve malformed protocol messages as displayable text.
+    }
+    return { type: 'text_delta', text, ...(sessionId ? { sessionId } : {}) }
+  }
   if (text.startsWith(ARTIFACT_PREFIX)) {
     try {
       const artifact = JSON.parse(text.slice(ARTIFACT_PREFIX.length).trim()) as RuntimeArtifact
@@ -241,8 +258,10 @@ function parseAgentMessage(text: string, sessionId?: string): RuntimeEvent {
   return { type: 'text_delta', text, ...(sessionId ? { sessionId } : {}) }
 }
 
-function sanitizeRuntimeMetadata(event: RuntimeEvent): RuntimeEventMetadata {
-  const metadata: RuntimeEventMetadata = {}
+function sanitizeRuntimeMetadata(event: RuntimeEventInput): RuntimeEventInputMetadata {
+  const metadata: RuntimeEventInputMetadata = {}
+  if (typeof event.runId === 'string') metadata.runId = sanitizeSensitiveText(event.runId)
+  if (typeof event.executionId === 'string') metadata.executionId = sanitizeSensitiveText(event.executionId)
   if (typeof event.idempotencyKey === 'string') metadata.idempotencyKey = sanitizeSensitiveText(event.idempotencyKey)
   if (typeof event.sessionId === 'string') metadata.sessionId = sanitizeSensitiveText(event.sessionId)
   if (typeof event.provider === 'string') metadata.provider = sanitizeSensitiveText(event.provider)
@@ -259,7 +278,7 @@ function sanitizeRuntimeMetadata(event: RuntimeEvent): RuntimeEventMetadata {
   return metadata
 }
 
-function sanitizeRuntimeEvent(event: RuntimeEvent): RuntimeEvent {
+function sanitizeRuntimeEvent(event: RuntimeEventInput): RuntimeEventInput {
   const metadata = sanitizeRuntimeMetadata(event)
   switch (event.type) {
     case 'text_delta':
@@ -270,6 +289,8 @@ function sanitizeRuntimeEvent(event: RuntimeEvent): RuntimeEvent {
       return { type: 'question', ...metadata, question: sanitizeSensitiveText(event.question) }
     case 'approval_required':
       return { type: 'approval_required', ...metadata, approval: sanitizeSensitiveText(event.approval) }
+    case 'ticket_progress':
+      return { type: 'ticket_progress', ...metadata, stage: event.stage, status: event.status }
     case 'status_changed':
       return { type: 'status_changed', ...metadata, status: event.status, ...(typeof event.reason === 'string' ? { reason: sanitizeSensitiveText(event.reason) } : {}) }
     case 'error':
@@ -398,6 +419,7 @@ function promptFor(context: RuntimeExecutionContext, skillInstructions: string):
     `Workflow Run ID: ${context.runId}（所有 GitHub spec、ticket、Decision Record 和 URL 必须在正文或 Artifact 元数据中关联此 Run ID。）`,
     `Idea: ${context.idea}`,
     `Phase: ${context.workflow.phases[context.phaseIndex]?.id ?? 'unknown'}`,
+    `Implementation Ticket: ${context.implementationTicket ? `${context.implementationTicket.id} · ${context.implementationTicket.position} · ${context.implementationTicket.title}` : '(none)'}`,
     `Workspace: ${context.workspace.path}`,
     `Phase Context: ${context.phaseContext?.content ?? '(empty)'}`,
     `Input Artifacts: ${JSON.stringify(context.inputArtifacts)}`,
@@ -407,6 +429,7 @@ function promptFor(context: RuntimeExecutionContext, skillInstructions: string):
     'Fixed Skill instructions:',
     skillInstructions,
     '需要用户回答时，最后一条消息必须以 QUESTION: 开头；需要审批时以 APPROVAL_REQUIRED: 开头。',
+    '执行 Implementation Ticket 时，在实现、测试、Review、Commit 子流程变化后输出 TICKET_PROGRESS: {"stage":"implementation|testing|review|commit","status":"running|completed|failed|skipped"}。',
     '确认写入 CONTEXT.md 或 docs/adr/*.md，或已获批准发布 GitHub spec/ticket 后，输出 ARTIFACT: 后跟 JSON 对象。GitHub URL 仅允许 https://github.com/；普通聊天、日志和临时文件不要标记为 Artifact。implement 和 code-review 完成时必须将 typecheck、相关测试、全量测试和 review 结果写入 Workspace，并分别输出 type 为 check-result、test-result、review-report 的 Artifact。code-review 发现问题时必须先在当前 Workspace 修复，再重新运行相关检查和 review，直到结果通过后才报告 completed。'
   ].join('\n')
 }
@@ -493,10 +516,10 @@ export function createCodexRuntimeAdapter(dependencies: CodexRuntimeDependencies
     return [own, ...dependenciesText].filter(Boolean).join('\n\n')
   }
 
-  function enrichEvents(events: RuntimeEvent[], context: RuntimeExecutionContext): RuntimeEvent[] {
+  function enrichEvents(events: RuntimeEventInput[], context: RuntimeExecutionContext): RuntimeEvent[] {
     const networkGithub = context.permissionPolicy.grantedPermissions.includes('network.github')
     const permissionPolicy = sanitizePermissionPolicy(context.permissionPolicy)
-    let forbidden: Extract<RuntimeEvent, { type: 'tool_call' }> | null = null
+    let forbidden: Extract<RuntimeEventInput, { type: 'tool_call' }> | null = null
     let reason: string | null = null
     for (const event of events) {
       if (event.type !== 'tool_call') continue
@@ -509,7 +532,7 @@ export function createCodexRuntimeAdapter(dependencies: CodexRuntimeDependencies
     }
     if (forbidden) {
       const runtimeLocator = events.find((event) => event.runtimeLocator)?.runtimeLocator
-      return [{ type: 'error', error: reason ?? 'Permission Policy 阻止 Git 操作。', provider: 'codex', source: 'permission-policy', permissionPolicy, ...(runtimeLocator ? { runtimeLocator } : {}) }]
+      return [{ type: 'error', error: reason ?? 'Permission Policy 阻止 Git 操作。', runId: context.runId, executionId: context.execution.id, provider: 'codex', source: 'permission-policy', permissionPolicy, ...(runtimeLocator ? { runtimeLocator } : {}) }]
     }
     return events.filter((event) => event.type !== 'artifact_produced' || isArtifactInsideWorkspace(event.artifact, context.workspace.path)).map((event) => {
       const sanitized = sanitizeRuntimeEvent(event)
@@ -517,6 +540,8 @@ export function createCodexRuntimeAdapter(dependencies: CodexRuntimeDependencies
       return {
         ...sanitized,
         ...(publishedArtifact && sanitized.type === 'artifact_produced' ? { artifact: { ...sanitized.artifact, runId: context.runId } } : {}),
+        runId: context.runId,
+        executionId: context.execution.id,
         provider: 'codex',
         source: 'codex app-server',
         permissionPolicy
@@ -551,17 +576,19 @@ export function createCodexRuntimeAdapter(dependencies: CodexRuntimeDependencies
     },
     async execute(context): Promise<RuntimeEvent[]> {
       const skillManifest = getManifests().find((manifest) => manifest.name === context.skill?.name && manifest.version === context.skill?.version)
-      if ((dependencies.skillManifests || dependencies.getSkillManifests) && !skillManifest) return [{ type: 'error', error: sanitizeSensitiveText(`固定 Skill ${context.skill?.name ?? 'unknown'}@${context.skill?.version ?? 'unknown'} 不可用。`) }]
+      if ((dependencies.skillManifests || dependencies.getSkillManifests) && !skillManifest) {
+        return [{ type: 'error', error: sanitizeSensitiveText(`固定 Skill ${context.skill?.name ?? 'unknown'}@${context.skill?.version ?? 'unknown'} 不可用。`), runId: context.runId, executionId: context.execution.id, source: 'codex app-server' }]
+      }
       let skillInstructions = '(Skill instructions unavailable)'
       const packagePath = skillManifest ? (dependencies.resolveSkillPackagePath?.(skillManifest) ?? dependencies.skillPackagePath) : null
       if (skillManifest && packagePath) {
         try {
           skillInstructions = await loadSkillInstructions(skillManifest, packagePath)
         } catch (error) {
-          return [{ type: 'error', error: sanitizeSensitiveText(`无法读取固定 Skill：${error instanceof Error ? error.message : String(error)}`) }]
+          return [{ type: 'error', error: sanitizeSensitiveText(`无法读取固定 Skill：${error instanceof Error ? error.message : String(error)}`), runId: context.runId, executionId: context.execution.id, source: 'codex app-server' }]
         }
       }
-      const persistedThreadId = context.execution.runtimeLocator?.threadId ?? context.execution.runtimeSessionId
+      const persistedThreadId = context.execution.runtimeLocators?.at(-1)?.threadId ?? context.execution.runtimeSessionId
       let gitGuard: GitGuard | null = null
       let transport: CodexAppServerTransport | null = null
       let runtimeLocator: RuntimeLocator | null = null
@@ -588,7 +615,7 @@ export function createCodexRuntimeAdapter(dependencies: CodexRuntimeDependencies
         const locator = { runtimeProvider: 'codex', threadId, turnId, runtimeVersion: codexVersion(initialized) }
         runtimeLocator = locator
         await context.persistRuntimeLocator?.(locator)
-        const events: RuntimeEvent[] = []
+        const events: RuntimeEventInput[] = []
         while (true) {
           const notification = await transport.nextNotification()
           if (!notification) throw new Error('Codex App Server 在 Turn 完成前关闭。')
@@ -613,7 +640,7 @@ export function createCodexRuntimeAdapter(dependencies: CodexRuntimeDependencies
           if (!turn) continue
           const status = asString(turn.status)
           if (status === 'completed') events.push({ type: 'status_changed', status: 'completed' })
-          else if (status === 'interrupted') events.push({ type: 'status_changed', status: 'blocked', reason: 'Codex Turn 已中断。' })
+          else if (status === 'interrupted') events.push({ type: 'status_changed', status: 'paused' })
           else {
             const error = asRecord(turn.error)
             if (!events.some((event) => event.type === 'error')) events.push({ type: 'error', error: asString(error?.message) ?? 'Codex Turn 执行失败。' })
@@ -623,8 +650,8 @@ export function createCodexRuntimeAdapter(dependencies: CodexRuntimeDependencies
       } catch (error) {
         const message = sanitizeSensitiveText(error instanceof Error ? error.message : String(error))
         return isNetworkFailure(message)
-          ? [{ type: 'status_changed', status: 'blocked', reason: message, provider: 'codex', source: 'codex app-server', permissionPolicy: sanitizePermissionPolicy(context.permissionPolicy), ...(runtimeLocator ? { runtimeLocator } : {}) }]
-          : [{ type: 'error', error: message, provider: 'codex', source: 'codex app-server', permissionPolicy: sanitizePermissionPolicy(context.permissionPolicy), ...(runtimeLocator ? { runtimeLocator } : {}) }]
+          ? [{ type: 'status_changed', status: 'blocked', reason: message, runId: context.runId, executionId: context.execution.id, provider: 'codex', source: 'codex app-server', permissionPolicy: sanitizePermissionPolicy(context.permissionPolicy), ...(runtimeLocator ? { runtimeLocator } : {}) }]
+          : [{ type: 'error', error: message, runId: context.runId, executionId: context.execution.id, provider: 'codex', source: 'codex app-server', permissionPolicy: sanitizePermissionPolicy(context.permissionPolicy), ...(runtimeLocator ? { runtimeLocator } : {}) }]
       } finally {
         await transport?.close().catch(() => undefined)
         await gitGuard?.cleanup().catch(() => undefined)

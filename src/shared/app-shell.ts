@@ -54,8 +54,8 @@ export interface AppShellApi {
   listRuntimeItems: (executionId: string) => Promise<RuntimeItem[]>
   subscribeRuntimeItemUpdates: (listener: (item: RuntimeItem) => void) => () => void
   pauseWorkflowRun: (runId: string) => Promise<WorkflowRun>
-  resumeWorkflowRun: (runId: string) => Promise<WorkflowRun>
-  retryWorkflowStep: (runId: string) => Promise<WorkflowRun>
+  resumeWorkflowRun: (runId: string, guidance?: string) => Promise<WorkflowRun>
+  retryWorkflowStep: (runId: string, guidance?: string) => Promise<WorkflowRun>
   cancelWorkflowRun: (runId: string) => Promise<WorkflowRun>
   answerWorkflowQuestion: (runId: string, answer: string) => Promise<WorkflowRun>
   approveWorkflowApproval: (runId: string) => Promise<WorkflowRun>

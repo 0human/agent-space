@@ -20,7 +20,7 @@ function context(overrides: Partial<RuntimeExecutionContext> = {}): RuntimeExecu
     workflow: { phases: [] } as never,
     phaseIndex: 0,
     stepIndex: 0,
-    execution: { id: 'execution-1', runtimeLocator: null } as never,
+    execution: { id: 'execution-1', runtimeLocators: [] } as never,
     skill: null,
     phaseContext: null,
     inputArtifacts: [],
@@ -79,13 +79,15 @@ describe('Codex Runtime Adapter policy contract', () => {
       expect.objectContaining({ type: 'text_delta', text: 'TOKEN=<redacted>' }),
       expect.objectContaining({ type: 'tool_call', name: 'echo API_KEY=<redacted>' })
     ]))
+    expect(events.every((event) => event.runId === 'run-1' && event.executionId === 'execution-1' && event.source === 'codex app-server')).toBe(true)
     expect(JSON.stringify(events)).not.toContain('message-secret')
     expect(JSON.stringify(events)).not.toContain('command-secret')
   })
 
   it('keeps verification Artifacts inside the Run Workspace', async () => {
     const adapter = appServerItems([
-      { type: 'agentMessage', id: 'item-1', text: 'ARTIFACT: ' + JSON.stringify({ type: 'test-result', name: 'typecheck', location: '/work/run-1/.agent-space/typecheck.json' }) }
+      { type: 'agentMessage', id: 'item-1', text: 'ARTIFACT: ' + JSON.stringify({ type: 'test-result', name: 'typecheck', location: '/work/run-1/.agent-space/typecheck.json' }) },
+      { type: 'agentMessage', id: 'item-2', text: 'ARTIFACT: ' + JSON.stringify({ type: 'verification-report', name: 'product-verification', location: '/work/run-1/.agent-space/product-verification.md' }) }
     ], {
       skillManifests: [{ name: 'code-review', version: '1.0.0', entry: 'review.md', dependencies: [], supportedRuntimes: ['codex'], capabilities: ['review'], requiredPermissions: [] }],
       skillPackagePath: '/skills',
@@ -96,7 +98,8 @@ describe('Codex Runtime Adapter policy contract', () => {
       workspace: { path: '/work/run-1' },
       skill: { name: 'code-review', version: '1.0.0' }
     }))).resolves.toEqual(expect.arrayContaining([
-      expect.objectContaining({ type: 'artifact_produced', artifact: expect.objectContaining({ type: 'test-result' }) })
+      expect.objectContaining({ type: 'artifact_produced', artifact: expect.objectContaining({ type: 'test-result' }) }),
+      expect.objectContaining({ type: 'artifact_produced', artifact: expect.objectContaining({ type: 'verification-report' }) })
     ]))
   })
 

@@ -45,7 +45,7 @@ function executionContext(overrides: Partial<RuntimeExecutionContext> = {}): Run
     workflow: { phases: [{ id: 'implementation', name: 'Implementation', goal: 'Build', steps: [] }] } as never,
     phaseIndex: 0,
     stepIndex: 0,
-    execution: { id: 'execution-1', runtimeLocator: null } as never,
+    execution: { id: 'execution-1', runtimeLocators: [] } as never,
     skill: null,
     phaseContext: null,
     inputArtifacts: [],
@@ -107,6 +107,29 @@ describe('Codex App Server Agent Runtime Adapter contract', () => {
     expect(transport.close).toHaveBeenCalledOnce()
   })
 
+  it('sends the current Implementation Ticket and maps its progress protocol', async () => {
+    const transport = successfulTransport([
+      { method: 'item/completed', params: { threadId: 'thread-1', turnId: 'turn-1', item: { type: 'agentMessage', id: 'item-1', text: 'TICKET_PROGRESS: {"stage":"testing","status":"running"}' } } },
+      { method: 'turn/completed', params: { threadId: 'thread-1', turn: { id: 'turn-1', status: 'completed', error: null } } }
+    ])
+    const adapter = createCodexRuntimeAdapter({ command: '/definitely-missing-agent-space-codex', createTransport: async () => transport } as never)
+
+    const events = await adapter.execute(executionContext({
+      implementationTicket: {
+        id: 'ticket-2', runId: 'run-1', sourceArtifactId: 'artifact-2', title: 'Expose progress', location: 'https://github.com/example/demo/issues/2', position: 2,
+        status: 'running', stages: { implementation: 'completed', testing: 'running', review: 'pending', commit: 'pending' }, threadId: 'thread-1',
+        result: { attemptCount: 1, failedAttemptCount: 0, artifactIds: [] }, startedAt: null, finishedAt: null
+      }
+    }))
+
+    const turnInput = transport.requests.find((request) => request.method === 'turn/start')?.params.input as Array<{ text: string }>
+    expect(turnInput[0]?.text).toContain('Implementation Ticket: ticket-2 · 2 · Expose progress')
+    expect(events).toEqual([
+      expect.objectContaining({ type: 'ticket_progress', stage: 'testing', status: 'running' }),
+      expect.objectContaining({ type: 'status_changed', status: 'completed' })
+    ])
+  })
+
   it('completes the Turn when live Item projection fails', async () => {
     const transport = successfulTransport([
       { method: 'item/started', params: { threadId: 'thread-1', turnId: 'turn-1', item: { type: 'agentMessage', id: 'item-1', text: '' } } },
@@ -137,7 +160,7 @@ describe('Codex App Server Agent Runtime Adapter contract', () => {
     await adapter.execute(executionContext({
       execution: {
         id: 'execution-1',
-        runtimeLocator: { runtimeProvider: 'codex', threadId: 'thread-9', turnId: 'turn-9', runtimeVersion: '0.143.0' }
+        runtimeLocators: [{ runtimeProvider: 'codex', threadId: 'thread-9', turnId: 'turn-9', runtimeVersion: '0.143.0' }]
       } as never
     }))
 
@@ -154,7 +177,7 @@ describe('Codex App Server Agent Runtime Adapter contract', () => {
     {
       status: 'interrupted',
       error: null,
-      expected: { type: 'status_changed', status: 'blocked', reason: 'Codex Turn 已中断。' }
+      expected: { type: 'status_changed', status: 'paused' }
     }
   ])('maps a $status Turn to a provider-neutral terminal event', async ({ status, error, expected }) => {
     const transport = successfulTransport([

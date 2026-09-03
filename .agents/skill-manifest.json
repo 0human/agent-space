@@ -57,6 +57,15 @@
       "requiredPermissions": ["workspace.read"]
     },
     {
+      "name": "product-verification",
+      "version": "1.0.0",
+      "entry": "skills/product-verification/SKILL.md",
+      "dependencies": [],
+      "supportedRuntimes": ["codex"],
+      "capabilities": ["verification", "artifact"],
+      "requiredPermissions": ["workspace.read", "workspace.write"]
+    },
+    {
       "name": "grilling",
       "version": "1.0.0",
       "entry": "skills/grilling/SKILL.md",

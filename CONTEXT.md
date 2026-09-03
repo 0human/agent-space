@@ -73,9 +73,9 @@ _Avoid_：Step definition、log entry
 Workflow Run 当前可恢复状态的持久表示，说明流程正在何处、哪些 Approval Gate 待处理以及下一步是什么。
 _Avoid_：Event history、progress text
 
-**Run Board**：
-以 Phase 为列、以 Step 或 Approval Gate 为卡片的 Workflow Run 操作视图；它展示并操作 Workflow 允许的状态转换，不是独立的任务事实来源。
-_Avoid_：Kanban database、freeform task board
+**Run Activity View**：
+以连续活动流呈现单个 Workflow Run 的主操作视图；它在吸顶进度中展示 Workflow、Phase 和 Implementation Ticket 位置，并投影 Runtime Item、Decision Record、Artifact 摘要及允许的状态转换，不拥有独立执行事实。
+_Avoid_：Run Board、Kanban database、global chat
 
 **Workflow Event**：
 描述 Workflow Run 状态变化的不可变记录，例如 started、paused、completed、failed 或 cancelled。
@@ -96,6 +96,10 @@ _Avoid_：Human approval、final review
 **Phase Context**：
 某个 Phase 内可持续的对话和推理上下文；Phase 之间通过 Artifact、Decision Record 和 Run 状态传递结果。
 _Avoid_：Global conversation、chat history
+
+**Implementation Ticket**：
+Planning Phase 产生并由 Implementation Phase 逐个交付的工作单元；每个 Implementation Ticket 可以包含多次 Step Execution attempt，但在 Run 中只占一个有序进度位置。
+_Avoid_：Step、Runtime Item、generic task
 
 **Decision Record**：
 用户或 agent 在 Workflow Run 中确认的、会影响后续流程的结构化决定，包含问题、答案、来源和继续位置。
@@ -182,8 +186,20 @@ Agent Runtime 在一次 Turn 内产生的、可增量更新并归属于某个 St
 _Avoid_：Workflow Event、Artifact、provider transcript
 
 **Item Projection**：
-按 Step Execution 汇集 Runtime Item 当前状态的临时操作视图；它不是 Run Snapshot 或持久化执行事实。
+按 Step Execution 汇集 Runtime Item 当前状态、供 Run Activity View 实时或历史展示的操作投影；它不是 Run Snapshot、Artifact 或持久化执行事实。
 _Avoid_：Run Snapshot、durable transcript、Workflow log
+
+**Runtime Locator**：
+Step Execution 用来重新定位 Agent Runtime 历史的稳定引用；一次 attempt 可以按顺序关联多个 Runtime Locator，以覆盖暂停、回答和继续产生的多个 Turn。
+_Avoid_：Chat transcript、Run Snapshot、Artifact location
+
+**Live Mode**：
+Run Activity View 自动跟随当前执行位置和最新 Runtime Item 的查看模式。
+_Avoid_：Auto-run、follow-up queue
+
+**Inspection Mode**：
+用户检查历史 Phase 或 Implementation Ticket、同时让 Workflow Run 继续执行的查看模式；新活动不会夺回滚动位置。
+_Avoid_：Paused Run、read-only Run
 
 **Data Transfer Notice**：
 联网或向 External Destination 发送数据前展示的说明，包含目标服务、数据类型、权限和断网后的恢复方式。

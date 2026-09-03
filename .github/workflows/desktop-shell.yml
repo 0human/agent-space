@@ -2,6 +2,8 @@ name: Desktop Shell
 
 on:
   push:
+    branches:
+      - main
   pull_request:
 
 permissions:

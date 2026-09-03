@@ -9,6 +9,7 @@ import type { SkillManifest } from '../shared/workflow'
 import { isCommandAllowed, isNetworkHostAllowed, isPathAllowed } from './permission-policy'
 import { createStdioCodexAppServerTransport, type CodexAppServerTransport, type JsonRpcNotification } from './codex-app-server-transport'
 import type { CodexItemProjection } from './codex-item-projection'
+import { createCodexSessionModule, CodexCapabilityNegotiationError, type CodexSessionModule } from './codex-session-module'
 import { sanitizePermissionPolicy, sanitizeSensitivePath, sanitizeSensitiveText, sanitizeSensitiveValue } from './sensitive-text'
 
 export { sanitizeSensitiveText } from './sensitive-text'
@@ -34,6 +35,7 @@ interface CodexRuntimeDependencies {
   readSkill?: (path: string, encoding: 'utf8') => Promise<string>
   createTransport?: (options: ProcessOptions & { command: string }) => Promise<CodexAppServerTransport> | CodexAppServerTransport
   itemProjection?: Pick<CodexItemProjection, 'handle'>
+  session?: CodexSessionModule
 }
 
 const QUESTION_PREFIX = 'QUESTION:'
@@ -165,11 +167,6 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     : null
 }
 
-function codexVersion(initializeResponse: unknown): string {
-  const userAgent = asString(asRecord(initializeResponse)?.userAgent) ?? 'unknown'
-  return userAgent.match(/\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?/)?.[0] ?? userAgent
-}
-
 function appServerItemEvent(notification: JsonRpcNotification): RuntimeEventInput | null {
   if (notification.method !== 'item/completed') return null
   const item = asRecord(notification.params?.item)
@@ -193,12 +190,6 @@ function appServerItemEvent(notification: JsonRpcNotification): RuntimeEventInpu
     }
   }
   return null
-}
-
-function completedTurn(notification: JsonRpcNotification, threadId: string, turnId: string): Record<string, unknown> | null {
-  if (notification.method !== 'turn/completed' || notification.params?.threadId !== threadId) return null
-  const turn = asRecord(notification.params.turn)
-  return turn?.id === turnId ? turn : null
 }
 
 function isDiscoveryArtifact(artifact: RuntimeArtifact): boolean {
@@ -496,6 +487,9 @@ export function createCodexRuntimeAdapter(dependencies: CodexRuntimeDependencies
   const getManifests = dependencies.getSkillManifests ?? (() => dependencies.skillManifests ?? [])
   const readSkill = dependencies.readSkill ?? ((path: string, encoding: 'utf8') => readFile(path, encoding))
   const createTransport = dependencies.createTransport ?? ((options: ProcessOptions & { command: string }) => createStdioCodexAppServerTransport(options))
+  const session = dependencies.session ?? createCodexSessionModule({
+    createTransport: (options) => createTransport(options)
+  })
 
   async function loadSkillInstructions(manifest: SkillManifest, packagePath: string, visited = new Set<string>()): Promise<string> {
     const key = `${manifest.name}@${manifest.version}`
@@ -572,6 +566,9 @@ export function createCodexRuntimeAdapter(dependencies: CodexRuntimeDependencies
       else checks.push(sanitizeSensitiveText(`固定 Skill ${manifest.name}@${manifest.version} 可用。`))
       const permissions = context.permissionPolicy.grantedPermissions.map(sanitizeSensitiveText).join(', ') || 'none'
       checks.push(sanitizeSensitiveText(`Data Transfer Notice：External Destination: Codex Agent Runtime；发送 Idea、Phase Context、Artifact、Decision Record；权限：${permissions}；断网后从持久化 Step Execution 恢复。`))
+      const negotiation = await session.preflight({ cwd: context.workspace.path, command })
+      if (negotiation.compatible) checks.push(sanitizeSensitiveText(`Codex App Server 能力协商通过（${negotiation.command} ${negotiation.version}）。`))
+      else errors.push(sanitizeSensitiveText(negotiation.reason ?? `Codex App Server 能力不可用：${negotiation.missingCapabilities.join(', ')}`))
       return { checks, errors }
     },
     async execute(context): Promise<RuntimeEvent[]> {
@@ -588,74 +585,85 @@ export function createCodexRuntimeAdapter(dependencies: CodexRuntimeDependencies
           return [{ type: 'error', error: sanitizeSensitiveText(`无法读取固定 Skill：${error instanceof Error ? error.message : String(error)}`), runId: context.runId, executionId: context.execution.id, source: 'codex app-server' }]
         }
       }
-      const persistedThreadId = context.execution.runtimeLocators?.at(-1)?.threadId ?? context.execution.runtimeSessionId
       let gitGuard: GitGuard | null = null
-      let transport: CodexAppServerTransport | null = null
       let runtimeLocator: RuntimeLocator | null = null
+      const events: RuntimeEventInput[] = []
       try {
         gitGuard = await createGitGuard(context.project.defaultBranch, context.permissionPolicy.grantedPermissions.includes('network.github'))
-        transport = await createTransport({ command, cwd: context.workspace.path, env: gitGuard.env })
-        const initialized = await transport.request('initialize', {
-          clientInfo: { name: 'agent_space', title: 'Agent Space', version: '0.1.0' },
-          capabilities: null
-        })
-        await transport.notify('initialized', {})
         const sandbox = context.permissionPolicy.grantedPermissions.includes('workspace.write') ? 'workspace-write' : 'read-only'
-        const threadResponse = await transport.request(persistedThreadId ? 'thread/resume' : 'thread/start', persistedThreadId
-          ? { threadId: persistedThreadId, cwd: context.workspace.path, approvalPolicy: 'never', sandbox }
-          : { cwd: context.workspace.path, approvalPolicy: 'never', sandbox, serviceName: 'agent_space' })
-        const threadId = asString(asRecord(asRecord(threadResponse)?.thread)?.id)
-        if (!threadId) throw new Error('Codex App Server 未返回 Thread ID。')
-        const turnResponse = await transport.request('turn/start', {
-          threadId,
-          input: [{ type: 'text', text: promptFor(context, skillInstructions), text_elements: [] }]
-        })
-        const turnId = asString(asRecord(asRecord(turnResponse)?.turn)?.id)
-        if (!turnId) throw new Error('Codex App Server 未返回 Turn ID。')
-        const locator = { runtimeProvider: 'codex', threadId, turnId, runtimeVersion: codexVersion(initialized) }
-        runtimeLocator = locator
-        await context.persistRuntimeLocator?.(locator)
-        const events: RuntimeEventInput[] = []
-        while (true) {
-          const notification = await transport.nextNotification()
-          if (!notification) throw new Error('Codex App Server 在 Turn 完成前关闭。')
-          try {
-            dependencies.itemProjection?.handle(notification, {
+        const phaseId = context.workflow.phases[context.phaseIndex]?.id ?? 'unknown'
+        const workUnitKey = context.implementationTicket?.id
+          ? `implementation-ticket:${context.runId}:${context.implementationTicket.id}`
+          : `${context.runId}:phase:${phaseId}`
+        const result = await session.runTurn({
+          command,
+          cwd: context.workspace.path,
+          env: gitGuard.env,
+          workUnitKey,
+          resumeLocator: context.execution.runtimeLocators?.at(-1) ?? (context.execution.runtimeSessionId ? { runtimeProvider: 'codex', threadId: context.execution.runtimeSessionId, turnId: '', runtimeVersion: '' } : null),
+          input: promptFor(context, skillInstructions),
+          permissionPolicy: context.permissionPolicy,
+          sandbox,
+          onLocator: async (locator) => {
+            runtimeLocator = locator
+            await context.persistRuntimeLocator?.(locator)
+          },
+          onApproval: async (request) => {
+            events.push({ type: 'approval_required', approval: `Runtime Approval：${asString(request.params?.command) ?? request.method}` })
+            // Approval decisions belong to the host Workflow/UI. Returning
+            // undefined keeps the original JSON-RPC request pending so the
+            // caller can later respond through CodexSessionModule.
+            return undefined
+          },
+          onNotification: async (message, locator) => {
+            runtimeLocator = locator
+            try {
+              dependencies.itemProjection?.handle(message as JsonRpcNotification, {
               runId: context.runId,
               executionId: context.execution.id,
               runtimeLocator: locator,
               permissionPolicy: context.permissionPolicy,
               source: 'codex app-server'
             })
-          } catch {
+            } catch {
             // Live projection is observational and must not affect the active Turn.
+            }
+            if (!('id' in message)) {
+              const notification = message as JsonRpcNotification
+              const itemEvent = appServerItemEvent(notification)
+              if (itemEvent && notification.params?.threadId === locator.threadId && notification.params?.turnId === locator.turnId) events.push(itemEvent)
+              if (notification.method === 'error' && notification.params?.threadId === locator.threadId && notification.params?.turnId === locator.turnId && notification.params.willRetry !== true) {
+                const error = asRecord(notification.params.error)
+                events.push({ type: 'error', error: asString(error?.message) ?? 'Codex App Server 返回未知错误。' })
+              }
+            }
           }
-          const itemEvent = appServerItemEvent(notification)
-          if (itemEvent && notification.params?.threadId === threadId && notification.params?.turnId === turnId) events.push(itemEvent)
-          if (notification.method === 'error' && notification.params?.threadId === threadId && notification.params?.turnId === turnId && notification.params.willRetry !== true) {
-            const error = asRecord(notification.params.error)
-            events.push({ type: 'error', error: asString(error?.message) ?? 'Codex App Server 返回未知错误。' })
-          }
-          const turn = completedTurn(notification, threadId, turnId)
-          if (!turn) continue
-          const status = asString(turn.status)
-          if (status === 'completed') events.push({ type: 'status_changed', status: 'completed' })
-          else if (status === 'interrupted') events.push({ type: 'status_changed', status: 'paused' })
-          else {
-            const error = asRecord(turn.error)
-            if (!events.some((event) => event.type === 'error')) events.push({ type: 'error', error: asString(error?.message) ?? 'Codex Turn 执行失败。' })
-          }
-          return enrichEvents(events.map((event) => ({ ...event, runtimeLocator: locator })), context)
+        })
+        runtimeLocator = result.locator
+        if (result.status === 'completed') events.push({ type: 'status_changed', status: 'completed' })
+        else if (result.status === 'interrupted') events.push({ type: 'status_changed', status: 'paused' })
+        else if (result.status === 'waiting') {
+          // The approval_required event drives Workflow waiting state. The
+          // Session Module retains the original App Server request.
         }
+        else if (!events.some((event) => event.type === 'error')) {
+          events.push({ type: 'error', error: result.error ?? 'Codex Turn 执行失败。' })
+        }
+        return enrichEvents(events.map((event) => ({ ...event, runtimeLocator: result.locator })), context)
       } catch (error) {
         const message = sanitizeSensitiveText(error instanceof Error ? error.message : String(error))
+        if (error instanceof CodexCapabilityNegotiationError) {
+          return [{ type: 'status_changed', status: 'blocked', reason: message, runId: context.runId, executionId: context.execution.id, provider: 'codex', source: 'codex capability negotiation', permissionPolicy: sanitizePermissionPolicy(context.permissionPolicy), ...(runtimeLocator ? { runtimeLocator } : {}) }]
+        }
         return isNetworkFailure(message)
           ? [{ type: 'status_changed', status: 'blocked', reason: message, runId: context.runId, executionId: context.execution.id, provider: 'codex', source: 'codex app-server', permissionPolicy: sanitizePermissionPolicy(context.permissionPolicy), ...(runtimeLocator ? { runtimeLocator } : {}) }]
           : [{ type: 'error', error: message, runId: context.runId, executionId: context.execution.id, provider: 'codex', source: 'codex app-server', permissionPolicy: sanitizePermissionPolicy(context.permissionPolicy), ...(runtimeLocator ? { runtimeLocator } : {}) }]
       } finally {
-        await transport?.close().catch(() => undefined)
         await gitGuard?.cleanup().catch(() => undefined)
       }
+    },
+    async interrupt(context) {
+      await session.interrupt(context.runtimeLocator)
     }
   }
 }

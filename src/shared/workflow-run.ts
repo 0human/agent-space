@@ -259,6 +259,7 @@ export interface PendingApproval {
 
 export interface RunBlocker extends RunContinuation {
   reason: string
+  recoveryAction: 'resume'
 }
 
 export interface WorkflowRun {
@@ -324,30 +325,39 @@ export interface RuntimeArtifact {
   idempotencyKey?: string | null
 }
 
-export type RuntimeEvent =
-  | ({ type: 'text_delta'; text: string } & RuntimeEventMetadata)
-  | ({ type: 'tool_call'; name: string; input: Record<string, unknown> } & RuntimeEventMetadata)
-  | ({ type: 'question'; question: string } & RuntimeEventMetadata)
-  | ({ type: 'approval_required'; approval: string } & RuntimeEventMetadata)
-  | ({ type: 'artifact_produced'; artifact: RuntimeArtifact } & RuntimeEventMetadata)
-  | ({ type: 'ticket_progress'; stage: ImplementationTicketStage; status: ImplementationTicketStageStatus } & RuntimeEventMetadata)
-  | ({ type: 'status_changed'; status: 'running' | 'paused' | 'completed' | 'blocked'; reason?: string } & RuntimeEventMetadata)
-  | ({ type: 'error'; error: string } & RuntimeEventMetadata)
+type RuntimeEventPayload =
+  | { type: 'text_delta'; text: string }
+  | { type: 'tool_call'; name: string; input: Record<string, unknown> }
+  | { type: 'question'; question: string }
+  | { type: 'approval_required'; approval: string }
+  | { type: 'artifact_produced'; artifact: RuntimeArtifact }
+  | { type: 'ticket_progress'; stage: ImplementationTicketStage; status: ImplementationTicketStageStatus }
+  | { type: 'status_changed'; status: 'running' | 'paused' | 'completed' | 'blocked'; reason?: string }
+  | { type: 'error'; error: string }
+
+type WithRuntimeMetadata<T, TMetadata> = T extends RuntimeEventPayload ? T & TMetadata : never
+
+export type RuntimeEvent = WithRuntimeMetadata<RuntimeEventPayload, RuntimeEventMetadata>
+export type RuntimeEventInput = WithRuntimeMetadata<RuntimeEventPayload, RuntimeEventInputMetadata>
 
 export interface RuntimeEventMetadata {
+  runId: string
+  executionId: string
+  source: string
   idempotencyKey?: string
   sessionId?: string
   provider?: string
-  source?: string
   permissionPolicy?: PermissionPolicy
   runtimeLocator?: RuntimeLocator
 }
+
+export type RuntimeEventInputMetadata = Omit<RuntimeEventMetadata, 'runId' | 'executionId' | 'source'> & Partial<Pick<RuntimeEventMetadata, 'runId' | 'executionId' | 'source'>>
 
 export type WorkflowLogType = RuntimeEvent['type']
 
 export interface AgentRuntimeAdapter {
   preflight?(context: RuntimePreflightContext): Promise<RuntimePreflightResult>
-  execute(context: RuntimeExecutionContext): Promise<RuntimeEvent[]>
+  execute(context: RuntimeExecutionContext): Promise<RuntimeEventInput[]>
   interrupt?(context: RuntimeInterruptContext): Promise<void>
 }
 

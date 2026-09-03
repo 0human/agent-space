@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 
 import { createSqliteRunStore } from './workflow-store'
 import type { Project } from '../shared/project'
-import type { RuntimeEvent } from '../shared/workflow-run'
+import type { RuntimeEventInput } from '../shared/workflow-run'
 
 const require = createRequire(import.meta.url)
 const temporaryDirectories: string[] = []
@@ -212,7 +212,7 @@ describe('Workflow Store forward migrations', () => {
       workflowSource: { source: 'project', path: '/work/demo/.agent-space/workflow.json' },
       idea: 'Replay me', now: '2026-09-02T00:00:00.000Z'
     })
-    const events: RuntimeEvent[] = [{ type: 'text_delta', text: 'Durable context.' }, { type: 'question', question: 'Continue?' }]
+    const events: RuntimeEventInput[] = [{ type: 'text_delta', text: 'Durable context.' }, { type: 'question', question: 'Continue?' }]
     const first = await store.recordRuntimeResult(created.id, created.snapshot.currentStepExecutionId!, events)
     const replayed = await store.recordRuntimeResult(created.id, created.snapshot.currentStepExecutionId!, events)
     expect(first.logs).toHaveLength(2)

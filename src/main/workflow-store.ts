@@ -8,6 +8,7 @@ import type { Project } from '../shared/project'
 import type {
   RuntimeArtifact,
   RuntimeEvent,
+  RuntimeEventInput,
   RuntimeLocator,
   RunSnapshot,
   DecisionRecord,
@@ -148,11 +149,34 @@ function parseJson<T>(value: string): T {
   return JSON.parse(value) as T
 }
 
+function parseRunBlocker(value: string): RunBlocker {
+  const blocker = parseJson<Omit<RunBlocker, 'recoveryAction'> & Partial<Pick<RunBlocker, 'recoveryAction'>>>(value)
+  return { ...blocker, recoveryAction: blocker.recoveryAction ?? 'resume' }
+}
+
 const PENDING_TICKET_STAGES: ImplementationTicketStages = {
   implementation: 'pending',
   testing: 'pending',
   review: 'pending',
   commit: 'pending'
+}
+const IMPLEMENTATION_TICKET_STAGE_ORDER = ['implementation', 'testing', 'review', 'commit'] as const
+const TERMINAL_TICKET_STAGE_STATUSES = ['completed', 'skipped'] as const
+
+function applyTicketProgress(stages: ImplementationTicketStages, event: Extract<RuntimeEvent, { type: 'ticket_progress' }>): string | null {
+  const currentStatus = stages[event.stage]
+  if (currentStatus === event.status) return null
+  if (TERMINAL_TICKET_STAGE_STATUSES.includes(currentStatus as typeof TERMINAL_TICKET_STAGE_STATUSES[number])) {
+    return `Implementation Ticket ${event.stage} 阶段已是终态，不能改为 ${event.status}。`
+  }
+  if (event.status === 'pending') return `Implementation Ticket ${event.stage} 阶段不能回退为 pending。`
+  const stageIndex = IMPLEMENTATION_TICKET_STAGE_ORDER.indexOf(event.stage)
+  const incompletePredecessor = IMPLEMENTATION_TICKET_STAGE_ORDER
+    .slice(0, stageIndex)
+    .find((stage) => !TERMINAL_TICKET_STAGE_STATUSES.includes(stages[stage] as typeof TERMINAL_TICKET_STAGE_STATUSES[number]))
+  if (incompletePredecessor) return `Implementation Ticket ${event.stage} 阶段不能在 ${incompletePredecessor} 阶段完成前更新。`
+  stages[event.stage] = event.status
+  return null
 }
 
 function nextCursor(workflow: WorkflowDefinition, phaseIndex: number, stepIndex: number): { phaseIndex: number; stepIndex: number } | null {
@@ -231,6 +255,15 @@ function runtimeLogMessage(event: RuntimeEvent): string {
     case 'status_changed': return event.status
     case 'error': return event.error
   }
+}
+
+function contextualizeRuntimeEvents(runId: string, executionId: string, events: RuntimeEventInput[]): RuntimeEvent[] {
+  return events.map((event) => ({
+    ...event,
+    runId,
+    executionId,
+    source: event.source ?? 'agent-runtime'
+  })) as RuntimeEvent[]
 }
 
 export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
@@ -544,7 +577,7 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
         pendingApproval: snapshotRow.pending_approval,
         pendingQuestionDetails: snapshotRow.pending_question_details ? parseJson<PendingQuestion>(snapshotRow.pending_question_details) : null,
         pendingApprovalDetails: snapshotRow.pending_approval_details ? parseJson<PendingApproval>(snapshotRow.pending_approval_details) : null,
-        blockedBy: snapshotRow.blocked_by ? parseJson<RunBlocker>(snapshotRow.blocked_by) : null,
+        blockedBy: snapshotRow.blocked_by ? parseRunBlocker(snapshotRow.blocked_by) : null,
         ticketProgress: snapshotRow.ticket_progress_json ? parseJson(snapshotRow.ticket_progress_json) : null,
         nextAction: snapshotRow.next_action
       },
@@ -669,14 +702,24 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
     await run(db, 'UPDATE implementation_tickets SET status = ?, stages_json = ?, started_at = COALESCE(started_at, ?), finished_at = NULL WHERE id = ?', ['running', json(stages), createdAt, ticket.id])
   }
 
-  async function updateImplementationTicketFromEvents(ticketId: string, events: RuntimeEvent[]): Promise<void> {
+  async function updateImplementationTicketFromEvents(ticketId: string, events: RuntimeEvent[]): Promise<string | null> {
     const row = await get<{ stages_json: string }>(db, 'SELECT stages_json FROM implementation_tickets WHERE id = ?', [ticketId])
     if (!row) throw new Error('Implementation Ticket 不存在。')
     const stages = parseJson<ImplementationTicketStages>(row.stages_json)
     for (const event of events) {
-      if (event.type === 'ticket_progress') stages[event.stage] = event.status
+      if (event.type !== 'ticket_progress') continue
+      const error = applyTicketProgress(stages, event)
+      if (error) return error
     }
     await run(db, 'UPDATE implementation_tickets SET stages_json = ? WHERE id = ?', [json(stages), ticketId])
+    return null
+  }
+
+  async function incompleteImplementationTicketStages(ticketId: string): Promise<Array<keyof ImplementationTicketStages>> {
+    const row = await get<{ stages_json: string }>(db, 'SELECT stages_json FROM implementation_tickets WHERE id = ?', [ticketId])
+    if (!row) throw new Error('Implementation Ticket 不存在。')
+    const stages = parseJson<ImplementationTicketStages>(row.stages_json)
+    return IMPLEMENTATION_TICKET_STAGE_ORDER.filter((stage) => !TERMINAL_TICKET_STAGE_STATUSES.includes(stages[stage] as typeof TERMINAL_TICKET_STAGE_STATUSES[number]))
   }
 
   async function finishImplementationTicket(ticketId: string, status: 'completed' | 'paused' | 'failed' | 'waiting' | 'blocked' | 'cancelled', createdAt: string): Promise<void> {
@@ -685,11 +728,13 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
     const stages = parseJson<ImplementationTicketStages>(row.stages_json)
     if (status === 'completed') {
       for (const stage of Object.keys(stages) as Array<keyof ImplementationTicketStages>) {
-        if (stages[stage] === 'pending' || stages[stage] === 'running') stages[stage] = 'completed'
+        if (stages[stage] === 'running') stages[stage] = 'completed'
       }
     } else if (status === 'failed') {
       const runningStage = (Object.entries(stages) as Array<[keyof ImplementationTicketStages, ImplementationTicketStages[keyof ImplementationTicketStages]]>).find(([, stageStatus]) => stageStatus === 'running')?.[0]
-      stages[runningStage ?? 'implementation'] = 'failed'
+      const reportedFailedStage = (Object.entries(stages) as Array<[keyof ImplementationTicketStages, ImplementationTicketStages[keyof ImplementationTicketStages]]>).some(([, stageStatus]) => stageStatus === 'failed')
+      if (runningStage) stages[runningStage] = 'failed'
+      else if (!reportedFailedStage) stages[IMPLEMENTATION_TICKET_STAGE_ORDER.find((stage) => stages[stage] === 'pending') ?? 'implementation'] = 'failed'
     }
     await run(db, 'UPDATE implementation_tickets SET status = ?, stages_json = ?, finished_at = ? WHERE id = ?', [status, json(stages), ['completed', 'failed', 'cancelled'].includes(status) ? createdAt : null, ticketId])
   }
@@ -698,7 +743,10 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
     for (const artifact of artifacts) {
       const externalWorkflowArtifact = ['specification', 'ticket', 'tickets', 'decision-record'].includes(artifact.type) && /^https:\/\/github\.com\//i.test(artifact.location ?? '')
       if (externalWorkflowArtifact && artifact.runId !== runId) continue
-      const idempotencyKey = artifact.idempotencyKey ?? `artifact:${runId}:${artifact.type}:${artifact.name}:${artifact.location ?? ''}`
+      const stableTicket = artifact.type === 'ticket' && /^https:\/\/github\.com\//i.test(artifact.location ?? '')
+      const idempotencyKey = artifact.idempotencyKey ?? (stableTicket
+        ? `artifact:${runId}:ticket:${artifact.location}`
+        : `artifact:${runId}:${executionId}:${artifact.type}:${artifact.name}:${artifact.location ?? ''}`)
       const existing = await get<{ id: string }>(db, 'SELECT id FROM artifacts WHERE run_id = ? AND (idempotency_key = ? OR (idempotency_key IS NULL AND name = ? AND location IS ?)) LIMIT 1', [runId, idempotencyKey, artifact.name, artifact.location ?? null])
       let artifactId = existing?.id
       if (existing) {
@@ -807,7 +855,7 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
       })
     },
 
-    async recordRuntimeResult(runId: string, executionId: string, events: RuntimeEvent[]): Promise<StoredRun> {
+    async recordRuntimeResult(runId: string, executionId: string, events: RuntimeEventInput[]): Promise<StoredRun> {
       return locked(async () => transaction(async () => {
         const current = await load(runId)
         if (!current) throw new Error('找不到 Workflow Run。')
@@ -817,10 +865,19 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
         const timestamp = now()
         const activeExecution = current.stepExecutions.find((execution) => execution.id === executionId)
         const implementationTicketId = activeExecution?.implementationTicketId ?? null
-        const insertedEvents = await appendRuntimeRecords(current, executionId, events, timestamp)
+        const runtimeEvents = contextualizeRuntimeEvents(runId, executionId, events)
+        const insertedEvents = await appendRuntimeRecords(current, executionId, runtimeEvents, timestamp)
         if (insertedEvents.length === 0) return current
-        if (implementationTicketId) await updateImplementationTicketFromEvents(implementationTicketId, events)
-        const result = resolveRuntimeEvents(events)
+        const ticketProgressError = implementationTicketId ? await updateImplementationTicketFromEvents(implementationTicketId, runtimeEvents) : null
+        let result = ticketProgressError
+          ? { type: 'failed' as const, error: ticketProgressError }
+          : resolveRuntimeEvents(runtimeEvents)
+        if (implementationTicketId && result.type === 'completed') {
+          const incompleteStages = await incompleteImplementationTicketStages(implementationTicketId)
+          if (incompleteStages.length > 0) {
+            result = { type: 'failed', error: `Implementation Ticket 子流程未完成：${incompleteStages.join('、')}。` }
+          }
+        }
         // A pause may race with an already-running adapter. Preserve the
         // paused Run for non-terminal outcomes, while still recording a
         // terminal completion so the durable cursor can advance safely.
@@ -838,7 +895,7 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
           return (await load(runId))!
         }
         if (result.type !== 'completed') {
-          const artifacts = events.filter((event): event is Extract<RuntimeEvent, { type: 'artifact_produced' }> => event.type === 'artifact_produced').map((event) => event.artifact)
+          const artifacts = runtimeEvents.filter((event): event is Extract<RuntimeEvent, { type: 'artifact_produced' }> => event.type === 'artifact_produced').map((event) => event.artifact)
           await appendArtifacts(runId, executionId, artifacts, timestamp)
         }
         if (result.type === 'failed' || result.type === 'paused' || result.type === 'waiting' || result.type === 'blocked') {
@@ -851,7 +908,7 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
           const continuation = { phaseIndex: current.snapshot.phaseIndex, stepIndex: current.snapshot.stepIndex, executionId }
           const pendingQuestionDetails = result.type === 'waiting' && result.question ? { question: result.question, answer: null, continuation } : null
           const pendingApprovalDetails = result.type === 'waiting' && result.approval ? { approval: result.approval, decision: null, continuation } : null
-          const blockedBy = result.type === 'blocked' ? { ...continuation, reason: result.reason } : null
+          const blockedBy = result.type === 'blocked' ? { ...continuation, reason: result.reason, recoveryAction: 'resume' as const } : null
           const snapshot = { ...current.snapshot, pendingQuestion: result.type === 'waiting' ? result.question : null, pendingApproval: result.type === 'waiting' ? result.approval : null, pendingQuestionDetails, pendingApprovalDetails, blockedBy, nextAction: statusNextAction(runStatus) }
           await updateSnapshot(runId, snapshot)
           await appendEvent(runId, result.type, result.type === 'waiting'

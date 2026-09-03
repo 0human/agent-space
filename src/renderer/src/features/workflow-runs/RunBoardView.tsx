@@ -50,8 +50,8 @@ interface RunBoardViewProps {
   error: string | null
   onBack: () => void
   onPause: () => void
-  onResume: (guidance?: string) => void
-  onRetry: (guidance?: string) => void
+  onResume: () => void
+  onRetry: () => void
   onCancel: () => void
   onAnswer: (answer: string) => void
   onApprove: () => void
@@ -75,7 +75,6 @@ export function RunBoardView(props: RunBoardViewProps): React.JSX.Element {
   } = props
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null)
   const [answer, setAnswer] = useState('')
-  const [guidance, setGuidance] = useState('')
   const model = createRunBoardModel(run, runtimeItems, selectedStepId)
   const {
     selectedStep,
@@ -139,8 +138,8 @@ export function RunBoardView(props: RunBoardViewProps): React.JSX.Element {
           <RunActionButtons
             {...model}
             onPause={onPause}
-            onResume={() => onResume(guidance.trim() || undefined)}
-            onRetry={() => onRetry(guidance.trim() || undefined)}
+            onResume={onResume}
+            onRetry={onRetry}
             onCancel={onCancel}
           />
         </div>
@@ -155,86 +154,6 @@ export function RunBoardView(props: RunBoardViewProps): React.JSX.Element {
           </Alert>
         ) : null}
         <DeliveryCard delivery={model.delivery} />
-        {model.ticketProgress && model.implementationTickets.length > 0 ? (
-          <Card className="mt-7" aria-labelledby="ticket-progress-title">
-            <CardHeader>
-              <CardTitle>
-                <h2 id="ticket-progress-title">{copy.run.ticketProgressTitle}</h2>
-              </CardTitle>
-              <CardDescription>
-                {copy.run.ticketProgress(
-                  model.ticketProgress.current,
-                  model.ticketProgress.total,
-                )}
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="grid gap-3">
-              {model.implementationTickets.map((ticket) => (
-                <div className="rounded-lg border p-3" key={ticket.id}>
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <strong className="text-sm">
-                      {ticket.position}. {ticket.title}
-                    </strong>
-                    <StatusBadge status={ticket.status} />
-                  </div>
-                  <div className="mt-2 flex flex-wrap gap-2 text-xs text-muted-foreground">
-                    {(['implementation', 'testing', 'review', 'commit'] as const).map(
-                      (stage) => (
-                        <span key={stage}>
-                          {copy.run.ticketStage[stage]}: {ticket.stages[stage]}
-                        </span>
-                      ),
-                    )}
-                  </div>
-                </div>
-              ))}
-            </CardContent>
-          </Card>
-        ) : null}
-        {['paused', 'failed'].includes(run.status) ? (
-          <Card className="mt-7" aria-labelledby="run-guidance-title">
-            <CardHeader>
-              <CardTitle>
-                <h2 id="run-guidance-title">{copy.run.guidanceTitle}</h2>
-              </CardTitle>
-              <CardDescription>{copy.run.guidanceDescription}</CardDescription>
-            </CardHeader>
-            <CardContent className="grid gap-3">
-              <Textarea
-                value={guidance}
-                onChange={(event) => setGuidance(event.target.value)}
-                placeholder={copy.run.guidancePlaceholder}
-                aria-label={copy.run.guidancePlaceholder}
-              />
-              <div className="flex flex-wrap gap-2">
-                {run.status === 'paused' ? (
-                  <Button
-                    type="button"
-                    onClick={() => {
-                      onResume(guidance.trim() || undefined)
-                      setGuidance('')
-                    }}
-                  >
-                    <Send aria-hidden="true" />
-                    {copy.run.guidanceResumeAction}
-                  </Button>
-                ) : null}
-                {run.status === 'failed' ? (
-                  <Button
-                    type="button"
-                    onClick={() => {
-                      onRetry(guidance.trim() || undefined)
-                      setGuidance('')
-                    }}
-                  >
-                    <Send aria-hidden="true" />
-                    {copy.run.guidanceRetryAction}
-                  </Button>
-                ) : null}
-              </div>
-            </CardContent>
-          </Card>
-        ) : null}
         <ScrollArea
           className="mt-7 w-full whitespace-nowrap rounded-xl border"
           aria-label={copy.run.runBoardLabel}
@@ -518,8 +437,8 @@ export function RunBoardView(props: RunBoardViewProps): React.JSX.Element {
                           model.canRetry
                         }
                         onPause={onPause}
-                        onResume={() => onResume(guidance.trim() || undefined)}
-                        onRetry={() => onRetry(guidance.trim() || undefined)}
+                        onResume={onResume}
+                        onRetry={onRetry}
                         onCancel={onCancel}
                       />
                     ) : (

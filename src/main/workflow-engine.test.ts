@@ -7,7 +7,7 @@ import { join } from 'node:path'
 
 import type { Project } from '../shared/project'
 import { BUILT_IN_DEVELOPMENT_WORKFLOW, type WorkflowView } from '../shared/workflow'
-import type { AgentRuntimeAdapter, RuntimeEvent, RuntimeExecutionContext } from '../shared/workflow-run'
+import type { AgentRuntimeAdapter, RuntimeEventInput, RuntimeExecutionContext } from '../shared/workflow-run'
 import { createWorkflowEngine, type WorkflowEngine } from './workflow-engine'
 import { createFakeRuntimeAdapter } from './fake-runtime'
 import { createProjectService } from './project-service'
@@ -15,18 +15,22 @@ import { createProjectService } from './project-service'
 class FakeRuntime implements AgentRuntimeAdapter {
   readonly calls: string[] = []
   readonly contexts: RuntimeExecutionContext[] = []
-  private pending: Array<(result: RuntimeEvent[]) => void> = []
+  private pending: Array<(result: RuntimeEventInput[]) => void> = []
 
-  execute(context: RuntimeExecutionContext): Promise<RuntimeEvent[]> {
+  execute(context: RuntimeExecutionContext): Promise<RuntimeEventInput[]> {
     this.calls.push(context.execution.id)
     this.contexts.push(context)
     return new Promise((resolve) => this.pending.push(resolve))
   }
 
-  finish(result: RuntimeEvent[]): void {
+  finish(result: RuntimeEventInput[]): void {
     const resolve = this.pending.shift()
     if (!resolve) throw new Error('No pending runtime execution')
     resolve(result)
+  }
+
+  async interrupt(): Promise<void> {
+    this.finish([{ type: 'status_changed', status: 'paused' }])
   }
 }
 
@@ -136,6 +140,13 @@ describe('WorkflowEngine public API', () => {
     expect(completed.snapshot.nextAction).toBe('Workflow Run 已完成。')
     expect(completed.stepExecutions[0]).toMatchObject({ status: 'completed', attempt: 1 })
     expect(completed.artifacts).toHaveLength(1)
+    expect(completed.logs.map((log) => log.data)).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        runId: run.id,
+        executionId: completed.stepExecutions[0]?.id,
+        source: 'agent-runtime'
+      })
+    ]))
     expect(completed.events.map((event) => event.type)).toEqual(['started', 'step_started', 'step_completed', 'completed'])
     await expect(engine.hasActiveRuns(project.id)).resolves.toBe(false)
 
@@ -206,7 +217,7 @@ describe('WorkflowEngine public API', () => {
     }
 
     const run = await engine.startRun({ project, workflow: builtInWorkflow, idea: 'Ship the complete local flow' })
-    const finishRuntimeStep = async (callCount: number, events: RuntimeEvent[] = []): Promise<void> => {
+    const finishRuntimeStep = async (callCount: number, events: RuntimeEventInput[] = []): Promise<void> => {
       await vi.waitFor(() => expect(runtime.calls).toHaveLength(callCount))
       runtime.finish([
         ...events,
@@ -237,9 +248,21 @@ describe('WorkflowEngine public API', () => {
       { type: 'artifact_produced', artifact: { type: 'ticket', name: 'Second slice', location: 'https://github.com/example/demo/issues/102', runId: run.id } }
     ])
     await approveCurrentGate('高风险写操作确认')
-    await finishRuntimeStep(4, [{ type: 'artifact_produced', artifact: { type: 'commit', name: 'commit-first', versionHash: 'commit-first' } }])
+    await finishRuntimeStep(4, [
+      { type: 'ticket_progress', stage: 'implementation', status: 'completed' },
+      { type: 'ticket_progress', stage: 'testing', status: 'completed' },
+      { type: 'ticket_progress', stage: 'review', status: 'completed' },
+      { type: 'ticket_progress', stage: 'commit', status: 'completed' },
+      { type: 'artifact_produced', artifact: { type: 'commit', name: 'commit-first', versionHash: 'commit-first' } }
+    ])
     await approveCurrentGate('高风险写操作确认')
-    await finishRuntimeStep(5, [{ type: 'artifact_produced', artifact: { type: 'commit', name: 'commit-second', versionHash: 'commit-second' } }])
+    await finishRuntimeStep(5, [
+      { type: 'ticket_progress', stage: 'implementation', status: 'completed' },
+      { type: 'ticket_progress', stage: 'testing', status: 'completed' },
+      { type: 'ticket_progress', stage: 'review', status: 'completed' },
+      { type: 'ticket_progress', stage: 'commit', status: 'completed' },
+      { type: 'artifact_produced', artifact: { type: 'commit', name: 'commit-second', versionHash: 'commit-second' } }
+    ])
     await finishRuntimeStep(6, [{
       type: 'artifact_produced',
       artifact: { type: 'verification-report', name: 'product-verification', status: 'passed' }
@@ -288,10 +311,11 @@ describe('WorkflowEngine public API', () => {
         if (phaseId === 'implementation') {
           ticketContexts.push(context as typeof ticketContexts[number])
           return [
-            { type: 'ticket_progress', stage: 'implementation', status: 'completed' } as unknown as RuntimeEvent,
-            { type: 'ticket_progress', stage: 'testing', status: 'completed' } as unknown as RuntimeEvent,
-            { type: 'ticket_progress', stage: 'review', status: 'completed' } as unknown as RuntimeEvent,
-            { type: 'ticket_progress', stage: 'commit', status: 'completed' } as unknown as RuntimeEvent,
+            { type: 'ticket_progress', stage: 'implementation', status: 'completed' } as unknown as RuntimeEventInput,
+            { type: 'ticket_progress', stage: 'testing', status: 'completed' } as unknown as RuntimeEventInput,
+            { type: 'ticket_progress', stage: 'review', status: 'completed' } as unknown as RuntimeEventInput,
+            { type: 'ticket_progress', stage: 'commit', status: 'completed' } as unknown as RuntimeEventInput,
+            { type: 'artifact_produced', artifact: { type: 'test-result', name: 'ticket-tests', location: '/work/demo/.agent-space/ticket-tests.json' } },
             { type: 'status_changed', status: 'completed' }
           ]
         }
@@ -344,6 +368,11 @@ describe('WorkflowEngine public API', () => {
     expect(implementationExecutions).toHaveLength(2)
     expect(implementationExecutions.map((execution) => execution.implementationTicketId)).toEqual(implementationTickets.map((ticket) => ticket.id))
     expect(new Set(implementationTickets.map((ticket) => ticket.id)).size).toBe(2)
+    expect(implementationTickets.map((ticket) => ticket.result.artifactIds)).toEqual([
+      [expect.any(String)],
+      [expect.any(String)]
+    ])
+    expect(implementationTickets[0]?.result.artifactIds[0]).not.toBe(implementationTickets[1]?.result.artifactIds[0])
   })
 
   it('creates a new attempt after failure while reusing the current Ticket Thread', async () => {
@@ -377,8 +406,17 @@ describe('WorkflowEngine public API', () => {
         }
         await context.persistRuntimeLocator?.(locator)
         return context.execution.attempt === 1
-          ? [{ type: 'error', error: 'Tests failed', runtimeLocator: locator }]
-          : [{ type: 'status_changed', status: 'completed', runtimeLocator: locator }]
+          ? [
+              { type: 'ticket_progress', stage: 'implementation', status: 'completed', runtimeLocator: locator },
+              { type: 'ticket_progress', stage: 'testing', status: 'failed', runtimeLocator: locator },
+              { type: 'error', error: 'Tests failed', runtimeLocator: locator }
+            ]
+          : [
+              { type: 'ticket_progress', stage: 'testing', status: 'completed', runtimeLocator: locator },
+              { type: 'ticket_progress', stage: 'review', status: 'completed', runtimeLocator: locator },
+              { type: 'ticket_progress', stage: 'commit', status: 'completed', runtimeLocator: locator },
+              { type: 'status_changed', status: 'completed', runtimeLocator: locator }
+            ]
       }
     }
     engine = createWorkflowEngine({ databasePath: join(directory, 'runs.sqlite'), runtime })
@@ -387,7 +425,11 @@ describe('WorkflowEngine public API', () => {
     const failed = await engine.waitForIdle(run.id)
     expect(failed).toMatchObject({
       status: 'failed',
-      implementationTickets: [{ status: 'failed', result: { attemptCount: 1, failedAttemptCount: 1 } }]
+      implementationTickets: [{
+        status: 'failed',
+        stages: { implementation: 'completed', testing: 'failed', review: 'pending', commit: 'pending' },
+        result: { attemptCount: 1, failedAttemptCount: 1 }
+      }]
     })
     await expect(engine.hasActiveRuns(project.id)).resolves.toBe(true)
 
@@ -396,7 +438,11 @@ describe('WorkflowEngine public API', () => {
     const ticket = completed.implementationTickets?.[0]
     expect(completed).toMatchObject({
       status: 'completed',
-      implementationTickets: [{ status: 'completed', result: { attemptCount: 2, failedAttemptCount: 1 } }]
+      implementationTickets: [{
+        status: 'completed',
+        stages: { implementation: 'completed', testing: 'completed', review: 'completed', commit: 'completed' },
+        result: { attemptCount: 2, failedAttemptCount: 1 }
+      }]
     })
     expect(completed.stepExecutions.filter((execution) => execution.implementationTicketId === ticket?.id)).toEqual([
       expect.objectContaining({ attempt: 1, status: 'failed', runtimeLocators: [expect.objectContaining({ threadId: 'thread-retryable-ticket', turnId: 'turn-1' })] }),
@@ -409,11 +455,98 @@ describe('WorkflowEngine public API', () => {
     await expect(engine.hasActiveRuns(project.id)).resolves.toBe(false)
   })
 
+  it('keeps a Planning Ticket identity stable when a retry reports the same GitHub Issue', async () => {
+    directory = await mkdtemp(join(tmpdir(), 'agent-space-run-'))
+    let planningAttempt = 0
+    const ticketWorkflow: WorkflowView = {
+      ...workflow,
+      definition: {
+        ...workflow.definition,
+        phases: [
+          { id: 'planning', name: 'Planning', goal: 'Plan slices', steps: [{ id: 'tickets', name: 'Plan tickets', kind: 'skill' }] },
+          { id: 'implementation', name: 'Implementation', goal: 'Deliver tickets', steps: [{ id: 'implement', name: 'Implement ticket', kind: 'skill' }] }
+        ]
+      }
+    }
+    const runtime: AgentRuntimeAdapter = {
+      async execute(context) {
+        if (context.workflow.phases[context.phaseIndex]?.id === 'planning') {
+          planningAttempt += 1
+          const ticket = { type: 'artifact_produced' as const, artifact: { type: 'ticket', name: 'Stable slice', location: 'https://github.com/example/demo/issues/106', runId: context.runId } }
+          return planningAttempt === 1
+            ? [ticket, { type: 'error', error: 'Planning interrupted' }]
+            : [ticket, { type: 'status_changed', status: 'completed' }]
+        }
+        return [
+          { type: 'ticket_progress', stage: 'implementation', status: 'completed' },
+          { type: 'ticket_progress', stage: 'testing', status: 'completed' },
+          { type: 'ticket_progress', stage: 'review', status: 'completed' },
+          { type: 'ticket_progress', stage: 'commit', status: 'completed' },
+          { type: 'status_changed', status: 'completed' }
+        ]
+      }
+    }
+    engine = createWorkflowEngine({ databasePath: join(directory, 'runs.sqlite'), runtime })
+
+    const run = await engine.startRun({ project, workflow: ticketWorkflow, idea: 'Retry Planning without duplicating tickets' })
+    const failed = await engine.waitForIdle(run.id)
+    const firstTicket = failed.implementationTickets?.[0]
+    expect(firstTicket).toMatchObject({ position: 1, title: 'Stable slice' })
+
+    await engine.retryStep(run.id, 'Retry Planning')
+    const completed = await engine.waitForIdle(run.id)
+    expect(completed.implementationTickets).toEqual([
+      expect.objectContaining({ id: firstTicket?.id, sourceArtifactId: firstTicket?.sourceArtifactId, position: 1, status: 'completed' })
+    ])
+    expect(completed.artifacts.filter((artifact) => artifact.type === 'ticket')).toHaveLength(1)
+  })
+
+  it('does not complete an Implementation Ticket before its subflow reaches terminal stages', async () => {
+    directory = await mkdtemp(join(tmpdir(), 'agent-space-run-'))
+    const ticketWorkflow: WorkflowView = {
+      ...workflow,
+      definition: {
+        ...workflow.definition,
+        phases: [
+          { id: 'planning', name: 'Planning', goal: 'Plan slices', steps: [{ id: 'tickets', name: 'Plan tickets', kind: 'skill' }] },
+          { id: 'implementation', name: 'Implementation', goal: 'Deliver tickets', steps: [{ id: 'implement', name: 'Implement ticket', kind: 'skill' }] }
+        ]
+      }
+    }
+    const runtime: AgentRuntimeAdapter = {
+      async execute(context) {
+        if (context.workflow.phases[context.phaseIndex]?.id === 'planning') {
+          return [
+            { type: 'artifact_produced', artifact: { type: 'ticket', name: 'Incomplete slice', location: 'https://github.com/example/demo/issues/105', runId: context.runId } },
+            { type: 'status_changed', status: 'completed' }
+          ]
+        }
+        return [
+          { type: 'ticket_progress', stage: 'implementation', status: 'completed' },
+          { type: 'status_changed', status: 'completed' }
+        ]
+      }
+    }
+    engine = createWorkflowEngine({ databasePath: join(directory, 'runs.sqlite'), runtime })
+
+    const run = await engine.startRun({ project, workflow: ticketWorkflow, idea: 'Require the complete Ticket subflow' })
+    const failed = await engine.waitForIdle(run.id)
+
+    expect(failed).toMatchObject({
+      status: 'failed',
+      error: 'Implementation Ticket 子流程未完成：testing、review、commit。',
+      implementationTickets: [{
+        status: 'failed',
+        stages: { implementation: 'completed', testing: 'failed', review: 'pending', commit: 'pending' }
+      }]
+    })
+  })
+
   it('persists a Runtime Locator before the Runtime execution completes', async () => {
     directory = await mkdtemp(join(tmpdir(), 'agent-space-run-'))
     const databasePath = join(directory, 'runs.sqlite')
     const runtimeLocator = { runtimeProvider: 'codex', threadId: 'thread-live', turnId: 'turn-live', runtimeVersion: '0.144.3' }
-    let finish!: (events: RuntimeEvent[]) => void
+    let finish!: (events: RuntimeEventInput[]) => void
     const runtime: AgentRuntimeAdapter = {
       async execute(context) {
         const persistRuntimeLocator = (context as RuntimeExecutionContext & {
@@ -922,7 +1055,7 @@ describe('WorkflowEngine public API', () => {
     expect(result.checks.some((check) => check.includes('External Destination: GitHub'))).toBe(true)
   })
 
-  it('pauses between Steps and resumes from the durable cursor after restart', async () => {
+  it('resumes a Runtime-paused Step from the durable cursor after restart', async () => {
     directory = await mkdtemp(join(tmpdir(), 'agent-space-run-'))
     const databasePath = join(directory, 'runs.sqlite')
     const runtime = new FakeRuntime()
@@ -931,14 +1064,13 @@ describe('WorkflowEngine public API', () => {
     const run = await engine.startRun(input)
 
     await vi.waitFor(() => expect(runtime.calls).toHaveLength(1))
-    await engine.pauseRun(run.id)
-    runtime.finish([{ type: 'status_changed', status: 'completed' }])
+    runtime.finish([{ type: 'status_changed', status: 'paused' }])
     const paused = await engine.waitForIdle(run.id)
 
     expect(paused.status).toBe('paused')
-    expect(paused.snapshot).toMatchObject({ phaseIndex: 0, stepIndex: 1, currentStepExecutionId: null })
+    expect(paused.snapshot).toMatchObject({ phaseIndex: 0, stepIndex: 0, currentStepExecutionId: paused.stepExecutions[0]?.id })
     expect(paused.stepExecutions).toHaveLength(1)
-    expect(paused.stepExecutions[0]).toMatchObject({ status: 'completed' })
+    expect(paused.stepExecutions[0]).toMatchObject({ status: 'paused' })
     expect(paused.events.map((event) => event.type)).toContain('paused')
 
     await engine.close()
@@ -946,13 +1078,15 @@ describe('WorkflowEngine public API', () => {
     engine = createWorkflowEngine({ databasePath, runtime: resumedRuntime })
     const resumed = await engine.resumeRun(run.id)
     expect(resumed.status).toBe('running')
-    expect(resumed.stepExecutions).toHaveLength(2)
+    expect(resumed.stepExecutions).toHaveLength(1)
     await vi.waitFor(() => expect(resumedRuntime.calls).toHaveLength(1))
+    resumedRuntime.finish([{ type: 'status_changed', status: 'completed' }])
+    await vi.waitFor(() => expect(resumedRuntime.calls).toHaveLength(2))
     resumedRuntime.finish([{ type: 'status_changed', status: 'completed' }])
     await expect(engine.waitForIdle(run.id)).resolves.toMatchObject({ status: 'completed' })
   })
 
-  it('restores waiting and blocked Runs, preserves failed attempts, and ignores cancelled results', async () => {
+  it('restores waiting and blocked Runs, preserves failed attempts, and cancels an interrupted Turn', async () => {
     directory = await mkdtemp(join(tmpdir(), 'agent-space-run-'))
     const databasePath = join(directory, 'runs.sqlite')
     const runtime = new FakeRuntime()
@@ -991,8 +1125,13 @@ describe('WorkflowEngine public API', () => {
 
     const cancelledRun = await engine.startRun({ project, workflow, idea: 'Cancel this Run' })
     await vi.waitFor(() => expect(recoveredRuntime.calls).toHaveLength(5))
+    await recoveredRuntime.contexts[4]?.persistRuntimeLocator?.({
+      runtimeProvider: 'fake',
+      threadId: 'thread-cancel',
+      turnId: 'turn-cancel',
+      runtimeVersion: 'test'
+    })
     await engine.cancelRun(cancelledRun.id)
-    recoveredRuntime.finish([{ type: 'status_changed', status: 'completed' }])
     await expect(engine.waitForIdle(cancelledRun.id)).resolves.toMatchObject({ status: 'cancelled', events: expect.arrayContaining([expect.objectContaining({ type: 'cancelled' })]) })
   })
 
@@ -1148,13 +1287,18 @@ describe('WorkflowEngine public API', () => {
         if (callCount === 1) {
           return new Promise((resolve) => {
             interruptTurn = () => resolve([
-              { type: 'ticket_progress', stage: 'implementation', status: 'completed', runtimeLocator: locator } as unknown as RuntimeEvent,
-              { type: 'ticket_progress', stage: 'testing', status: 'running', runtimeLocator: locator } as unknown as RuntimeEvent,
-              { type: 'status_changed', status: 'paused', runtimeLocator: locator } as unknown as RuntimeEvent
+              { type: 'ticket_progress', stage: 'implementation', status: 'completed', runtimeLocator: locator } as unknown as RuntimeEventInput,
+              { type: 'ticket_progress', stage: 'testing', status: 'running', runtimeLocator: locator } as unknown as RuntimeEventInput,
+              { type: 'status_changed', status: 'paused', runtimeLocator: locator } as unknown as RuntimeEventInput
             ])
           })
         }
-        return [{ type: 'status_changed', status: 'completed', runtimeLocator: locator }]
+        return [
+          { type: 'ticket_progress', stage: 'testing', status: 'completed', runtimeLocator: locator },
+          { type: 'ticket_progress', stage: 'review', status: 'completed', runtimeLocator: locator },
+          { type: 'ticket_progress', stage: 'commit', status: 'completed', runtimeLocator: locator },
+          { type: 'status_changed', status: 'completed', runtimeLocator: locator }
+        ]
       }
     }
     engine = createWorkflowEngine({ databasePath: join(directory, 'runs.sqlite'), runtime })
@@ -1319,7 +1463,8 @@ describe('WorkflowEngine public API', () => {
     const blocked = await engine.waitForIdle(run.id)
     expect(blocked.snapshot.blockedBy).toMatchObject({
       executionId: blocked.snapshot.currentStepExecutionId,
-      reason: 'Runtime 报告当前 Step blocked。'
+      reason: 'Runtime 报告当前 Step blocked。',
+      recoveryAction: 'resume'
     })
     expect(blocked.phaseContexts).toEqual(expect.arrayContaining([expect.objectContaining({
       phaseId: 'discovery',
@@ -1342,13 +1487,33 @@ describe('WorkflowEngine public API', () => {
 
     const run = await engine.startRun({ project, workflow, idea: 'Reject invalid actions' })
     await expect(engine.resumeRun(run.id)).rejects.toThrow('running 状态不允许继续')
-    const paused = await engine.pauseRun(run.id)
+    runtime.finish([{ type: 'status_changed', status: 'paused' }])
+    const paused = await engine.waitForIdle(run.id)
     await expect(engine.pauseRun(run.id)).rejects.toThrow('paused 状态不允许暂停')
     await expect(engine.answerQuestion(run.id, 'Should not apply')).rejects.toThrow('paused 状态不允许回答')
 
     expect(paused.status).toBe('paused')
     await expect(engine.getRun(run.id)).resolves.toEqual(paused)
     expect(runtime.calls).toHaveLength(1)
+  })
+
+  it('keeps a Run running when the Runtime cannot safely interrupt its active Turn', async () => {
+    directory = await mkdtemp(join(tmpdir(), 'agent-space-run-'))
+    const runtime = new FakeRuntime()
+    engine = createWorkflowEngine({ databasePath: join(directory, 'runs.sqlite'), runtime })
+
+    const run = await engine.startRun({ project, workflow, idea: 'Do not fake a pause' })
+    await vi.waitFor(() => expect(runtime.calls).toHaveLength(1))
+
+    await expect(engine.pauseRun(run.id)).rejects.toThrow('当前 Runtime Turn 无法安全暂停')
+    await expect(engine.cancelRun(run.id)).rejects.toThrow('当前 Runtime Turn 无法安全结束')
+    await expect(engine.getRun(run.id)).resolves.toMatchObject({
+      status: 'running',
+      stepExecutions: [{ status: 'running' }]
+    })
+
+    runtime.finish([{ type: 'status_changed', status: 'completed' }])
+    await expect(engine.waitForIdle(run.id)).resolves.toMatchObject({ status: 'completed' })
   })
 
   it('recovers an in-progress Run after an application restart', async () => {

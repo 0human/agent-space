@@ -4,7 +4,7 @@ import { isAbsolute, relative, resolve } from 'node:path'
 import { promisify } from 'node:util'
 
 import type { PermissionPolicy, Project, ProjectReleaseStep, ReleaseOperation, ReleasePlatform } from '../shared/project'
-import type { RuntimeEvent } from '../shared/workflow-run'
+import type { RuntimeEventInput } from '../shared/workflow-run'
 import { isCommandAllowed, isNetworkHostAllowed, isPathAllowed } from './permission-policy'
 
 const execFile = promisify(execFileCallback)
@@ -22,7 +22,7 @@ export interface ReleaseManagerContext {
 
 export interface ReleaseManager {
   preflight: (context: ReleaseManagerContext) => Promise<{ checks: string[]; errors: string[] }>
-  execute: (context: ReleaseManagerContext) => Promise<RuntimeEvent[]>
+  execute: (context: ReleaseManagerContext) => Promise<RuntimeEventInput[]>
 }
 
 export function resolveProjectReleaseStep(project: Project, platform: ReleasePlatform, operation: ReleaseOperation): ProjectReleaseStep | null {

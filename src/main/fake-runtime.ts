@@ -1,11 +1,11 @@
-import type { AgentRuntimeAdapter, RuntimeEvent, RuntimeExecutionContext } from '../shared/workflow-run'
+import type { AgentRuntimeAdapter, RuntimeEventInput, RuntimeExecutionContext } from '../shared/workflow-run'
 import { zhCNMain } from '../shared/i18n/zh-CN'
 
 export function createFakeRuntimeAdapter(delayMs = 180): AgentRuntimeAdapter {
   const acknowledgedHumanSteps = new Set<string>()
 
   return {
-    async execute(context: RuntimeExecutionContext): Promise<RuntimeEvent[]> {
+    async execute(context: RuntimeExecutionContext): Promise<RuntimeEventInput[]> {
       await new Promise((resolve) => setTimeout(resolve, delayMs))
       const step = context.workflow.phases[context.phaseIndex]?.steps[context.stepIndex]
       if (!step) return [{ type: 'error', error: zhCNMain.workflowRun.fakeStepMissing }]
@@ -26,7 +26,7 @@ export function createFakeRuntimeAdapter(delayMs = 180): AgentRuntimeAdapter {
         return [{ type: 'question', question: zhCNMain.workflowRun.fakeQuestion(step.name) }]
       }
 
-      const events: RuntimeEvent[] = [{ type: 'status_changed', status: 'completed' }]
+      const events: RuntimeEventInput[] = [{ type: 'status_changed', status: 'completed' }]
       for (const name of step.artifacts ?? []) events.push({ type: 'artifact_produced', artifact: {
         type: 'workflow-artifact',
         name,

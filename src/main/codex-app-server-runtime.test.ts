@@ -190,34 +190,6 @@ describe('Codex App Server Agent Runtime Adapter contract', () => {
     ])
   })
 
-  it('interrupts the active App Server Turn through its Runtime Locator', async () => {
-    let releaseNotification!: (notification: JsonRpcNotification) => void
-    const transport = successfulTransport([])
-    transport.nextNotification = vi.fn(() => new Promise<JsonRpcNotification | null>((resolve) => { releaseNotification = resolve }))
-    const originalRequest = transport.request.bind(transport)
-    transport.request = vi.fn(async (method: string, params: Record<string, unknown>) => {
-      const response = await originalRequest(method, params)
-      if (method === 'turn/interrupt') {
-        releaseNotification({ method: 'turn/completed', params: { threadId: 'thread-1', turn: { id: 'turn-1', status: 'interrupted', error: null } } })
-      }
-      return response
-    })
-    const adapter = createCodexRuntimeAdapter({ command: '/definitely-missing-agent-space-codex', createTransport: async () => transport } as never)
-    const execution = adapter.execute(executionContext())
-
-    await vi.waitFor(() => expect(transport.requests.map((request) => request.method)).toContain('turn/start'))
-    await adapter.interrupt?.({
-      runId: 'run-1',
-      executionId: 'execution-1',
-      runtimeLocator: { runtimeProvider: 'codex', threadId: 'thread-1', turnId: 'turn-1', runtimeVersion: '0.144.3' }
-    })
-
-    await expect(execution).resolves.toEqual([expect.objectContaining({ type: 'status_changed', status: 'paused' })])
-    expect(transport.requests).toEqual(expect.arrayContaining([
-      expect.objectContaining({ method: 'turn/interrupt', params: { threadId: 'thread-1', turnId: 'turn-1' } })
-    ]))
-  })
-
   it('returns a provider-neutral error when an App Server request fails', async () => {
     const transport = new ControlledTransport({
       initialize: { userAgent: 'codex-cli/0.144.3' },

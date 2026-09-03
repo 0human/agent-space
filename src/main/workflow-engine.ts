@@ -9,7 +9,7 @@ import type {
   WorkflowRun,
   StartWorkflowRunInput,
   PullRequestState,
-  RuntimeEvent,
+  RuntimeEventInput,
   RuntimeArtifact
 } from '../shared/workflow-run'
 import { isWorkflowRunInProgress } from '../shared/workflow-run'
@@ -118,8 +118,8 @@ function transientNetworkCode(error: unknown): boolean {
   return Boolean(error && typeof error === 'object' && 'code' in error && typeof error.code === 'string' && /^(?:EAI_AGAIN|ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENETUNREACH|EHOSTUNREACH|ENETDOWN|ERR_NETWORK)$/i.test(error.code))
 }
 
-function normalizeExternalFailure(events: RuntimeEvent[]): RuntimeEvent[] {
-  const error = events.find((event): event is Extract<RuntimeEvent, { type: 'error' }> => event.type === 'error')
+function normalizeExternalFailure(events: RuntimeEventInput[]): RuntimeEventInput[] {
+  const error = events.find((event): event is Extract<RuntimeEventInput, { type: 'error' }> => event.type === 'error')
   if (!error || !transientNetworkError(error.error)) return events
   return [
     ...events.filter((event) => event.type !== 'error'),
@@ -206,7 +206,7 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
           await store.recordRuntimeLocator(runId, execution.id, runtimeLocator)
         }
       }
-      let events: RuntimeEvent[]
+      let events: RuntimeEventInput[]
       let delivery: GitPullRequestResult | null = null
       try {
         if (pullRequestStep) {
@@ -451,11 +451,14 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
     async pauseRun(runId) {
       const current = await requireRunStatus(runId, '暂停', ['running'])
       if (await interruptActiveTurn(current)) return (await store.getRun(runId)) ?? current
-      return store.setStatus(runId, 'paused')
+      throw new Error('当前 Runtime Turn 无法安全暂停。')
     },
 
     async resumeRun(runId, guidance) {
-      await requireRunStatus(runId, '继续', ['paused', 'blocked'])
+      const current = await requireRunStatus(runId, '继续', ['paused', 'blocked'])
+      if (current.status === 'blocked' && current.snapshot.blockedBy?.recoveryAction !== 'resume') {
+        throw new Error('blocked 状态没有可执行的恢复动作。')
+      }
       const run = await store.resume(runId, guidance)
       if (run.status === 'running') ensureRunning(runId)
       return run
@@ -470,7 +473,9 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
 
     async cancelRun(runId) {
       const current = await requireRunStatus(runId, '结束 Run', ['running', 'paused', 'waiting', 'blocked', 'failed'])
-      if (current.status === 'running') await interruptActiveTurn(current)
+      if (current.status === 'running' && !(await interruptActiveTurn(current))) {
+        throw new Error('当前 Runtime Turn 无法安全结束。')
+      }
       return store.setStatus(runId, 'cancelled')
     },
 

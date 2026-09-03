@@ -2,7 +2,7 @@
 
 import { describe, expect, it, vi } from 'vitest'
 
-import type { CodexAppServerMessage } from './codex-app-server-transport'
+import type { CodexAppServerMessage, JsonRpcServerRequest } from './codex-app-server-transport'
 import { createCodexSessionModule, type CodexSessionTransport, type CodexRuntimeApprovalRequest } from './codex-session-module'
 
 class ControlledTransport implements CodexSessionTransport {
@@ -47,7 +47,11 @@ class ControlledTransport implements CodexSessionTransport {
 
   async nextRequest() {
     const request = this.incoming.shift()
-    return request?.method && request.id !== undefined ? request as unknown as CodexRuntimeApprovalRequest : null
+    return request?.method && request.id !== undefined ? request as unknown as JsonRpcServerRequest : null
+  }
+
+  enqueue(...messages: Array<Record<string, unknown>>): void {
+    this.incoming.push(...messages)
   }
 
 }
@@ -68,14 +72,34 @@ describe('Codex Session Module', () => {
     expect(result.reason).toContain('turn/start')
   })
 
-  it('blocks when the App Server omits a capability description', async () => {
+  it('uses the local schema inspector when initialize omits a capability description', async () => {
     const transport = new ControlledTransport()
     transport.request = async (method: string, params: Record<string, unknown>): Promise<unknown> => {
       transport.requests.push({ method, params })
       if (method === 'initialize') return { userAgent: 'codex-cli/0.144.3' }
       throw new Error(`Unexpected request: ${method}`)
     }
-    const session = createCodexSessionModule({ createTransport: async () => transport })
+    const inspectCapabilities = vi.fn(async () => ({
+      methods: ['thread/start', 'thread/resume', 'thread/read', 'turn/start', 'turn/interrupt'],
+      events: ['item/started', 'item/completed', 'turn/completed']
+    }))
+    const session = createCodexSessionModule({ createTransport: async () => transport, inspectCapabilities })
+
+    const result = await session.preflight({ cwd: '/work/demo', command: 'codex' })
+
+    expect(result.compatible).toBe(true)
+    expect(result.missingCapabilities).toEqual([])
+    expect(inspectCapabilities).toHaveBeenCalledWith(expect.objectContaining({ cwd: '/work/demo', command: expect.stringContaining('codex') }))
+  })
+
+  it('blocks when neither initialize nor the local schema inspector confirms capabilities', async () => {
+    const transport = new ControlledTransport()
+    transport.request = async (method: string, params: Record<string, unknown>): Promise<unknown> => {
+      transport.requests.push({ method, params })
+      if (method === 'initialize') return { userAgent: 'codex-cli/0.144.3' }
+      throw new Error(`Unexpected request: ${method}`)
+    }
+    const session = createCodexSessionModule({ createTransport: async () => transport, inspectCapabilities: async () => null })
 
     const result = await session.preflight({ cwd: '/work/demo', command: 'codex' })
 
@@ -95,9 +119,9 @@ describe('Codex Session Module', () => {
       }
     })
 
-    const first = await session.runTurn({ cwd: '/work/demo', command: 'codex', workUnitKey: 'implementation-ticket:ticket-1', input: 'first' })
-    const second = await session.runTurn({ cwd: '/work/demo', command: 'codex', workUnitKey: 'implementation-ticket:ticket-1', input: 'continue' })
-    const third = await session.runTurn({ cwd: '/work/demo', command: 'codex', workUnitKey: 'implementation-ticket:ticket-2', input: 'next' })
+    const first = await session.runTurn({ cwd: '/work/demo', command: 'codex', workUnit: { kind: 'implementation-ticket', runId: 'run-1', ticketId: 'ticket-1' }, input: 'first' })
+    const second = await session.runTurn({ cwd: '/work/demo', command: 'codex', workUnit: { kind: 'implementation-ticket', runId: 'run-1', ticketId: 'ticket-1' }, input: 'continue' })
+    const third = await session.runTurn({ cwd: '/work/demo', command: 'codex', workUnit: { kind: 'implementation-ticket', runId: 'run-1', ticketId: 'ticket-2' }, input: 'next' })
 
     expect(first.locator.threadId).toBe(second.locator.threadId)
     expect(third.locator.threadId).not.toBe(second.locator.threadId)
@@ -109,23 +133,23 @@ describe('Codex Session Module', () => {
     const session = createCodexSessionModule({ createTransport: async () => transport })
     const onLocator = vi.fn(async () => undefined)
 
-    await session.runTurn({ cwd: '/work/demo', command: 'codex', workUnitKey: 'requirements', input: 'run', onLocator })
+    await session.runTurn({ cwd: '/work/demo', command: 'codex', workUnit: { kind: 'phase', runId: 'run-1', phaseId: 'requirements' }, input: 'run', onLocator })
 
     expect(onLocator).toHaveBeenCalledWith(expect.objectContaining({ threadId: 'thread-1', turnId: 'turn-1' }))
   })
 
-  it('interrupts an active Turn and responds to an original Runtime approval request', async () => {
+  it('interrupts an active Turn and rejects an approval request it did not receive', async () => {
     let resolveNotification: ((value: unknown) => void) | undefined
     const transport = new ControlledTransport()
     transport.nextMessage = vi.fn(() => new Promise((resolve) => { resolveNotification = resolve })) as never
     const session = createCodexSessionModule({ createTransport: async () => transport })
-    const approval = { id: 42, method: 'item/commandExecution/requestApproval', params: { threadId: 'thread-1', turnId: 'turn-1', command: 'git status' } } satisfies CodexRuntimeApprovalRequest
-    const run = session.runTurn({ cwd: '/work/demo', command: 'codex', workUnitKey: 'discovery', input: 'run', onApproval: async (request) => request.id === 42 ? 'accept' : 'decline' })
+    const approval = { id: 'missing-approval', kind: 'command', summary: 'Runtime Approval：git status' } satisfies CodexRuntimeApprovalRequest
+    const run = session.runTurn({ cwd: '/work/demo', command: 'codex', workUnit: { kind: 'phase', runId: 'run-1', phaseId: 'discovery' }, input: 'run', onApproval: async () => 'decline' })
 
     await vi.waitFor(() => expect(transport.requests.map(({ method }) => method)).toContain('turn/start'))
     await session.interrupt({ threadId: 'thread-1', turnId: 'turn-1' })
-    await session.respondToApproval(approval, 'decline')
-    expect(transport.respond).toHaveBeenCalledWith(42, 'decline')
+    await expect(session.respondToApproval(approval, 'decline')).rejects.toThrow('Runtime Approval 请求已失效')
+    expect(transport.respond).not.toHaveBeenCalled()
     resolveNotification?.(completedTurn())
     await run
 
@@ -133,7 +157,7 @@ describe('Codex Session Module', () => {
   })
 
   it('retains a pending approval request after returning waiting and responds through its original transport', async () => {
-    const approval = { id: 'approval-1', method: 'item/commandExecution/requestApproval', params: { threadId: 'thread-1', turnId: 'turn-1', command: 'git status' } } satisfies CodexRuntimeApprovalRequest
+    const approval = { id: 'approval-1', method: 'item/commandExecution/requestApproval', params: { threadId: 'thread-1', turnId: 'turn-1', command: 'git status' } }
     const transport = new ControlledTransport([approval])
     const session = createCodexSessionModule({ createTransport: async () => transport })
     let received: CodexRuntimeApprovalRequest | null = null
@@ -141,7 +165,7 @@ describe('Codex Session Module', () => {
     const result = await session.runTurn({
       cwd: '/work/demo',
       command: 'codex',
-      workUnitKey: 'approval-wait',
+      workUnit: { kind: 'phase', runId: 'run-1', phaseId: 'approval-wait' },
       input: 'run',
       onApproval: async (request) => {
         received = request
@@ -150,13 +174,78 @@ describe('Codex Session Module', () => {
     })
 
     expect(result.status).toBe('waiting')
-    expect(received).toBeTruthy()
+    expect(received).toEqual({ id: expect.stringMatching(/^runtime-approval-/), kind: 'command', summary: 'Runtime Approval：git status' })
     expect(transport.respond).not.toHaveBeenCalled()
     expect(transport.close).not.toHaveBeenCalled()
 
+    transport.enqueue(completedTurn())
     await session.respondToApproval(received!, 'accept')
-    expect(transport.respond).toHaveBeenCalledWith('approval-1', 'accept')
+    expect(transport.respond).toHaveBeenCalledWith('approval-1', { decision: 'accept' })
+    expect(transport.close).toHaveBeenCalledOnce()
     await session.close()
+  })
+
+  it('continues the original Turn after responding to Runtime Approval', async () => {
+    const approval = { id: 'approval-2', method: 'item/fileChange/requestApproval', params: { threadId: 'thread-1', turnId: 'turn-1', reason: 'write file' } }
+    const transport = new ControlledTransport([approval])
+    const session = createCodexSessionModule({ createTransport: async () => transport })
+    const completed = vi.fn(async () => undefined)
+    let received: CodexRuntimeApprovalRequest | null = null
+
+    const waiting = await session.runTurn({
+      cwd: '/work/demo', command: 'codex', workUnit: { kind: 'phase', runId: 'run-1', phaseId: 'approval-continue' }, input: 'run',
+      onApproval: async (request) => { received = request; return undefined },
+      onTurnCompleted: completed
+    })
+    expect(waiting.status).toBe('waiting')
+
+    transport.enqueue(completedTurn())
+    await session.respondToApproval(received!, { decision: 'accept' })
+
+    expect(transport.requests.map(({ method }) => method)).toEqual(['initialize', 'thread/start', 'turn/start'])
+    expect(transport.respond).toHaveBeenCalledWith('approval-2', { decision: 'accept' })
+    expect(completed).toHaveBeenCalledWith(expect.objectContaining({ status: 'completed', locator: waiting.locator }))
+    expect(transport.close).toHaveBeenCalledOnce()
+  })
+
+  it('passes the Project Permission Policy as a final constrained Session configuration', async () => {
+    const transport = new ControlledTransport([completedTurn()])
+    const session = createCodexSessionModule({ createTransport: async () => transport })
+
+    await session.runTurn({
+      cwd: '/work/demo', command: 'codex', workUnit: { kind: 'phase', runId: 'run-1', phaseId: 'permission-policy' }, input: 'run',
+      permissionPolicy: {
+        grantedPermissions: ['workspace.read'],
+        allowedPaths: ['/work/demo'],
+        allowedCommands: ['git'],
+        allowedNetworkHosts: ['github.com']
+      },
+      sandbox: 'workspace-write',
+      approvalPolicy: 'never'
+    })
+
+    expect(transport.requests[1]?.params).toEqual(expect.objectContaining({
+      sandbox: 'read-only',
+      approvalPolicy: 'on-request'
+    }))
+    expect(transport.requests[2]?.params).toEqual(expect.objectContaining({
+      sandboxPolicy: { type: 'readOnly', networkAccess: false },
+      approvalPolicy: 'on-request'
+    }))
+  })
+
+  it('does not allow an explicit sandbox override to exceed the Project Permission Policy', async () => {
+    const transport = new ControlledTransport([completedTurn()])
+    const session = createCodexSessionModule({ createTransport: async () => transport })
+
+    await session.runTurn({
+      cwd: '/work/demo', command: 'codex', workUnit: { kind: 'phase', runId: 'run-1', phaseId: 'sandbox-convergence' }, input: 'run',
+      permissionPolicy: { grantedPermissions: ['workspace.read', 'workspace.write'] },
+      sandbox: 'danger-full-access'
+    })
+
+    expect(transport.requests[1]?.params.sandbox).toBe('workspace-write')
+    expect(transport.requests[2]?.params.sandboxPolicy).toEqual(expect.objectContaining({ type: 'workspaceWrite' }))
   })
 
   it('renegotiates on every new connection and reports the new version and missing capabilities', async () => {
@@ -185,5 +274,34 @@ describe('Codex Session Module', () => {
 
     expect(transport.requests.map(({ method }) => method)).toEqual(['initialize', 'thread/read'])
     expect(transport.requests[1]?.params).toEqual({ threadId: 'thread-history', includeTurns: true })
+  })
+
+  it('selects only the Runtime Locator Turn when reading history', async () => {
+    const transport = new ControlledTransport()
+    transport.request = async (method: string, params: Record<string, unknown>): Promise<unknown> => {
+      transport.requests.push({ method, params })
+      if (method === 'initialize') return { userAgent: 'codex-cli/0.144.3', capabilities: { methods: ['thread/start', 'thread/resume', 'thread/read', 'turn/start', 'turn/interrupt'], events: ['item/started', 'item/completed', 'turn/completed'] } }
+      if (method === 'thread/read') return { thread: { id: 'thread-history', turns: [{ id: 'turn-1' }, { id: 'turn-2' }] } }
+      throw new Error(`Unexpected request: ${method}`)
+    }
+    const session = createCodexSessionModule({ createTransport: async () => transport })
+
+    const history = await session.readThread({ cwd: '/work/demo', command: 'codex', locator: { threadId: 'thread-history', turnId: 'turn-2' } })
+
+    expect(history).toEqual({ thread: { id: 'thread-history', turns: [{ id: 'turn-2' }] } })
+  })
+
+  it('fails closed when the Runtime Locator Turn is absent from history', async () => {
+    const transport = new ControlledTransport()
+    transport.request = async (method: string, params: Record<string, unknown>): Promise<unknown> => {
+      transport.requests.push({ method, params })
+      if (method === 'initialize') return { userAgent: 'codex-cli/0.144.3', capabilities: { methods: ['thread/start', 'thread/resume', 'thread/read', 'turn/start', 'turn/interrupt'], events: ['item/started', 'item/completed', 'turn/completed'] } }
+      if (method === 'thread/read') return { thread: { id: 'thread-history', turns: [{ id: 'turn-1' }] } }
+      throw new Error(`Unexpected request: ${method}`)
+    }
+    const session = createCodexSessionModule({ createTransport: async () => transport })
+
+    await expect(session.readThread({ cwd: '/work/demo', command: 'codex', locator: { threadId: 'thread-history', turnId: 'turn-missing' } })).rejects.toThrow('未返回指定的 Turn 历史')
+    expect(transport.close).toHaveBeenCalledOnce()
   })
 })

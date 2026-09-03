@@ -10,6 +10,11 @@ interface JsonRpcNotification {
   params?: Record<string, unknown>
 }
 
+const APP_SERVER_CAPABILITIES = {
+  methods: ['thread/start', 'thread/resume', 'thread/read', 'turn/start', 'turn/interrupt'],
+  events: ['item/started', 'item/completed', 'turn/completed']
+}
+
 class ControlledTransport {
   readonly requests: Array<{ method: string; params: Record<string, unknown> }> = []
   readonly notifications: Array<{ method: string; params: Record<string, unknown> }> = []
@@ -58,7 +63,7 @@ function executionContext(overrides: Partial<RuntimeExecutionContext> = {}): Run
 
 function successfulTransport(incoming: JsonRpcNotification[], threadId = 'thread-1', turnId = 'turn-1'): ControlledTransport {
   return new ControlledTransport({
-    initialize: { userAgent: 'codex-cli/0.144.3' },
+    initialize: { userAgent: 'codex-cli/0.144.3', capabilities: APP_SERVER_CAPABILITIES },
     'thread/start': { thread: { id: threadId } },
     'thread/resume': { thread: { id: threadId } },
     'turn/start': { turn: { id: turnId } }
@@ -84,7 +89,7 @@ describe('Codex App Server Agent Runtime Adapter contract', () => {
 
     expect(transport.requests.map((request) => request.method)).toEqual(['initialize', 'thread/start', 'turn/start'])
     expect(transport.notifications).toEqual([{ method: 'initialized', params: {} }])
-    expect(transport.requests[1]?.params).toMatchObject({ cwd: '/work/demo', approvalPolicy: 'never', sandbox: 'workspace-write' })
+    expect(transport.requests[1]?.params).toMatchObject({ cwd: '/work/demo', approvalPolicy: 'on-request', sandbox: 'workspace-write' })
     expect(transport.requests[2]?.params).toMatchObject({ threadId: 'thread-1', input: [expect.objectContaining({ type: 'text' })] })
     expect(persistRuntimeLocator).toHaveBeenCalledWith({ runtimeProvider: 'codex', threadId: 'thread-1', turnId: 'turn-1', runtimeVersion: '0.144.3' })
     expect(events).toEqual([
@@ -192,7 +197,7 @@ describe('Codex App Server Agent Runtime Adapter contract', () => {
 
   it('returns a provider-neutral error when an App Server request fails', async () => {
     const transport = new ControlledTransport({
-      initialize: { userAgent: 'codex-cli/0.144.3' },
+      initialize: { userAgent: 'codex-cli/0.144.3', capabilities: APP_SERVER_CAPABILITIES },
       'thread/start': new Error('Thread unavailable')
     }, [])
     const adapter = createCodexRuntimeAdapter({ command: '/definitely-missing-agent-space-codex', createTransport: async () => transport } as never)
@@ -205,7 +210,7 @@ describe('Codex App Server Agent Runtime Adapter contract', () => {
 
   it('preserves a network failure reason and the execution Permission Policy', async () => {
     const transport = new ControlledTransport({
-      initialize: { userAgent: 'codex-cli/0.144.3' },
+      initialize: { userAgent: 'codex-cli/0.144.3', capabilities: APP_SERVER_CAPABILITIES },
       'thread/start': new Error('connection refused by local App Server')
     }, [])
     const adapter = createCodexRuntimeAdapter({ command: '/definitely-missing-agent-space-codex', createTransport: async () => transport } as never)

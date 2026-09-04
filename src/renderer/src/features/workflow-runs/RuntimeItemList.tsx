@@ -36,22 +36,10 @@ function outputSummary(output: string): string {
 }
 
 function RuntimeItemCard({ item }: { item: RuntimeItem }): React.JSX.Element {
-  if (item.type === 'agent_message')
+  if (item.type === 'agent_message' || item.type === 'final_response')
     return (
       <ItemShell
-        label={copy.run.agentMessageItem}
-        icon={<MessageSquareText />}
-        status={item.status}
-      >
-        <pre className="whitespace-pre-wrap break-words text-xs">
-          {item.text || copy.run.noOutput}
-        </pre>
-      </ItemShell>
-    )
-  if (item.type === 'final_response')
-    return (
-      <ItemShell
-        label={copy.run.finalResponseItem}
+        label={item.type === 'final_response' ? copy.run.finalResponseItem : copy.run.agentMessageItem}
         icon={<MessageSquareText />}
         status={item.status}
       >

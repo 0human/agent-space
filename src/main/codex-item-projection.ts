@@ -1,5 +1,5 @@
 import type { PermissionPolicy } from '../shared/project'
-import { runtimeItemIdentity, type RuntimeAgentMessageItem, type RuntimeApprovalItem, type RuntimeCommandItem, type RuntimeErrorItem, type RuntimeFileChange, type RuntimeFinalResponseItem, type RuntimeItem, type RuntimeItemStatus, type RuntimeLocator, type RuntimePlanItem, type RuntimeQuestion, type RuntimeQuestionItem } from '../shared/workflow-run'
+import { runtimeItemIdentity, type RuntimeAgentMessageItem, type RuntimeApprovalDecision, type RuntimeApprovalItem, type RuntimeCommandItem, type RuntimeErrorItem, type RuntimeFileChange, type RuntimeFinalResponseItem, type RuntimeItem, type RuntimeItemStatus, type RuntimeLocator, type RuntimePlanItem, type RuntimeQuestion, type RuntimeQuestionItem } from '../shared/workflow-run'
 import type { JsonRpcNotification, JsonRpcServerRequest } from './codex-app-server-transport'
 import { sanitizePermissionPolicy, sanitizeSensitivePath, sanitizeSensitiveText } from './sensitive-text'
 
@@ -33,6 +33,7 @@ export interface CodexItemProjection {
   handle(notification: JsonRpcNotification, scope: CodexItemProjectionScope): void
   handleRequest(request: JsonRpcServerRequest, scope: CodexItemProjectionScope): void
   completeRequest(request: JsonRpcServerRequest, response: unknown, scope: CodexItemProjectionScope): void
+  completeTurn(status: 'completed' | 'interrupted' | 'failed', error: string | null, scope: CodexItemProjectionScope): void
   setInterrupt(status: 'in_progress' | 'completed', scope: CodexItemProjectionScope): void
   restore(history: unknown, scope: CodexItemProjectionScope): void
   list(executionId: string): RuntimeItem[]
@@ -99,7 +100,15 @@ function fileChanges(value: unknown): RuntimeFileChange[] {
 function toolOutput(item: Record<string, unknown>): string | null {
   const error = record(item.error)
   if (typeof error?.message === 'string') return sanitizeSensitiveText(error.message)
-  if (typeof item.result === 'string') return sanitizeSensitiveText(item.result)
+  if (Array.isArray(item.contentItems)) {
+    const text = item.contentItems.flatMap((entry) => {
+      const contentItem = record(entry)
+      return contentItem?.type === 'inputText' && typeof contentItem.text === 'string'
+        ? [sanitizeSensitiveText(contentItem.text)]
+        : []
+    }).join('\n')
+    if (text) return text
+  }
   const result = record(item.result)
   const content = result?.content
   if (!Array.isArray(content)) return null
@@ -116,7 +125,11 @@ function planSteps(value: unknown): Array<{ step: string; status: string }> {
     const plan = record(entry)
     const step = typeof plan?.step === 'string' ? plan.step : typeof plan?.name === 'string' ? plan.name : null
     const status = typeof plan?.status === 'string' ? plan.status : null
-    return step && status ? [{ step: sanitizeSensitiveText(step), status: sanitizeSensitiveText(status) }] : []
+    if (status !== 'pending' && status !== 'inProgress' && status !== 'completed') return []
+    return step && status ? [{
+      step: sanitizeSensitiveText(step),
+      status: status === 'inProgress' ? 'in_progress' : sanitizeSensitiveText(status)
+    }] : []
   })
 }
 
@@ -152,9 +165,9 @@ const approvalKinds = new Map<string, RuntimeApprovalItem['kind']>([
   ['applyPatchApproval', 'apply_patch']
 ])
 
-function approvalDecision(value: unknown): string {
+function approvalDecision(value: unknown): RuntimeApprovalDecision {
   const decision = record(value)?.decision
-  if (typeof decision === 'string' && ['accept', 'acceptForSession', 'decline', 'cancel'].includes(decision)) return decision
+  if (decision === 'accept' || decision === 'acceptForSession' || decision === 'decline' || decision === 'cancel') return decision
   const decisionRecord = record(decision)
   if (decisionRecord?.acceptWithExecpolicyAmendment) return 'acceptWithExecpolicyAmendment'
   if (decisionRecord?.applyNetworkPolicyAmendment) return 'applyNetworkPolicyAmendment'
@@ -191,7 +204,9 @@ export function createCodexItemProjection(dependencies: CodexItemProjectionDepen
   const itemsByExecution = new Map<string, Map<string, RuntimeItem>>()
   const ignoredItemsByExecution = new Map<string, Map<string, CodexIgnoredItem>>()
   const completedItemsByExecution = new Map<string, Set<string>>()
-  const seenNotifications = new Set<string>()
+  const seenDeltas = new Set<string>()
+  const pendingTextDeltas = new Map<string, string>()
+  const pendingFileChanges = new Map<string, RuntimeFileChange[]>()
 
   const scopedIdentity = (scope: CodexItemProjectionScope, itemId: string): string => runtimeItemIdentity({
     id: sanitizeSensitiveText(itemId),
@@ -206,6 +221,27 @@ export function createCodexItemProjection(dependencies: CodexItemProjectionDepen
       completedItemsByExecution.set(executionId, completed)
     }
     completed.add(identity)
+  }
+
+  const streamKey = (scope: CodexItemProjectionScope, itemId: string, method: string): string =>
+    `${scope.executionId}:${scopedIdentity(scope, itemId)}:${method}`
+
+  const takePendingText = (scope: CodexItemProjectionScope, itemId: string, method: string): string => {
+    const key = streamKey(scope, itemId, method)
+    const pending = pendingTextDeltas.get(key) ?? ''
+    pendingTextDeltas.delete(key)
+    return pending
+  }
+
+  const clearPending = (scope: CodexItemProjectionScope, itemId: string): void => {
+    for (const method of ['item/agentMessage/delta', 'item/plan/delta', 'item/commandExecution/outputDelta']) {
+      pendingTextDeltas.delete(streamKey(scope, itemId, method))
+    }
+    pendingFileChanges.delete(streamKey(scope, itemId, 'item/fileChange/patchUpdated'))
+    const prefix = `${scope.executionId}:${scopedIdentity(scope, itemId)}:`
+    for (const fingerprint of seenDeltas) {
+      if (fingerprint.startsWith(prefix)) seenDeltas.delete(fingerprint)
+    }
   }
 
   const update = (scope: CodexItemProjectionScope, item: RuntimeItem): void => {
@@ -263,11 +299,24 @@ export function createCodexItemProjection(dependencies: CodexItemProjectionDepen
     handle(notification, scope) {
       if (notification.params?.threadId !== scope.runtimeLocator.threadId || notification.params?.turnId !== scope.runtimeLocator.turnId) return
       if (!notification.params) return
-      const notificationKey = `${scope.executionId}:${stableJson(notification)}`
-      if (seenNotifications.has(notificationKey)) return
-      seenNotifications.add(notificationKey)
 
       const metadata = projectionMetadata(scope)
+
+      if (notification.method === 'turn/plan/updated') {
+        const steps = planSteps(notification.params.plan)
+        const itemId = `plan:${scope.runtimeLocator.turnId}`
+        const identity = scopedIdentity(scope, itemId)
+        if (completedItemsByExecution.get(scope.executionId)?.has(identity)) return
+        update(scope, {
+          id: sanitizeSensitiveText(itemId),
+          ...metadata,
+          type: 'plan',
+          status: 'in_progress',
+          text: typeof notification.params.explanation === 'string' ? sanitizeSensitiveText(notification.params.explanation) : '',
+          ...(steps.length > 0 ? { steps } : {})
+        })
+        return
+      }
 
       if (notification.method === 'item/started' || notification.method === 'item/completed') {
         const method = notification.method
@@ -280,27 +329,31 @@ export function createCodexItemProjection(dependencies: CodexItemProjectionDepen
         }
         const identity = scopedIdentity(scope, itemId)
         if (completedItemsByExecution.get(scope.executionId)?.has(identity)) return
+        if (method === 'item/started' && itemsByExecution.get(scope.executionId)?.has(identity)) return
         const project = (projected: RuntimeItem): void => {
           update(scope, projected)
           if (method !== 'item/completed') return
+          clearPending(scope, itemId)
           markCompleted(scope.executionId, identity)
         }
         if (item.type === 'agentMessage' && typeof item.text === 'string') {
+          const pending = method === 'item/started' ? takePendingText(scope, itemId, 'item/agentMessage/delta') : ''
           project({
             id: sanitizeSensitiveText(itemId),
             ...metadata,
             type: item.phase === 'final_answer' ? 'final_response' : 'agent_message',
             status: method === 'item/completed' ? 'completed' : 'in_progress',
-            text: sanitizeSensitiveText(item.text)
+            text: sanitizeSensitiveText(item.text + pending)
           })
         } else if (item.type === 'commandExecution' && typeof item.command === 'string') {
+          const pending = method === 'item/started' ? takePendingText(scope, itemId, 'item/commandExecution/outputDelta') : ''
           project({
             id: sanitizeSensitiveText(itemId),
             ...metadata,
             type: 'command',
             status: itemStatus(method, item.status),
             command: sanitizeSensitiveText(item.command),
-            output: typeof item.aggregatedOutput === 'string' ? sanitizeSensitiveText(item.aggregatedOutput) : '',
+            output: sanitizeSensitiveText((typeof item.aggregatedOutput === 'string' ? item.aggregatedOutput : '') + pending),
             exitCode: typeof item.exitCode === 'number' ? item.exitCode : null,
             durationMs: typeof item.durationMs === 'number' ? item.durationMs : null
           })
@@ -309,7 +362,9 @@ export function createCodexItemProjection(dependencies: CodexItemProjectionDepen
             observeIgnored(scope, method, itemId, itemType, 'malformed_item')
             return
           }
-          const changes = fileChanges(item.changes)
+          const pending = method === 'item/started' ? pendingFileChanges.get(streamKey(scope, itemId, 'item/fileChange/patchUpdated')) : undefined
+          if (pending) pendingFileChanges.delete(streamKey(scope, itemId, 'item/fileChange/patchUpdated'))
+          const changes = pending ?? fileChanges(item.changes)
           project({
             id: sanitizeSensitiveText(itemId),
             ...metadata,
@@ -325,12 +380,13 @@ export function createCodexItemProjection(dependencies: CodexItemProjectionDepen
             return
           }
           const steps = planSteps(item.plan)
+          const pending = method === 'item/started' ? takePendingText(scope, itemId, 'item/plan/delta') : ''
           project({
             id: sanitizeSensitiveText(itemId),
             ...metadata,
             type: 'plan',
             status: itemStatus(method, item.status),
-            text: typeof item.text === 'string' ? sanitizeSensitiveText(item.text) : '',
+            text: sanitizeSensitiveText((typeof item.text === 'string' ? item.text : '') + pending),
             ...(steps.length > 0 ? { steps } : {})
           })
         } else if (item.type === 'mcpToolCall' || item.type === 'dynamicToolCall') {
@@ -346,7 +402,9 @@ export function createCodexItemProjection(dependencies: CodexItemProjectionDepen
             ...metadata,
             type: 'tool',
             name: sanitizeSensitiveText(name),
-            status: itemStatus(method, item.status),
+            status: item.type === 'dynamicToolCall' && method === 'item/completed' && item.success === false
+              ? 'failed'
+              : itemStatus(method, item.status),
             durationMs: typeof item.durationMs === 'number' ? item.durationMs : null,
             output: toolOutput(item)
           })
@@ -361,16 +419,27 @@ export function createCodexItemProjection(dependencies: CodexItemProjectionDepen
         const message = typeof error?.message === 'string' ? error.message : typeof notification.params.message === 'string' ? notification.params.message : null
         if (!message) return
         const item: RuntimeErrorItem = { id: sanitizeSensitiveText(`error:${scope.runtimeLocator.turnId}:${errorCode(notification.params.code)}`), ...metadata, type: 'error', status: 'failed', error: sanitizeSensitiveText(message) }
+        const identity = runtimeItemIdentity(item)
+        if (completedItemsByExecution.get(scope.executionId)?.has(identity)) return
         update(scope, item)
+        markCompleted(scope.executionId, identity)
         return
       }
 
       if (typeof notification.params.itemId !== 'string') return
-      const identity = scopedIdentity(scope, notification.params.itemId)
+      const itemId = notification.params.itemId
+      const identity = scopedIdentity(scope, itemId)
       if (completedItemsByExecution.get(scope.executionId)?.has(identity)) return
       const current = itemsByExecution.get(scope.executionId)?.get(identity)
-      if (notification.method === 'item/fileChange/patchUpdated' && current?.type === 'file_change') {
+      if (notification.method === 'item/fileChange/patchUpdated') {
         const changes = fileChanges(notification.params.changes)
+        const fingerprint = `${streamKey(scope, itemId, notification.method)}:${stableJson(changes)}`
+        if (seenDeltas.has(fingerprint)) return
+        seenDeltas.add(fingerprint)
+        if (current?.type !== 'file_change') {
+          pendingFileChanges.set(streamKey(scope, itemId, notification.method), changes)
+          return
+        }
         update(scope, {
           ...current,
           changes,
@@ -380,6 +449,16 @@ export function createCodexItemProjection(dependencies: CodexItemProjectionDepen
         return
       }
       if (typeof notification.params.delta !== 'string') return
+      if (!['item/agentMessage/delta', 'item/plan/delta', 'item/commandExecution/outputDelta'].includes(notification.method)) return
+      const safeDelta = sanitizeSensitiveText(notification.params.delta)
+      const fingerprint = `${streamKey(scope, itemId, notification.method)}:${stableJson(safeDelta)}`
+      if (seenDeltas.has(fingerprint)) return
+      seenDeltas.add(fingerprint)
+      if (!current) {
+        const key = streamKey(scope, itemId, notification.method)
+        pendingTextDeltas.set(key, sanitizeSensitiveText((pendingTextDeltas.get(key) ?? '') + notification.params.delta))
+        return
+      }
       if (notification.method === 'item/agentMessage/delta' && current?.type === 'agent_message') {
         const item: RuntimeAgentMessageItem = { ...current, text: sanitizeSensitiveText(current.text + notification.params.delta) }
         update(scope, item)
@@ -430,11 +509,13 @@ export function createCodexItemProjection(dependencies: CodexItemProjectionDepen
       const itemId = nonEmptyString(request.params?.itemId)
       if (!itemId) return
       const projectedId = requestItemId(request, itemId)
-      const current = itemsByExecution.get(scope.executionId)?.get(scopedIdentity(scope, projectedId))
+      const identity = scopedIdentity(scope, projectedId)
+      if (completedItemsByExecution.get(scope.executionId)?.has(identity)) return
+      const current = itemsByExecution.get(scope.executionId)?.get(identity)
       if (current?.type === 'approval') {
         const decision = approvalDecision(response)
         update(scope, { ...current, status: decision === 'decline' || decision === 'cancel' ? 'declined' : 'completed', decision })
-        markCompleted(scope.executionId, scopedIdentity(scope, projectedId))
+        markCompleted(scope.executionId, identity)
         return
       }
       if (request.method !== 'item/tool/requestUserInput') return
@@ -450,7 +531,33 @@ export function createCodexItemProjection(dependencies: CodexItemProjectionDepen
       }))
       const item: RuntimeQuestionItem = { ...current, status: 'completed', answers }
       update(scope, item)
-      markCompleted(scope.executionId, scopedIdentity(scope, projectedId))
+      markCompleted(scope.executionId, identity)
+    },
+    completeTurn(status, error, scope) {
+      const planId = `plan:${scope.runtimeLocator.turnId}`
+      const planIdentity = scopedIdentity(scope, planId)
+      const plan = itemsByExecution.get(scope.executionId)?.get(planIdentity)
+      if (plan?.type === 'plan' && !completedItemsByExecution.get(scope.executionId)?.has(planIdentity)) {
+        update(scope, { ...plan, status: status === 'failed' ? 'failed' : 'completed' })
+        markCompleted(scope.executionId, planIdentity)
+      }
+      if (status === 'interrupted') {
+        projection.setInterrupt('completed', scope)
+        return
+      }
+      if (status !== 'failed' || !error) return
+      const itemId = `error:${scope.runtimeLocator.turnId}`
+      const identity = scopedIdentity(scope, itemId)
+      if (completedItemsByExecution.get(scope.executionId)?.has(identity)) return
+      const item: RuntimeErrorItem = {
+        id: sanitizeSensitiveText(itemId),
+        ...projectionMetadata(scope),
+        type: 'error',
+        status: 'failed',
+        error: sanitizeSensitiveText(error)
+      }
+      update(scope, item)
+      markCompleted(scope.executionId, identity)
     },
     setInterrupt(status, scope) {
       const itemId = `interrupt:${scope.runtimeLocator.turnId}`
@@ -478,6 +585,11 @@ export function createCodexItemProjection(dependencies: CodexItemProjectionDepen
             item
           }
         }, scope)
+      }
+      const status = turn.status
+      if (status === 'completed' || status === 'interrupted' || status === 'failed') {
+        const error = record(turn.error)
+        projection.completeTurn(status, typeof error?.message === 'string' ? error.message : null, scope)
       }
     },
     list(executionId) {

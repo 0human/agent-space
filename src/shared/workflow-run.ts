@@ -112,11 +112,13 @@ export interface RuntimeQuestionItem extends RuntimeItemBase {
   answers: Record<string, string[]>
 }
 
+export type RuntimeApprovalDecision = 'accept' | 'acceptForSession' | 'decline' | 'cancel' | 'acceptWithExecpolicyAmendment' | 'applyNetworkPolicyAmendment' | 'completed'
+
 export interface RuntimeApprovalItem extends RuntimeItemBase {
   type: 'approval'
   kind: 'command' | 'file_change' | 'permissions' | 'exec_command' | 'apply_patch'
   summary: string
-  decision: string | null
+  decision: RuntimeApprovalDecision | null
 }
 
 export interface RuntimeInterruptItem extends RuntimeItemBase {

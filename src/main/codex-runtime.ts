@@ -36,7 +36,7 @@ interface CodexRuntimeDependencies {
   readSkill?: (path: string, encoding: 'utf8') => Promise<string>
   createTransport?: (options: ProcessOptions & { command: string }) => Promise<CodexAppServerTransport> | CodexAppServerTransport
   inspectCapabilities?: CodexCapabilityInspector
-  itemProjection?: Pick<CodexItemProjection, 'handle' | 'handleRequest' | 'completeRequest' | 'setInterrupt' | 'restore'>
+  itemProjection?: Pick<CodexItemProjection, 'handle' | 'handleRequest' | 'completeRequest' | 'completeTurn' | 'setInterrupt' | 'restore'>
   session?: CodexSessionModule
 }
 

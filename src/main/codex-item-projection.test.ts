@@ -67,6 +67,32 @@ describe('Codex Item Projection', () => {
     ])
   })
 
+  it('projects Turn plan updates on one stable Plan identity', () => {
+    const projection = createCodexItemProjection()
+
+    projection.handle({
+      method: 'turn/plan/updated',
+      params: {
+        threadId: 'thread-1', turnId: 'turn-1', explanation: 'Working plan',
+        plan: [{ step: 'Inspect', status: 'inProgress' }, { step: 'Verify', status: 'pending' }]
+      }
+    }, scope)
+    projection.handle({
+      method: 'turn/plan/updated',
+      params: {
+        threadId: 'thread-1', turnId: 'turn-1', explanation: 'Updated plan',
+        plan: [{ step: 'Inspect', status: 'completed' }, { step: 'Verify', status: 'inProgress' }]
+      }
+    }, scope)
+
+    expect(projection.list(scope.executionId)).toEqual([
+      expect.objectContaining({
+        id: 'plan:turn-1', type: 'plan', status: 'in_progress', text: 'Updated plan',
+        steps: [{ step: 'Inspect', status: 'completed' }, { step: 'Verify', status: 'in_progress' }]
+      })
+    ])
+  })
+
   it('projects command start, aggregated output, and authoritative completion details', () => {
     const projection = createCodexItemProjection()
 
@@ -149,13 +175,17 @@ describe('Codex Item Projection', () => {
     expect(JSON.stringify(projection.list(scope.executionId))).not.toContain('secret')
   })
 
-  it('projects a dynamic Tool result from its allowlisted string output', () => {
+  it('projects a dynamic Tool result from its allowlisted content Items', () => {
     const projection = createCodexItemProjection()
     projection.handle({
       method: 'item/completed',
       params: {
         threadId: 'thread-1', turnId: 'turn-1',
-        item: { type: 'dynamicToolCall', id: 'dynamic-1', namespace: 'workspace', tool: 'inspect', status: 'completed', arguments: { token: 'input-secret' }, result: 'TOKEN=result-secret\nInspection complete', durationMs: 12 }
+        item: {
+          type: 'dynamicToolCall', id: 'dynamic-1', namespace: 'workspace', tool: 'inspect', status: 'completed',
+          arguments: { token: 'input-secret' }, success: true,
+          contentItems: [{ type: 'inputText', text: 'TOKEN=result-secret\nInspection complete' }], durationMs: 12
+        }
       }
     }, scope)
 
@@ -163,6 +193,21 @@ describe('Codex Item Projection', () => {
       expect.objectContaining({ type: 'tool', name: 'workspace.inspect', status: 'completed', output: 'TOKEN=<redacted>\nInspection complete', durationMs: 12 })
     ])
     expect(JSON.stringify(projection.list(scope.executionId))).not.toMatch(/input-secret|result-secret/)
+  })
+
+  it('uses the dynamic Tool success flag as its terminal status', () => {
+    const projection = createCodexItemProjection()
+    projection.handle({
+      method: 'item/completed',
+      params: {
+        threadId: 'thread-1', turnId: 'turn-1',
+        item: { type: 'dynamicToolCall', id: 'dynamic-failed', tool: 'inspect', success: false, contentItems: [] }
+      }
+    }, scope)
+
+    expect(projection.list(scope.executionId)).toEqual([
+      expect.objectContaining({ id: 'dynamic-failed', type: 'tool', status: 'failed' })
+    ])
   })
 
   it('does not reapply duplicate lifecycle or delta notifications', () => {
@@ -174,6 +219,7 @@ describe('Codex Item Projection', () => {
     projection.handle({ ...started, params: { ...started.params, item: { ...started.params.item } } }, scope)
     projection.handle(delta, scope)
     projection.handle({ ...delta, params: { ...delta.params } }, scope)
+    projection.handle({ ...started, params: { ...started.params, item: { ...started.params.item } } }, scope)
     expect(projection.list(scope.executionId)[0]).toMatchObject({ text: 'same' })
     expect(publish).toHaveBeenCalledTimes(2)
 
@@ -208,6 +254,23 @@ describe('Codex Item Projection', () => {
     expect(projection.list(scope.executionId)).toEqual([
       expect.objectContaining({ id: 'shared-id', text: 'first final', runtimeLocator: expect.objectContaining({ turnId: 'turn-1' }) }),
       expect.objectContaining({ id: 'shared-id', text: 'second final', runtimeLocator: expect.objectContaining({ turnId: 'turn-2' }) })
+    ])
+  })
+
+  it('converges when a delta arrives before its Item start', () => {
+    const projection = createCodexItemProjection()
+
+    projection.handle({ method: 'item/agentMessage/delta', params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'early-1', delta: 'early ' } }, scope)
+    projection.handle({ method: 'item/started', params: { threadId: 'thread-1', turnId: 'turn-1', item: { type: 'agentMessage', id: 'early-1', text: '' } } }, scope)
+    projection.handle({ method: 'item/agentMessage/delta', params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'early-1', delta: 'delta' } }, scope)
+
+    expect(projection.list(scope.executionId)).toEqual([
+      expect.objectContaining({ id: 'early-1', type: 'agent_message', status: 'in_progress', text: 'early delta' })
+    ])
+
+    projection.handle({ method: 'item/completed', params: { threadId: 'thread-1', turnId: 'turn-1', item: { type: 'agentMessage', id: 'early-1', text: 'authoritative' } } }, scope)
+    expect(projection.list(scope.executionId)).toEqual([
+      expect.objectContaining({ id: 'early-1', status: 'completed', text: 'authoritative' })
     ])
   })
 
@@ -407,5 +470,28 @@ describe('Codex Item Projection', () => {
       expect.objectContaining({ itemId: 'history-unknown', itemType: 'futureItem', reason: 'unsupported_item_type' })
     ])
     expect(JSON.stringify(projection.list(scope.executionId))).not.toMatch(/hidden-secret|unknown-secret/)
+  })
+
+  it('restores failed and interrupted Turn outcomes as safe terminal Items', () => {
+    const projection = createCodexItemProjection()
+
+    projection.restore({
+      thread: {
+        id: 'thread-1',
+        turns: [{ id: 'turn-1', status: 'failed', error: { message: 'authorization=history-secret failed' }, items: [] }]
+      }
+    }, scope)
+    projection.restore({
+      thread: {
+        id: 'thread-1',
+        turns: [{ id: 'turn-2', status: 'interrupted', error: null, items: [] }]
+      }
+    }, { ...scope, runtimeLocator: { ...scope.runtimeLocator, turnId: 'turn-2' } })
+
+    expect(projection.list(scope.executionId)).toEqual([
+      expect.objectContaining({ id: 'error:turn-1', type: 'error', status: 'failed', error: 'authorization=<redacted> failed' }),
+      expect.objectContaining({ id: 'interrupt:turn-2', type: 'interrupt', status: 'completed' })
+    ])
+    expect(JSON.stringify(projection.list(scope.executionId))).not.toContain('history-secret')
   })
 })

@@ -52,7 +52,7 @@ export interface CodexSessionModuleDependencies {
   resolveCommand?: (command: string) => Promise<string | null>
   inspectCapabilities?: CodexCapabilityInspector
   requiredCapabilities?: string[]
-  itemProjection?: Pick<CodexItemProjection, 'handle' | 'handleRequest' | 'completeRequest' | 'setInterrupt' | 'restore'>
+  itemProjection?: Pick<CodexItemProjection, 'handle' | 'handleRequest' | 'completeRequest' | 'completeTurn' | 'setInterrupt' | 'restore'>
 }
 
 export interface CodexSessionTurnInput extends CodexSessionPreflightInput {
@@ -374,6 +374,14 @@ export function createCodexSessionModule(dependencies: CodexSessionModuleDepende
     }
   }
 
+  function observeProjection(action: () => void): void {
+    try {
+      action()
+    } catch {
+      // Display projection is observational and cannot affect an active Turn or history access.
+    }
+  }
+
   function workUnitKey(workUnit: CodexWorkUnit): string {
     return workUnit.kind === 'phase'
       ? `${workUnit.runId}:phase:${workUnit.phaseId}`
@@ -430,11 +438,7 @@ export function createCodexSessionModule(dependencies: CodexSessionModuleDepende
     const normalized = normalizeApprovalResult(original, result)
     await state.transport.respond(original.id, normalized)
     if (state.input.executionId) {
-      try {
-        itemProjection?.completeRequest(original, normalized, projectionScope(state))
-      } catch {
-        // Display projection is observational and cannot interrupt a Turn.
-      }
+      observeProjection(() => itemProjection?.completeRequest(original, normalized, projectionScope(state)))
     }
     state.waitingRequest = null
     state.waitingRawRequest = null
@@ -452,28 +456,14 @@ export function createCodexSessionModule(dependencies: CodexSessionModuleDepende
           const event = belongsToTurn ? runtimeEventForNotification(message) : null
           if (event) state.events.push(event)
           if (state.input.executionId) {
-            try {
-              await itemProjection?.handle(message, {
-                runId: state.input.workUnit.runId,
-                executionId: state.input.executionId,
-                runtimeLocator: state.locator,
-                permissionPolicy: state.input.permissionPolicy ?? { grantedPermissions: [] },
-                source: 'codex app-server'
-              })
-            } catch {
-              // Display projection is observational and cannot interrupt a Turn.
-            }
+            observeProjection(() => itemProjection?.handle(message, projectionScope(state)))
           }
         }
         if ('id' in message) {
           const request = message as JsonRpcServerRequest
           const publicRequest = publicApprovalRequest(request)
           if (state.input.executionId) {
-            try {
-              itemProjection?.handleRequest(request, projectionScope(state))
-            } catch {
-              // Display projection is observational and cannot interrupt a Turn.
-            }
+            observeProjection(() => itemProjection?.handleRequest(request, projectionScope(state)))
           }
           if (publicRequest.kind === 'question') state.events.push({ type: 'question', question: publicRequest.summary })
           state.waitingRequest = publicRequest
@@ -484,11 +474,7 @@ export function createCodexSessionModule(dependencies: CodexSessionModuleDepende
             const normalized = normalizeApprovalResult(request, approvalResult)
             await state.transport.respond(request.id, normalized)
             if (state.input.executionId) {
-              try {
-                itemProjection?.completeRequest(request, normalized, projectionScope(state))
-              } catch {
-                // Display projection is observational and cannot interrupt a Turn.
-              }
+              observeProjection(() => itemProjection?.completeRequest(request, normalized, projectionScope(state)))
             }
             state.waitingRequest = null
             state.waitingRawRequest = null
@@ -501,18 +487,15 @@ export function createCodexSessionModule(dependencies: CodexSessionModuleDepende
         if (turn?.id !== state.locator.turnId) continue
         const turnError = asRecord(turn.error)
         const status = asString(turn.status)
+        const terminalStatus = status === 'completed' || status === 'interrupted' ? status : 'failed'
         const result: CodexSessionTurnResult = {
           locator: state.locator,
           events: state.events,
-          status: status === 'completed' || status === 'interrupted' ? status : 'failed',
+          status: terminalStatus,
           error: asString(turnError?.message)
         }
-        if (result.status === 'interrupted' && state.input.executionId) {
-          try {
-            itemProjection?.setInterrupt('completed', projectionScope(state))
-          } catch {
-            // Display projection is observational and cannot interrupt a Turn.
-          }
+        if (state.input.executionId) {
+          observeProjection(() => itemProjection?.completeTurn(terminalStatus, result.error ?? null, projectionScope(state)))
         }
         await state.input.onTurnCompleted?.(result)
         return result
@@ -599,11 +582,7 @@ export function createCodexSessionModule(dependencies: CodexSessionModuleDepende
       await transport.request('turn/interrupt', { threadId: locator.threadId, turnId: locator.turnId })
       const state = turnStates.get(activeKey)
       if (state?.input.executionId) {
-        try {
-          itemProjection?.setInterrupt('in_progress', projectionScope(state))
-        } catch {
-          // Display projection is observational and cannot interrupt a Turn.
-        }
+        observeProjection(() => itemProjection?.setInterrupt('in_progress', projectionScope(state)))
       }
     },
     respondToApproval,
@@ -619,20 +598,19 @@ export function createCodexSessionModule(dependencies: CodexSessionModuleDepende
         const turns = thread.turns.filter((turn) => asRecord(turn)?.id === turnId)
         if (turns.length === 0) throw new Error(zhCNMain.codexSession.missingTurnHistory)
         const selected = { ...responseRecord, thread: { ...thread, turns } }
-        if (input.projectionScope && input.locator.runtimeProvider && input.locator.runtimeVersion) {
-          try {
-            itemProjection?.restore(selected, {
-              ...input.projectionScope,
-              runtimeLocator: {
-                runtimeProvider: input.locator.runtimeProvider,
-                threadId: input.locator.threadId,
-                turnId,
-                runtimeVersion: input.locator.runtimeVersion
-              }
-            })
-          } catch {
-            // Display projection is observational and cannot make history unavailable.
-          }
+        const runtimeProvider = input.locator.runtimeProvider
+        const runtimeVersion = input.locator.runtimeVersion
+        const historyScope = input.projectionScope
+        if (historyScope && runtimeProvider && runtimeVersion) {
+          observeProjection(() => itemProjection?.restore(selected, {
+            ...historyScope,
+            runtimeLocator: {
+              runtimeProvider,
+              threadId: input.locator.threadId,
+              turnId,
+              runtimeVersion
+            }
+          }))
         }
         return selected
       } finally {

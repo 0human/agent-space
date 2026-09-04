@@ -1,6 +1,6 @@
 import type { PermissionPolicy } from '../shared/project'
-import type { RuntimeAgentMessageItem, RuntimeCommandItem, RuntimeErrorItem, RuntimeFileChange, RuntimeItem, RuntimeItemStatus, RuntimeLocator } from '../shared/workflow-run'
-import type { JsonRpcNotification } from './codex-app-server-transport'
+import { runtimeItemIdentity, type RuntimeAgentMessageItem, type RuntimeApprovalItem, type RuntimeCommandItem, type RuntimeErrorItem, type RuntimeFileChange, type RuntimeFinalResponseItem, type RuntimeItem, type RuntimeItemStatus, type RuntimeLocator, type RuntimePlanItem, type RuntimeQuestion, type RuntimeQuestionItem } from '../shared/workflow-run'
+import type { JsonRpcNotification, JsonRpcServerRequest } from './codex-app-server-transport'
 import { sanitizePermissionPolicy, sanitizeSensitivePath, sanitizeSensitiveText } from './sensitive-text'
 
 const recognizedItemTypes = new Set(['agentMessage', 'commandExecution', 'fileChange', 'plan', 'mcpToolCall', 'dynamicToolCall', 'reasoning'])
@@ -31,6 +31,10 @@ export interface CodexItemProjectionDependencies {
 
 export interface CodexItemProjection {
   handle(notification: JsonRpcNotification, scope: CodexItemProjectionScope): void
+  handleRequest(request: JsonRpcServerRequest, scope: CodexItemProjectionScope): void
+  completeRequest(request: JsonRpcServerRequest, response: unknown, scope: CodexItemProjectionScope): void
+  setInterrupt(status: 'in_progress' | 'completed', scope: CodexItemProjectionScope): void
+  restore(history: unknown, scope: CodexItemProjectionScope): void
   list(executionId: string): RuntimeItem[]
   listIgnoredItems(executionId: string): CodexIgnoredItem[]
 }
@@ -95,6 +99,7 @@ function fileChanges(value: unknown): RuntimeFileChange[] {
 function toolOutput(item: Record<string, unknown>): string | null {
   const error = record(item.error)
   if (typeof error?.message === 'string') return sanitizeSensitiveText(error.message)
+  if (typeof item.result === 'string') return sanitizeSensitiveText(item.result)
   const result = record(item.result)
   const content = result?.content
   if (!Array.isArray(content)) return null
@@ -115,11 +120,93 @@ function planSteps(value: unknown): Array<{ step: string; status: string }> {
   })
 }
 
+function userInputQuestions(value: unknown): RuntimeQuestion[] {
+  if (!Array.isArray(value)) return []
+  return value.flatMap((entry) => {
+    const input = record(entry)
+    const id = nonEmptyString(input?.id)
+    const header = nonEmptyString(input?.header)
+    const question = nonEmptyString(input?.question)
+    if (!id || !header || !question) return []
+    const options = Array.isArray(input?.options) ? input.options.flatMap((entry) => {
+      const option = record(entry)
+      const label = nonEmptyString(option?.label)
+      const description = nonEmptyString(option?.description)
+      return label && description ? [{ label: sanitizeSensitiveText(label), description: sanitizeSensitiveText(description) }] : []
+    }) : []
+    return [{
+      id: sanitizeSensitiveText(id),
+      header: sanitizeSensitiveText(header),
+      question: sanitizeSensitiveText(question),
+      options,
+      isSecret: input?.isSecret === true
+    }]
+  })
+}
+
+const approvalKinds = new Map<string, RuntimeApprovalItem['kind']>([
+  ['item/commandExecution/requestApproval', 'command'],
+  ['item/fileChange/requestApproval', 'file_change'],
+  ['item/permissions/requestApproval', 'permissions'],
+  ['execCommandApproval', 'exec_command'],
+  ['applyPatchApproval', 'apply_patch']
+])
+
+function approvalDecision(value: unknown): string {
+  const decision = record(value)?.decision
+  if (typeof decision === 'string' && ['accept', 'acceptForSession', 'decline', 'cancel'].includes(decision)) return decision
+  const decisionRecord = record(decision)
+  if (decisionRecord?.acceptWithExecpolicyAmendment) return 'acceptWithExecpolicyAmendment'
+  if (decisionRecord?.applyNetworkPolicyAmendment) return 'applyNetworkPolicyAmendment'
+  return 'completed'
+}
+
+function requestItemId(request: JsonRpcServerRequest, itemId: string): string {
+  return request.method === 'item/tool/requestUserInput'
+    ? `question:${itemId}`
+    : `approval:${itemId}`
+}
+
+function safeRuntimeLocator(locator: RuntimeLocator): RuntimeLocator {
+  return {
+    runtimeProvider: sanitizeSensitiveText(locator.runtimeProvider),
+    threadId: sanitizeSensitiveText(locator.threadId),
+    turnId: sanitizeSensitiveText(locator.turnId),
+    runtimeVersion: sanitizeSensitiveText(locator.runtimeVersion)
+  }
+}
+
+function projectionMetadata(scope: CodexItemProjectionScope) {
+  return {
+    runId: sanitizeSensitiveText(scope.runId),
+    executionId: sanitizeSensitiveText(scope.executionId),
+    provider: sanitizeSensitiveText(scope.runtimeLocator.runtimeProvider),
+    source: sanitizeSensitiveText(scope.source),
+    permissionPolicy: sanitizePermissionPolicy(scope.permissionPolicy),
+    runtimeLocator: safeRuntimeLocator(scope.runtimeLocator)
+  }
+}
+
 export function createCodexItemProjection(dependencies: CodexItemProjectionDependencies = {}): CodexItemProjection {
   const itemsByExecution = new Map<string, Map<string, RuntimeItem>>()
   const ignoredItemsByExecution = new Map<string, Map<string, CodexIgnoredItem>>()
   const completedItemsByExecution = new Map<string, Set<string>>()
   const seenNotifications = new Set<string>()
+
+  const scopedIdentity = (scope: CodexItemProjectionScope, itemId: string): string => runtimeItemIdentity({
+    id: sanitizeSensitiveText(itemId),
+    provider: sanitizeSensitiveText(scope.runtimeLocator.runtimeProvider),
+    runtimeLocator: safeRuntimeLocator(scope.runtimeLocator)
+  })
+
+  const markCompleted = (executionId: string, identity: string): void => {
+    let completed = completedItemsByExecution.get(executionId)
+    if (!completed) {
+      completed = new Set()
+      completedItemsByExecution.set(executionId, completed)
+    }
+    completed.add(identity)
+  }
 
   const update = (scope: CodexItemProjectionScope, item: RuntimeItem): void => {
     let executionItems = itemsByExecution.get(scope.executionId)
@@ -127,9 +214,10 @@ export function createCodexItemProjection(dependencies: CodexItemProjectionDepen
       executionItems = new Map()
       itemsByExecution.set(scope.executionId, executionItems)
     }
-    const previous = executionItems.get(item.id)
+    const identity = runtimeItemIdentity(item)
+    const previous = executionItems.get(identity)
     if (previous && JSON.stringify(previous) === JSON.stringify(item)) return
-    executionItems.set(item.id, item)
+    executionItems.set(identity, item)
 
     try {
       const published = dependencies.publish?.(item)
@@ -152,8 +240,8 @@ export function createCodexItemProjection(dependencies: CodexItemProjectionDepen
       ignoredItemsByExecution.set(scope.executionId, executionItems)
     }
     const item: CodexIgnoredItem = {
-      runId: scope.runId,
-      executionId: scope.executionId,
+      runId: sanitizeSensitiveText(scope.runId),
+      executionId: sanitizeSensitiveText(scope.executionId),
       method,
       itemId: itemId ? sanitizeSensitiveText(itemId) : null,
       itemType: itemType ? sanitizeSensitiveText(itemType) : null,
@@ -171,7 +259,7 @@ export function createCodexItemProjection(dependencies: CodexItemProjectionDepen
     }
   }
 
-  return {
+  const projection: CodexItemProjection = {
     handle(notification, scope) {
       if (notification.params?.threadId !== scope.runtimeLocator.threadId || notification.params?.turnId !== scope.runtimeLocator.turnId) return
       if (!notification.params) return
@@ -179,14 +267,7 @@ export function createCodexItemProjection(dependencies: CodexItemProjectionDepen
       if (seenNotifications.has(notificationKey)) return
       seenNotifications.add(notificationKey)
 
-      const metadata = {
-        runId: scope.runId,
-        executionId: scope.executionId,
-        provider: scope.runtimeLocator.runtimeProvider,
-        source: scope.source,
-        permissionPolicy: sanitizePermissionPolicy(scope.permissionPolicy),
-        runtimeLocator: scope.runtimeLocator
-      }
+      const metadata = projectionMetadata(scope)
 
       if (notification.method === 'item/started' || notification.method === 'item/completed') {
         const method = notification.method
@@ -197,28 +278,24 @@ export function createCodexItemProjection(dependencies: CodexItemProjectionDepen
           observeIgnored(scope, method, itemId, itemType, 'malformed_item')
           return
         }
-        if (method === 'item/started' && completedItemsByExecution.get(scope.executionId)?.has(itemId)) return
+        const identity = scopedIdentity(scope, itemId)
+        if (completedItemsByExecution.get(scope.executionId)?.has(identity)) return
         const project = (projected: RuntimeItem): void => {
           update(scope, projected)
           if (method !== 'item/completed') return
-          let completed = completedItemsByExecution.get(scope.executionId)
-          if (!completed) {
-            completed = new Set()
-            completedItemsByExecution.set(scope.executionId, completed)
-          }
-          completed.add(itemId)
+          markCompleted(scope.executionId, identity)
         }
         if (item.type === 'agentMessage' && typeof item.text === 'string') {
           project({
-            id: itemId,
+            id: sanitizeSensitiveText(itemId),
             ...metadata,
-            type: 'agent_message',
+            type: item.phase === 'final_answer' ? 'final_response' : 'agent_message',
             status: method === 'item/completed' ? 'completed' : 'in_progress',
             text: sanitizeSensitiveText(item.text)
           })
         } else if (item.type === 'commandExecution' && typeof item.command === 'string') {
           project({
-            id: itemId,
+            id: sanitizeSensitiveText(itemId),
             ...metadata,
             type: 'command',
             status: itemStatus(method, item.status),
@@ -234,7 +311,7 @@ export function createCodexItemProjection(dependencies: CodexItemProjectionDepen
           }
           const changes = fileChanges(item.changes)
           project({
-            id: itemId,
+            id: sanitizeSensitiveText(itemId),
             ...metadata,
             type: 'file_change',
             status: itemStatus(method, item.status),
@@ -249,7 +326,7 @@ export function createCodexItemProjection(dependencies: CodexItemProjectionDepen
           }
           const steps = planSteps(item.plan)
           project({
-            id: itemId,
+            id: sanitizeSensitiveText(itemId),
             ...metadata,
             type: 'plan',
             status: itemStatus(method, item.status),
@@ -265,7 +342,7 @@ export function createCodexItemProjection(dependencies: CodexItemProjectionDepen
             return
           }
           project({
-            id: itemId,
+            id: sanitizeSensitiveText(itemId),
             ...metadata,
             type: 'tool',
             name: sanitizeSensitiveText(name),
@@ -283,20 +360,124 @@ export function createCodexItemProjection(dependencies: CodexItemProjectionDepen
         const error = record(notification.params.error)
         const message = typeof error?.message === 'string' ? error.message : typeof notification.params.message === 'string' ? notification.params.message : null
         if (!message) return
-        const item: RuntimeErrorItem = { id: `error:${scope.runtimeLocator.turnId}:${errorCode(notification.params.code)}`, ...metadata, type: 'error', status: 'failed', error: sanitizeSensitiveText(message) }
+        const item: RuntimeErrorItem = { id: sanitizeSensitiveText(`error:${scope.runtimeLocator.turnId}:${errorCode(notification.params.code)}`), ...metadata, type: 'error', status: 'failed', error: sanitizeSensitiveText(message) }
         update(scope, item)
         return
       }
 
-      if (typeof notification.params.itemId !== 'string' || typeof notification.params.delta !== 'string') return
-      if (completedItemsByExecution.get(scope.executionId)?.has(notification.params.itemId)) return
-      const current = itemsByExecution.get(scope.executionId)?.get(notification.params.itemId)
+      if (typeof notification.params.itemId !== 'string') return
+      const identity = scopedIdentity(scope, notification.params.itemId)
+      if (completedItemsByExecution.get(scope.executionId)?.has(identity)) return
+      const current = itemsByExecution.get(scope.executionId)?.get(identity)
+      if (notification.method === 'item/fileChange/patchUpdated' && current?.type === 'file_change') {
+        const changes = fileChanges(notification.params.changes)
+        update(scope, {
+          ...current,
+          changes,
+          additions: changes.reduce((total, change) => total + change.additions, 0),
+          deletions: changes.reduce((total, change) => total + change.deletions, 0)
+        })
+        return
+      }
+      if (typeof notification.params.delta !== 'string') return
       if (notification.method === 'item/agentMessage/delta' && current?.type === 'agent_message') {
         const item: RuntimeAgentMessageItem = { ...current, text: sanitizeSensitiveText(current.text + notification.params.delta) }
+        update(scope, item)
+      } else if (notification.method === 'item/agentMessage/delta' && current?.type === 'final_response') {
+        const item: RuntimeFinalResponseItem = { ...current, text: sanitizeSensitiveText(current.text + notification.params.delta) }
+        update(scope, item)
+      } else if (notification.method === 'item/plan/delta' && current?.type === 'plan') {
+        const item: RuntimePlanItem = { ...current, text: sanitizeSensitiveText(current.text + notification.params.delta) }
         update(scope, item)
       } else if (notification.method === 'item/commandExecution/outputDelta' && current?.type === 'command') {
         const item: RuntimeCommandItem = { ...current, output: sanitizeSensitiveText(current.output + notification.params.delta) }
         update(scope, item)
+      }
+    },
+    handleRequest(request, scope) {
+      if (request.params?.threadId !== scope.runtimeLocator.threadId || request.params?.turnId !== scope.runtimeLocator.turnId) return
+      const itemId = nonEmptyString(request.params.itemId)
+      const projectedId = itemId ? requestItemId(request, itemId) : null
+      if (projectedId && completedItemsByExecution.get(scope.executionId)?.has(scopedIdentity(scope, projectedId))) return
+      if (request.method !== 'item/tool/requestUserInput') {
+        const kind = approvalKinds.get(request.method)
+        if (!kind || !itemId) return
+        const command = nonEmptyString(request.params.command)
+        const reason = nonEmptyString(request.params.reason)
+        update(scope, {
+          id: sanitizeSensitiveText(projectedId!),
+          ...projectionMetadata(scope),
+          type: 'approval',
+          status: 'in_progress',
+          kind,
+          summary: sanitizeSensitiveText(command ?? reason ?? request.method),
+          decision: null
+        })
+        return
+      }
+      const questions = userInputQuestions(request.params.questions)
+      if (!itemId || questions.length === 0) return
+      update(scope, {
+        id: sanitizeSensitiveText(projectedId!),
+        ...projectionMetadata(scope),
+        type: 'question',
+        status: 'in_progress',
+        questions,
+        answers: {}
+      })
+    },
+    completeRequest(request, response, scope) {
+      const itemId = nonEmptyString(request.params?.itemId)
+      if (!itemId) return
+      const projectedId = requestItemId(request, itemId)
+      const current = itemsByExecution.get(scope.executionId)?.get(scopedIdentity(scope, projectedId))
+      if (current?.type === 'approval') {
+        const decision = approvalDecision(response)
+        update(scope, { ...current, status: decision === 'decline' || decision === 'cancel' ? 'declined' : 'completed', decision })
+        markCompleted(scope.executionId, scopedIdentity(scope, projectedId))
+        return
+      }
+      if (request.method !== 'item/tool/requestUserInput') return
+      if (current?.type !== 'question') return
+      const responseAnswers = record(response)?.answers
+      const answerRecord = record(responseAnswers)
+      const answers = Object.fromEntries(current.questions.map((question) => {
+        const values = record(answerRecord?.[question.id])?.answers
+        const safeValues = Array.isArray(values) ? values.flatMap((value) => typeof value === 'string'
+          ? [question.isSecret ? '<redacted>' : sanitizeSensitiveText(value)]
+          : []) : []
+        return [question.id, safeValues]
+      }))
+      const item: RuntimeQuestionItem = { ...current, status: 'completed', answers }
+      update(scope, item)
+      markCompleted(scope.executionId, scopedIdentity(scope, projectedId))
+    },
+    setInterrupt(status, scope) {
+      const itemId = `interrupt:${scope.runtimeLocator.turnId}`
+      const identity = scopedIdentity(scope, itemId)
+      if (status === 'in_progress' && completedItemsByExecution.get(scope.executionId)?.has(identity)) return
+      update(scope, {
+        id: sanitizeSensitiveText(itemId),
+        ...projectionMetadata(scope),
+        type: 'interrupt',
+        status
+      })
+      if (status === 'completed') markCompleted(scope.executionId, identity)
+    },
+    restore(history, scope) {
+      const thread = record(record(history)?.thread)
+      if (thread?.id !== scope.runtimeLocator.threadId || !Array.isArray(thread.turns)) return
+      const turn = thread.turns.map(record).find((candidate) => candidate?.id === scope.runtimeLocator.turnId)
+      if (!turn || !Array.isArray(turn.items)) return
+      for (const item of turn.items) {
+        projection.handle({
+          method: 'item/completed',
+          params: {
+            threadId: scope.runtimeLocator.threadId,
+            turnId: scope.runtimeLocator.turnId,
+            item
+          }
+        }, scope)
       }
     },
     list(executionId) {
@@ -306,4 +487,5 @@ export function createCodexItemProjection(dependencies: CodexItemProjectionDepen
       return [...(ignoredItemsByExecution.get(executionId)?.values() ?? [])]
     }
   }
+  return projection
 }

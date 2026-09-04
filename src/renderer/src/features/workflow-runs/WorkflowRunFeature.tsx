@@ -46,7 +46,7 @@ export function WorkflowRunFeature({
   useEffect(() => {
     let disposed = false
     const snapshotRequests = run.stepExecutions.map((execution) =>
-      Promise.resolve().then(() => api.listRuntimeItems(execution.id)),
+      Promise.resolve().then(() => api.listRuntimeItems(run.id, execution.id)),
     )
     void Promise.allSettled(snapshotRequests).then((results) => {
       if (disposed) return

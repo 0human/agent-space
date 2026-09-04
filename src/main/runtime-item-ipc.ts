@@ -8,6 +8,7 @@ interface RuntimeItemReader {
 interface RuntimeItemHandlerDependencies {
   handle: (channel: string, listener: (...args: unknown[]) => unknown) => void
   projection: RuntimeItemReader
+  loadHistory?: (runId: string, executionId: string) => Promise<void>
 }
 
 interface RuntimeItemWindow {
@@ -16,9 +17,11 @@ interface RuntimeItemWindow {
   }
 }
 
-export function registerRuntimeItemHandlers({ handle, projection }: RuntimeItemHandlerDependencies): void {
-  handle(APP_SHELL_CHANNELS.listRuntimeItems, async (_event: unknown, executionId: unknown) => {
-    return typeof executionId === 'string' && executionId ? projection.list(executionId) : []
+export function registerRuntimeItemHandlers({ handle, projection, loadHistory }: RuntimeItemHandlerDependencies): void {
+  handle(APP_SHELL_CHANNELS.listRuntimeItems, async (_event: unknown, runId: unknown, executionId: unknown) => {
+    if (typeof runId !== 'string' || !runId || typeof executionId !== 'string' || !executionId) return []
+    await loadHistory?.(runId, executionId)
+    return projection.list(executionId)
   })
 }
 

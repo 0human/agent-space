@@ -65,6 +65,11 @@ export interface RuntimeAgentMessageItem extends RuntimeItemBase {
   text: string
 }
 
+export interface RuntimeFinalResponseItem extends RuntimeItemBase {
+  type: 'final_response'
+  text: string
+}
+
 export interface RuntimeCommandItem extends RuntimeItemBase {
   type: 'command'
   command: string
@@ -93,6 +98,31 @@ export interface RuntimePlanItem extends RuntimeItemBase {
   steps?: Array<{ step: string; status: string }>
 }
 
+export interface RuntimeQuestion {
+  id: string
+  header: string
+  question: string
+  options: Array<{ label: string; description: string }>
+  isSecret: boolean
+}
+
+export interface RuntimeQuestionItem extends RuntimeItemBase {
+  type: 'question'
+  questions: RuntimeQuestion[]
+  answers: Record<string, string[]>
+}
+
+export interface RuntimeApprovalItem extends RuntimeItemBase {
+  type: 'approval'
+  kind: 'command' | 'file_change' | 'permissions' | 'exec_command' | 'apply_patch'
+  summary: string
+  decision: string | null
+}
+
+export interface RuntimeInterruptItem extends RuntimeItemBase {
+  type: 'interrupt'
+}
+
 export interface RuntimeToolItem extends RuntimeItemBase {
   type: 'tool'
   name: string
@@ -107,7 +137,16 @@ export interface RuntimeErrorItem extends RuntimeItemBase {
   error: string
 }
 
-export type RuntimeItem = RuntimeAgentMessageItem | RuntimeCommandItem | RuntimeFileChangeItem | RuntimePlanItem | RuntimeToolItem | RuntimeErrorItem
+export type RuntimeItem = RuntimeAgentMessageItem | RuntimeFinalResponseItem | RuntimeCommandItem | RuntimeFileChangeItem | RuntimePlanItem | RuntimeQuestionItem | RuntimeApprovalItem | RuntimeInterruptItem | RuntimeToolItem | RuntimeErrorItem
+
+export function runtimeItemIdentity(item: Pick<RuntimeItemBase, 'id' | 'provider' | 'runtimeLocator'>): string {
+  return JSON.stringify([
+    item.provider,
+    item.runtimeLocator.threadId,
+    item.runtimeLocator.turnId,
+    item.id
+  ])
+}
 
 export interface WorkflowEvent {
   id: number

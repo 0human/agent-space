@@ -51,7 +51,7 @@ export interface AppShellApi {
   startWorkflowRun: (projectId: string, idea: string) => Promise<WorkflowRunActionResult>
   listWorkflowRuns: (projectId: string) => Promise<WorkflowRun[]>
   getWorkflowRun: (runId: string) => Promise<WorkflowRun | null>
-  listRuntimeItems: (executionId: string) => Promise<RuntimeItem[]>
+  listRuntimeItems: (runId: string, executionId: string) => Promise<RuntimeItem[]>
   subscribeRuntimeItemUpdates: (listener: (item: RuntimeItem) => void) => () => void
   pauseWorkflowRun: (runId: string) => Promise<WorkflowRun>
   resumeWorkflowRun: (runId: string, guidance?: string) => Promise<WorkflowRun>

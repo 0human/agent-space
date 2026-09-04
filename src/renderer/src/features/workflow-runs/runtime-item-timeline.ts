@@ -1,4 +1,4 @@
-import type { RuntimeItem } from '../../../../shared/workflow-run'
+import { runtimeItemIdentity, type RuntimeItem } from '../../../../shared/workflow-run'
 
 export interface RuntimeItemTimeline {
   items: RuntimeItem[]
@@ -10,17 +10,18 @@ export function mergeRuntimeItemTimeline(
   incoming: RuntimeItem[],
 ): RuntimeItem[] {
   const positions = new Map(
-    current.map((item, index) => [`${item.executionId}:${item.id}`, index]),
+    current.map((item, index) => [`${item.executionId}:${runtimeItemIdentity(item)}`, index]),
   )
   const next = [...current]
 
   for (const item of incoming) {
-    const key = `${item.executionId}:${item.id}`
+    const key = `${item.executionId}:${runtimeItemIdentity(item)}`
     const position = positions.get(key)
     if (position === undefined) {
       positions.set(key, next.length)
       next.push(item)
     } else {
+      if (next[position]?.status !== 'in_progress') continue
       next[position] = item
     }
   }

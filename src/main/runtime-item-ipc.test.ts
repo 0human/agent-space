@@ -23,13 +23,16 @@ describe('Runtime Item IPC', () => {
   it('lists the current in-memory projection through a controlled handler', async () => {
     const handlers = new Map<string, (...args: unknown[]) => unknown>()
     const projection = { list: vi.fn().mockReturnValue([item]) }
+    const loadHistory = vi.fn().mockResolvedValue(undefined)
 
     registerRuntimeItemHandlers({
       handle: (channel, listener) => handlers.set(channel, listener),
-      projection
+      projection,
+      loadHistory
     })
 
-    await expect(handlers.get(APP_SHELL_CHANNELS.listRuntimeItems)?.({}, 'execution-1')).resolves.toEqual([item])
+    await expect(handlers.get(APP_SHELL_CHANNELS.listRuntimeItems)?.({}, 'run-1', 'execution-1')).resolves.toEqual([item])
+    expect(loadHistory).toHaveBeenCalledWith('run-1', 'execution-1')
     expect(projection.list).toHaveBeenCalledWith('execution-1')
   })
 

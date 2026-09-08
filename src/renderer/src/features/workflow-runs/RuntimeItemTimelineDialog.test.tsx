@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it } from 'vitest'
 
@@ -207,5 +207,38 @@ describe('Runtime Item timeline dialog', () => {
     )
 
     expect(scrollTop).toBe(800)
+  })
+
+  it('shows compact command and file-change summaries with full output collapsed', async () => {
+    const user = userEvent.setup()
+    const command: RuntimeItem = {
+      id: 'command-summary', ...metadata, type: 'command', status: 'completed', command: 'pnpm test',
+      output: 'collecting tests\nTests: 12 passed', exitCode: 0, durationMs: 420
+    }
+    const fileChange: RuntimeItem = {
+      id: 'file-summary', ...metadata, type: 'file_change', status: 'completed',
+      changes: [{ path: 'src/index.ts', kind: 'update', additions: 3, deletions: 1 }], additions: 3, deletions: 1
+    }
+
+    render(
+      <RuntimeItemTimelineDialog
+        runId="run-timeline"
+        phaseName="Implementation"
+        stepName="Implement"
+        executionId="execution-timeline"
+        items={[command, fileChange]}
+      />,
+    )
+    await user.click(screen.getByRole('button', { name: '查看实时 Runtime Item' }))
+
+    const commandCard = screen.getByRole('article', { name: '命令执行：pnpm test' })
+    expect(within(commandCard).getByText('Tests: 12 passed', { selector: 'p' })).toBeVisible()
+    const fullOutput = within(commandCard).getByText('完整输出').closest('details')
+    expect(fullOutput).not.toHaveAttribute('open')
+    expect(fullOutput).toHaveTextContent('collecting tests')
+
+    const fileCard = screen.getByRole('article', { name: '文件修改' })
+    expect(fileCard).toHaveTextContent('Edited src/index.ts')
+    expect(fileCard).toHaveTextContent('+3 -1')
   })
 })

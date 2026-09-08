@@ -3,6 +3,7 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import type { CodexAppServerMessage, JsonRpcServerRequest } from './codex-app-server-transport'
+import { createCodexItemProjection } from './codex-item-projection'
 import { createCodexSessionModule, type CodexSessionTransport, type CodexRuntimeApprovalRequest } from './codex-session-module'
 
 class ControlledTransport implements CodexSessionTransport {
@@ -156,6 +157,31 @@ describe('Codex Session Module', () => {
     expect(transport.requests).toEqual(expect.arrayContaining([{ method: 'turn/interrupt', params: { threadId: 'thread-1', turnId: 'turn-1' } }]))
   })
 
+  it('projects one Interrupt Item from stop request through interrupted completion', async () => {
+    let resolveMessage: ((value: CodexAppServerMessage) => void) | undefined
+    const transport = new ControlledTransport()
+    transport.nextMessage = vi.fn(() => new Promise<CodexAppServerMessage>((resolve) => { resolveMessage = resolve })) as never
+    const projection = createCodexItemProjection()
+    const session = createCodexSessionModule({ createTransport: async () => transport, itemProjection: projection })
+    const run = session.runTurn({
+      cwd: '/work/demo', command: 'codex', executionId: 'execution-interrupt',
+      workUnit: { kind: 'phase', runId: 'run-1', phaseId: 'interrupt' }, input: 'run'
+    })
+
+    await vi.waitFor(() => expect(transport.requests.map(({ method }) => method)).toContain('turn/start'))
+    await session.interrupt({ threadId: 'thread-1', turnId: 'turn-1' })
+    expect(projection.list('execution-interrupt')).toEqual([
+      expect.objectContaining({ type: 'interrupt', status: 'in_progress' })
+    ])
+
+    resolveMessage?.({ method: 'turn/completed', params: { threadId: 'thread-1', turn: { id: 'turn-1', status: 'interrupted', error: null } } })
+    await run
+
+    expect(projection.list('execution-interrupt')).toEqual([
+      expect.objectContaining({ type: 'interrupt', status: 'completed' })
+    ])
+  })
+
   it('retains a pending approval request after returning waiting and responds through its original transport', async () => {
     const approval = { id: 'approval-1', method: 'item/commandExecution/requestApproval', params: { threadId: 'thread-1', turnId: 'turn-1', command: 'git status' } }
     const transport = new ControlledTransport([approval])
@@ -206,6 +232,32 @@ describe('Codex Session Module', () => {
     expect(transport.respond).toHaveBeenCalledWith('approval-2', { decision: 'accept' })
     expect(completed).toHaveBeenCalledWith(expect.objectContaining({ status: 'completed', locator: waiting.locator }))
     expect(transport.close).toHaveBeenCalledOnce()
+  })
+
+  it('projects a user-input request and immediate response while returning a question Runtime Event', async () => {
+    const request = {
+      id: 'question-request',
+      method: 'item/tool/requestUserInput',
+      params: {
+        threadId: 'thread-1', turnId: 'turn-1', itemId: 'question-item',
+        questions: [{ id: 'choice', header: 'Choice', question: 'Choose one', options: [{ label: 'A', description: 'First' }] }]
+      }
+    }
+    const transport = new ControlledTransport([request, completedTurn()])
+    const projection = createCodexItemProjection()
+    const session = createCodexSessionModule({ createTransport: async () => transport, itemProjection: projection })
+
+    const result = await session.runTurn({
+      cwd: '/work/demo', command: 'codex', executionId: 'execution-question',
+      workUnit: { kind: 'phase', runId: 'run-1', phaseId: 'question' }, input: 'run',
+      permissionPolicy: { grantedPermissions: ['workspace.read'] },
+      onApproval: async () => ({ answers: { choice: { answers: ['A'] } } })
+    })
+
+    expect(result.events).toContainEqual({ type: 'question', question: 'Choose one' })
+    expect(projection.list('execution-question')).toEqual([
+      expect.objectContaining({ id: 'question:question-item', type: 'question', status: 'completed', answers: { choice: ['A'] } })
+    ])
   })
 
   it('passes the Project Permission Policy as a final constrained Session configuration', async () => {
@@ -289,6 +341,28 @@ describe('Codex Session Module', () => {
     const history = await session.readThread({ cwd: '/work/demo', command: 'codex', locator: { threadId: 'thread-history', turnId: 'turn-2' } })
 
     expect(history).toEqual({ thread: { id: 'thread-history', turns: [{ id: 'turn-2' }] } })
+  })
+
+  it('restores a selected historical Turn into the Display Projection', async () => {
+    const transport = new ControlledTransport()
+    transport.request = async (method: string, params: Record<string, unknown>): Promise<unknown> => {
+      transport.requests.push({ method, params })
+      if (method === 'initialize') return { userAgent: 'codex-cli/0.144.3', capabilities: { methods: ['thread/start', 'thread/resume', 'thread/read', 'turn/start', 'turn/interrupt'], events: ['item/started', 'item/completed', 'turn/completed'] } }
+      if (method === 'thread/read') return { thread: { id: 'thread-history', turns: [{ id: 'turn-history', items: [{ type: 'agentMessage', id: 'historical-final', phase: 'final_answer', text: 'Recovered' }] }] } }
+      throw new Error(`Unexpected request: ${method}`)
+    }
+    const projection = createCodexItemProjection()
+    const session = createCodexSessionModule({ createTransport: async () => transport, itemProjection: projection })
+    const locator = { runtimeProvider: 'codex', threadId: 'thread-history', turnId: 'turn-history', runtimeVersion: '0.144.3' }
+
+    await session.readThread({
+      cwd: '/work/demo', command: 'codex', locator,
+      projectionScope: { runId: 'run-history', executionId: 'execution-history', permissionPolicy: { grantedPermissions: ['workspace.read'] }, source: 'codex app-server' }
+    })
+
+    expect(projection.list('execution-history')).toEqual([
+      expect.objectContaining({ id: 'historical-final', type: 'final_response', status: 'completed', text: 'Recovered', runtimeLocator: locator })
+    ])
   })
 
   it('fails closed when the Runtime Locator Turn is absent from history', async () => {

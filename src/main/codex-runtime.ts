@@ -36,7 +36,7 @@ interface CodexRuntimeDependencies {
   readSkill?: (path: string, encoding: 'utf8') => Promise<string>
   createTransport?: (options: ProcessOptions & { command: string }) => Promise<CodexAppServerTransport> | CodexAppServerTransport
   inspectCapabilities?: CodexCapabilityInspector
-  itemProjection?: Pick<CodexItemProjection, 'handle'>
+  itemProjection?: Pick<CodexItemProjection, 'handle' | 'handleRequest' | 'completeRequest' | 'completeTurn' | 'setInterrupt' | 'restore'>
   session?: CodexSessionModule
 }
 
@@ -537,7 +537,7 @@ export function createCodexRuntimeAdapter(dependencies: CodexRuntimeDependencies
           },
           executionId: context.execution.id,
           onApproval: async (request) => {
-            events.push({ type: 'approval_required', approval: request.summary })
+            if (request.kind !== 'question') events.push({ type: 'approval_required', approval: request.summary })
             // Approval decisions belong to the host Workflow/UI. Returning
             // undefined keeps the original JSON-RPC request pending so the
             // caller can later respond through CodexSessionModule.

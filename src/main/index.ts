@@ -17,6 +17,7 @@ import { createWorkflowEngine } from './workflow-engine'
 import type { WorkflowEngine } from './workflow-engine'
 import { createCodexRuntimeAdapter } from './codex-runtime'
 import { createCodexItemProjection } from './codex-item-projection'
+import { createCodexSessionModule } from './codex-session-module'
 import { publishRuntimeItemUpdate, registerRuntimeItemHandlers } from './runtime-item-ipc'
 import { createRunWorkspaceManager } from './run-workspace'
 import { createDefaultGitHubExecutor, createGitDeliveryManager } from './git-delivery'
@@ -116,13 +117,35 @@ const runtimeItemProjection = createCodexItemProjection({
     console.warn('[agent-space] Ignored Runtime Item', item)
   }
 })
+const codexSession = createCodexSessionModule({ itemProjection: runtimeItemProjection })
 registerRuntimeItemHandlers({
   handle: (channel, listener) => ipcMain.handle(channel, listener),
-  projection: runtimeItemProjection
+  projection: runtimeItemProjection,
+  loadHistory: async (runId, executionId) => {
+    const run = await workflowEngine.getRun(runId)
+    const execution = run?.stepExecutions.find((candidate) => candidate.id === executionId)
+    if (!run || !execution) return
+    const project = (await projectService.list(join(app.getPath('userData'), 'projects.json')))
+      .find((candidate) => candidate.id === run.projectId)
+    for (const locator of execution.runtimeLocators ?? []) {
+      await codexSession.readThread({
+        cwd: run.workspacePath,
+        command: 'codex',
+        locator,
+        projectionScope: {
+          runId,
+          executionId,
+          permissionPolicy: project?.permissionPolicy ?? { grantedPermissions: [] },
+          source: 'codex app-server'
+        }
+      })
+    }
+  }
 })
 workflowEngine = createWorkflowEngine({
   databasePath: join(app.getPath('userData'), 'workflow-runs.sqlite'),
   runtime: createCodexRuntimeAdapter({
+    session: codexSession,
     skillManifests: BUILT_IN_SKILL_MANIFESTS,
     getSkillManifests: () => availableSkillManifests,
     skillPackagePath: builtInSkillPackagePath(),
@@ -188,4 +211,5 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   void workflowEngine.close()
+  void codexSession.close()
 })

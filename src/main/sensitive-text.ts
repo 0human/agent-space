@@ -1,8 +1,8 @@
 import type { PermissionPolicy } from '../shared/project'
 
 const sensitiveKey = '(?:token|secret|password|authorization|api[-_]?key|credentials?|(?:[a-z0-9]+_)*(?:token|secret|key|password|credentials?|authorization)(?:_[a-z0-9]+)*|(?:aws|github|openai|azure|google|database|db|npm|node|home|path|pwd|user|shell|ci)[a-z0-9_]*)'
-const quotedValue = "(?:\"(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*')"
-const unquotedValue = "[^\\s,;&}\\]]+"
+const quotedValue = "(?:\"(?:\\\\(?:.|$)|[^\"\\\\])*(?:\"|$)|'(?:\\\\(?:.|$)|[^'\\\\])*(?:'|$))"
+const unquotedValue = "[^\\s,;&}\\]\\\"']+"
 
 const sensitiveAssignment = new RegExp(
   "((?:[\"']?\\b" + sensitiveKey + "\\b[\"']?\\s*[:=]\\s*))(" + quotedValue + "|" + unquotedValue + ")",

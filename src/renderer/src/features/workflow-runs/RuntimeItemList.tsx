@@ -1,5 +1,6 @@
 import {
   FileDiff,
+  HelpCircle,
   ListChecks,
   MessageSquareText,
   ShieldAlert,
@@ -7,7 +8,7 @@ import {
   Wrench,
 } from 'lucide-react'
 
-import type { RuntimeItem } from '../../../../shared/workflow-run'
+import { runtimeItemIdentity, type RuntimeItem } from '../../../../shared/workflow-run'
 import { Badge } from '@renderer/components/ui/badge'
 import { zhCN as copy } from '@renderer/i18n/zh-CN'
 
@@ -23,17 +24,22 @@ export function RuntimeItemList({
   return (
     <div className="grid gap-3">
       {items.map((item) => (
-        <RuntimeItemCard item={item} key={item.id} />
+        <RuntimeItemCard item={item} key={runtimeItemIdentity(item)} />
       ))}
     </div>
   )
 }
 
+function outputSummary(output: string): string {
+  const line = output.split(/\r?\n/).map((value) => value.trim()).filter(Boolean).at(-1) ?? ''
+  return line.length > 160 ? `${line.slice(0, 157)}...` : line
+}
+
 function RuntimeItemCard({ item }: { item: RuntimeItem }): React.JSX.Element {
-  if (item.type === 'agent_message')
+  if (item.type === 'agent_message' || item.type === 'final_response')
     return (
       <ItemShell
-        label={copy.run.agentMessageItem}
+        label={item.type === 'final_response' ? copy.run.finalResponseItem : copy.run.agentMessageItem}
         icon={<MessageSquareText />}
         status={item.status}
       >
@@ -53,9 +59,19 @@ function RuntimeItemCard({ item }: { item: RuntimeItem }): React.JSX.Element {
         <code className="break-all rounded bg-muted px-2 py-1 text-xs">
           {item.command}
         </code>
-        <pre className="mt-3 max-h-64 overflow-auto whitespace-pre-wrap break-words text-xs">
-          {item.output || copy.run.noCommandOutput}
-        </pre>
+        <p className="mt-3 text-xs text-muted-foreground">
+          {outputSummary(item.output) || copy.run.noCommandOutput}
+        </p>
+        {item.output ? (
+          <details className="mt-3 text-xs">
+            <summary className="cursor-pointer text-muted-foreground">
+              {copy.run.fullOutput}
+            </summary>
+            <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words">
+              {item.output}
+            </pre>
+          </details>
+        ) : null}
         {item.exitCode !== null || item.durationMs !== null ? (
           <footer className="mt-3 flex flex-wrap gap-3 text-xs text-muted-foreground">
             {item.exitCode !== null ? (
@@ -81,7 +97,11 @@ function RuntimeItemCard({ item }: { item: RuntimeItem }): React.JSX.Element {
               className="flex items-center justify-between gap-3"
               key={`${change.path}:${change.kind}`}
             >
-              <code className="break-all">{change.path}</code>
+              <code className="break-all">
+                {item.status === 'completed'
+                  ? copy.run.editedFile(change.path)
+                  : copy.run.editingFile(change.path)}
+              </code>
               <span className="text-muted-foreground">
                 {copy.run.fileChangeCounts(change.additions, change.deletions)}
               </span>
@@ -127,6 +147,62 @@ function RuntimeItemCard({ item }: { item: RuntimeItem }): React.JSX.Element {
         ) : null}
       </ItemShell>
     )
+  if (item.type === 'question')
+    return (
+      <ItemShell
+        label={copy.run.questionItem}
+        icon={<HelpCircle />}
+        status={item.status}
+      >
+        <ul className="grid gap-3 text-xs">
+          {item.questions.map((question) => (
+            <li key={question.id}>
+              <strong>{question.header}</strong>
+              <p>{question.question}</p>
+              {question.options.length ? (
+                <p className="text-muted-foreground">
+                  {question.options.map((option) => option.label).join(' / ')}
+                </p>
+              ) : null}
+              {item.answers[question.id]?.length ? (
+                <p className="text-muted-foreground">
+                  {copy.run.questionAnswer(item.answers[question.id].join(', '))}
+                </p>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      </ItemShell>
+    )
+  if (item.type === 'approval')
+    return (
+      <ItemShell
+        label={copy.run.approvalItem}
+        icon={<ShieldAlert />}
+        status={item.status}
+      >
+        <p className="text-xs">{item.summary}</p>
+        {item.decision ? (
+          <p className="mt-2 text-xs text-muted-foreground">
+            {copy.run.approvalDecision(item.decision)}
+          </p>
+        ) : null}
+      </ItemShell>
+    )
+  if (item.type === 'interrupt')
+    return (
+      <ItemShell
+        label={copy.run.interruptItem}
+        icon={<ShieldAlert />}
+        status={item.status}
+      >
+        <p className="text-xs text-muted-foreground">
+          {item.status === 'in_progress'
+            ? copy.run.interrupting
+            : copy.run.interrupted}
+        </p>
+      </ItemShell>
+    )
   if (item.type === 'tool')
     return (
       <ItemShell
@@ -137,9 +213,19 @@ function RuntimeItemCard({ item }: { item: RuntimeItem }): React.JSX.Element {
       >
         <code className="break-all text-xs">{item.name}</code>
         {item.output ? (
-          <pre className="mt-3 whitespace-pre-wrap break-words text-xs">
-            {item.output}
-          </pre>
+          <>
+            <p className="mt-3 text-xs text-muted-foreground">
+              {outputSummary(item.output)}
+            </p>
+            <details className="mt-3 text-xs">
+              <summary className="cursor-pointer text-muted-foreground">
+                {copy.run.fullResult}
+              </summary>
+              <pre className="mt-2 whitespace-pre-wrap break-words">
+                {item.output}
+              </pre>
+            </details>
+          </>
         ) : null}
         {item.durationMs !== null ? (
           <footer className="mt-3 text-xs text-muted-foreground">

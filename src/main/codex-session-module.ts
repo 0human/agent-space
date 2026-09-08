@@ -8,7 +8,7 @@ import type { PermissionPolicy } from '../shared/project'
 import type { RuntimeArtifact, RuntimeEventInput, RuntimeLocator } from '../shared/workflow-run'
 import { zhCNMain } from '../shared/i18n/zh-CN'
 import { createStdioCodexAppServerTransport, type CodexAppServerTransport, type JsonRpcServerRequest, type JsonRpcNotification } from './codex-app-server-transport'
-import type { CodexItemProjection } from './codex-item-projection'
+import type { CodexItemProjection, CodexItemProjectionScope } from './codex-item-projection'
 import { sanitizeSensitiveText } from './sensitive-text'
 import { asRecord, asString } from './unknown-value'
 
@@ -16,7 +16,7 @@ export type CodexSessionTransport = CodexAppServerTransport
 
 export interface CodexRuntimeApprovalRequest {
   readonly id: string
-  readonly kind: 'command' | 'file-change' | 'permissions' | 'exec-command' | 'apply-patch' | 'other'
+  readonly kind: 'question' | 'command' | 'file-change' | 'permissions' | 'exec-command' | 'apply-patch' | 'other'
   readonly summary: string
 }
 
@@ -52,7 +52,7 @@ export interface CodexSessionModuleDependencies {
   resolveCommand?: (command: string) => Promise<string | null>
   inspectCapabilities?: CodexCapabilityInspector
   requiredCapabilities?: string[]
-  itemProjection?: Pick<CodexItemProjection, 'handle'>
+  itemProjection?: Pick<CodexItemProjection, 'handle' | 'handleRequest' | 'completeRequest' | 'completeTurn' | 'setInterrupt' | 'restore'>
 }
 
 export interface CodexSessionTurnInput extends CodexSessionPreflightInput {
@@ -82,7 +82,10 @@ export interface CodexSessionModule {
   runTurn(input: CodexSessionTurnInput): Promise<CodexSessionTurnResult>
   interrupt(locator: Pick<RuntimeLocator, 'threadId' | 'turnId'>): Promise<void>
   respondToApproval(request: CodexRuntimeApprovalRequest, result: unknown): Promise<void>
-  readThread(input: CodexSessionPreflightInput & { locator: Pick<RuntimeLocator, 'threadId'> & Partial<Pick<RuntimeLocator, 'turnId'>> }): Promise<unknown>
+  readThread(input: CodexSessionPreflightInput & {
+    locator: Pick<RuntimeLocator, 'threadId'> & Partial<Omit<RuntimeLocator, 'threadId'>>
+    projectionScope?: Omit<CodexItemProjectionScope, 'runtimeLocator'>
+  }): Promise<unknown>
   close(): Promise<void>
 }
 
@@ -211,6 +214,7 @@ const ARTIFACT_PREFIX = 'ARTIFACT:'
 const TICKET_PROGRESS_PREFIX = 'TICKET_PROGRESS:'
 
 function approvalKind(method: string): CodexRuntimeApprovalRequest['kind'] {
+  if (method === 'item/tool/requestUserInput') return 'question'
   if (method === 'item/commandExecution/requestApproval') return 'command'
   if (method === 'item/fileChange/requestApproval') return 'file-change'
   if (method === 'item/permissions/requestApproval') return 'permissions'
@@ -220,6 +224,13 @@ function approvalKind(method: string): CodexRuntimeApprovalRequest['kind'] {
 }
 
 function approvalSummary(request: JsonRpcServerRequest): string {
+  if (request.method === 'item/tool/requestUserInput' && Array.isArray(request.params?.questions)) {
+    const questions = request.params.questions.flatMap((value) => {
+      const question = asString(asRecord(value)?.question)
+      return question ? [question] : []
+    })
+    if (questions.length > 0) return sanitizeSensitiveText(questions.join('\n'))
+  }
   const command = asString(request.params?.command)
   const reason = asString(request.params?.reason)
   return sanitizeSensitiveText(zhCNMain.codexRuntime.runtimeApproval(command ?? reason ?? '', request.method))
@@ -353,6 +364,24 @@ export function createCodexSessionModule(dependencies: CodexSessionModuleDepende
   }
   const turnStates = new Map<string, TurnState>()
 
+  function projectionScope(state: TurnState) {
+    return {
+      runId: state.input.workUnit.runId,
+      executionId: state.input.executionId ?? '',
+      runtimeLocator: state.locator,
+      permissionPolicy: state.input.permissionPolicy ?? { grantedPermissions: [] },
+      source: 'codex app-server'
+    }
+  }
+
+  function observeProjection(action: () => void): void {
+    try {
+      action()
+    } catch {
+      // Display projection is observational and cannot affect an active Turn or history access.
+    }
+  }
+
   function workUnitKey(workUnit: CodexWorkUnit): string {
     return workUnit.kind === 'phase'
       ? `${workUnit.runId}:phase:${workUnit.phaseId}`
@@ -406,7 +435,11 @@ export function createCodexSessionModule(dependencies: CodexSessionModuleDepende
     const original = state?.waitingRawRequest ?? null
     if (!state || !original) throw new Error(zhCNMain.codexSession.approvalContinuationExpired)
     if (!state.transport.respond) throw new Error(zhCNMain.codexSession.approvalExpired)
-    await state.transport.respond(original.id, normalizeApprovalResult(original, result))
+    const normalized = normalizeApprovalResult(original, result)
+    await state.transport.respond(original.id, normalized)
+    if (state.input.executionId) {
+      observeProjection(() => itemProjection?.completeRequest(original, normalized, projectionScope(state)))
+    }
     state.waitingRequest = null
     state.waitingRawRequest = null
     state.processing = consumeTurn(state)
@@ -423,28 +456,26 @@ export function createCodexSessionModule(dependencies: CodexSessionModuleDepende
           const event = belongsToTurn ? runtimeEventForNotification(message) : null
           if (event) state.events.push(event)
           if (state.input.executionId) {
-            try {
-              await itemProjection?.handle(message, {
-                runId: state.input.workUnit.runId,
-                executionId: state.input.executionId,
-                runtimeLocator: state.locator,
-                permissionPolicy: state.input.permissionPolicy ?? { grantedPermissions: [] },
-                source: 'codex app-server'
-              })
-            } catch {
-              // Display projection is observational and cannot interrupt a Turn.
-            }
+            observeProjection(() => itemProjection?.handle(message, projectionScope(state)))
           }
         }
         if ('id' in message) {
           const request = message as JsonRpcServerRequest
           const publicRequest = publicApprovalRequest(request)
+          if (state.input.executionId) {
+            observeProjection(() => itemProjection?.handleRequest(request, projectionScope(state)))
+          }
+          if (publicRequest.kind === 'question') state.events.push({ type: 'question', question: publicRequest.summary })
           state.waitingRequest = publicRequest
           state.waitingRawRequest = request
           const approvalResult = await state.input.onApproval?.(publicRequest)
           if (approvalResult !== undefined) {
             if (!state.transport.respond) throw new Error(zhCNMain.codexSession.approvalExpired)
-            await state.transport.respond(request.id, normalizeApprovalResult(request, approvalResult))
+            const normalized = normalizeApprovalResult(request, approvalResult)
+            await state.transport.respond(request.id, normalized)
+            if (state.input.executionId) {
+              observeProjection(() => itemProjection?.completeRequest(request, normalized, projectionScope(state)))
+            }
             state.waitingRequest = null
             state.waitingRawRequest = null
             continue
@@ -456,11 +487,15 @@ export function createCodexSessionModule(dependencies: CodexSessionModuleDepende
         if (turn?.id !== state.locator.turnId) continue
         const turnError = asRecord(turn.error)
         const status = asString(turn.status)
+        const terminalStatus = status === 'completed' || status === 'interrupted' ? status : 'failed'
         const result: CodexSessionTurnResult = {
           locator: state.locator,
           events: state.events,
-          status: status === 'completed' || status === 'interrupted' ? status : 'failed',
+          status: terminalStatus,
           error: asString(turnError?.message)
+        }
+        if (state.input.executionId) {
+          observeProjection(() => itemProjection?.completeTurn(terminalStatus, result.error ?? null, projectionScope(state)))
         }
         await state.input.onTurnCompleted?.(result)
         return result
@@ -541,9 +576,14 @@ export function createCodexSessionModule(dependencies: CodexSessionModuleDepende
       }
     },
     async interrupt(locator) {
-      const transport = activeTransports.get(`${locator.threadId}:${locator.turnId}`)
+      const activeKey = `${locator.threadId}:${locator.turnId}`
+      const transport = activeTransports.get(activeKey)
       if (!transport) throw new Error(zhCNMain.codexSession.turnNotActive)
       await transport.request('turn/interrupt', { threadId: locator.threadId, turnId: locator.turnId })
+      const state = turnStates.get(activeKey)
+      if (state?.input.executionId) {
+        observeProjection(() => itemProjection?.setInterrupt('in_progress', projectionScope(state)))
+      }
     },
     respondToApproval,
     async readThread(input) {
@@ -557,7 +597,22 @@ export function createCodexSessionModule(dependencies: CodexSessionModuleDepende
         if (!thread || !Array.isArray(thread.turns)) throw new Error(zhCNMain.codexSession.invalidThreadHistory)
         const turns = thread.turns.filter((turn) => asRecord(turn)?.id === turnId)
         if (turns.length === 0) throw new Error(zhCNMain.codexSession.missingTurnHistory)
-        return { ...responseRecord, thread: { ...thread, turns } }
+        const selected = { ...responseRecord, thread: { ...thread, turns } }
+        const runtimeProvider = input.locator.runtimeProvider
+        const runtimeVersion = input.locator.runtimeVersion
+        const historyScope = input.projectionScope
+        if (historyScope && runtimeProvider && runtimeVersion) {
+          observeProjection(() => itemProjection?.restore(selected, {
+            ...historyScope,
+            runtimeLocator: {
+              runtimeProvider,
+              threadId: input.locator.threadId,
+              turnId,
+              runtimeVersion
+            }
+          }))
+        }
+        return selected
       } finally {
         await closeTransport(transport)
       }

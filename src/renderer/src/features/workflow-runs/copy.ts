@@ -1,3 +1,15 @@
+import type { RuntimeApprovalDecision } from '../../../../shared/workflow-run'
+
+const approvalDecisionLabels: Record<RuntimeApprovalDecision, string> = {
+  accept: '允许',
+  acceptForSession: '在本次会话中允许',
+  decline: '拒绝',
+  cancel: '取消',
+  acceptWithExecpolicyAmendment: '允许并更新执行策略',
+  applyNetworkPolicyAmendment: '应用网络策略更新',
+  completed: '已完成',
+}
+
 export const workflowRunCopy = {
   run: {
     eyebrow: 'Workflow Run',
@@ -73,18 +85,31 @@ export const workflowRunCopy = {
     runtimeTimelineUnavailable:
       '当前无法读取 Runtime Item 历史；已接收的实时更新仍会展示。',
     agentMessageItem: 'Agent 消息',
+    finalResponseItem: '最终回复',
     commandItemTitle: '命令执行',
     commandItem: (command: string) => `命令执行：${command}`,
     fileChangeItem: '文件修改',
+    editingFile: (path: string) => `Editing ${path}`,
+    editedFile: (path: string) => `Edited ${path}`,
     fileChangeCounts: (additions: number, deletions: number) =>
-      `+${additions} / -${deletions}`,
+      `+${additions} -${deletions}`,
     diffSummary: (files: number, additions: number, deletions: number) =>
       `${files} 个文件，新增 ${additions} 行，删除 ${deletions} 行`,
     planItem: 'Plan',
+    questionItem: '问题',
+    questionAnswer: (answer: string) => `回答：${answer}`,
+    approvalItem: 'Runtime Approval',
+    approvalDecision: (decision: RuntimeApprovalDecision) =>
+      `决定：${approvalDecisionLabels[decision]}`,
+    interruptItem: '中断',
+    interrupting: '正在停止当前 Turn。',
+    interrupted: '当前 Turn 已中断。',
     toolItemTitle: 'Tool 调用',
     toolItem: (name: string) => `Tool 调用：${name}`,
     errorItem: '运行错误',
     noCommandOutput: '等待命令输出。',
+    fullOutput: '完整输出',
+    fullResult: '完整结果',
     commandExitCode: (code: number) => `退出码 ${code}`,
     commandDuration: (durationMs: number) =>
       `耗时 ${Number((durationMs / 1000).toFixed(2))} 秒`,

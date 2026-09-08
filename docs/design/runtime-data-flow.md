@@ -49,7 +49,7 @@ Renderer 可以用不同视觉样式呈现 Item，但必须保留稳定 Item ide
 
 1. `item/started` 创建 Item；delta 只更新同一 Item；`item/completed` 收敛最终状态。
 2. Item identity 至少由 `runtimeProvider + threadId + turnId + itemId` 确定。
-3. 重复通知必须幂等；已完成 Item 不因迟到的 started/delta 回退。
+3. 重复生命周期快照必须幂等；已完成 Item 不因迟到的 started/delta 回退。当前 Codex 文本 delta 没有独立事件编号，无法区分同文重传与合法重复片段，因此按到达顺序追加，最终由 completed 快照收敛；不能按文本内容去重，也不承诺恢复乱序 delta 的原始顺序。
 4. 最终 `item/completed` 是内容与状态的权威来源。
 5. 未识别 Item 进入安全忽略路径并记录脱敏诊断，不导致 Turn 或 Workflow Run 失败。
 6. Display Projection / IPC / Renderer 失败是观察性故障，不得中断 Codex Turn。

@@ -210,7 +210,7 @@ describe('Codex Item Projection', () => {
     ])
   })
 
-  it('does not reapply duplicate lifecycle or delta notifications', () => {
+  it('keeps repeated text deltas while deduplicating lifecycle snapshots', () => {
     const publish = vi.fn()
     const projection = createCodexItemProjection({ publish })
     const started = { method: 'item/started', params: { threadId: 'thread-1', turnId: 'turn-1', item: { type: 'agentMessage', id: 'item-1', text: '' } } } as const
@@ -220,14 +220,14 @@ describe('Codex Item Projection', () => {
     projection.handle(delta, scope)
     projection.handle({ ...delta, params: { ...delta.params } }, scope)
     projection.handle({ ...started, params: { ...started.params, item: { ...started.params.item } } }, scope)
-    expect(projection.list(scope.executionId)[0]).toMatchObject({ text: 'same' })
-    expect(publish).toHaveBeenCalledTimes(2)
+    expect(projection.list(scope.executionId)[0]).toMatchObject({ text: 'samesame' })
+    expect(publish).toHaveBeenCalledTimes(3)
 
     const completed = { method: 'item/completed', params: { threadId: 'thread-1', turnId: 'turn-1', item: { type: 'agentMessage', id: 'item-1', text: 'final' } } } as const
     projection.handle(completed, scope)
     projection.handle({ ...completed, params: { ...completed.params, item: { ...completed.params.item } } }, scope)
     expect(projection.list(scope.executionId)[0]).toMatchObject({ status: 'completed', text: 'final' })
-    expect(publish).toHaveBeenCalledTimes(3)
+    expect(publish).toHaveBeenCalledTimes(4)
   })
 
   it('does not let a late delta or duplicate start regress a completed Item', () => {
@@ -272,6 +272,29 @@ describe('Codex Item Projection', () => {
     expect(projection.list(scope.executionId)).toEqual([
       expect.objectContaining({ id: 'early-1', status: 'completed', text: 'authoritative' })
     ])
+  })
+
+  it.each([true, false])('never publishes credential fragments when start arrives first: %s', (startFirst) => {
+    const publish = vi.fn()
+    const projection = createCodexItemProjection({ publish })
+    const started = { method: 'item/started', params: { threadId: 'thread-1', turnId: 'turn-1', item: { type: 'agentMessage', id: 'secret-stream', text: '' } } }
+    if (startFirst) projection.handle(started, scope)
+    for (const delta of ['sk-ab', 'cdefgh', 'ijklmnop', ' done']) {
+      projection.handle({ method: 'item/agentMessage/delta', params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'secret-stream', delta } }, scope)
+    }
+    if (!startFirst) projection.handle(started, scope)
+    expect(projection.list(scope.executionId)[0]).toMatchObject({ text: '<redacted> done' })
+    expect(JSON.stringify(publish.mock.calls)).not.toMatch(/sk-ab|cdefgh|ijklmnop/)
+  })
+
+  it.each(['password="', "--token '"])('redacts unfinished quoted credentials: %s', (prefix) => {
+    const publish = vi.fn()
+    const projection = createCodexItemProjection({ publish })
+    projection.handle({ method: 'item/started', params: { threadId: 'thread-1', turnId: 'turn-1', item: { type: 'agentMessage', id: 'quoted', text: '' } } }, scope)
+    for (const delta of [prefix + 'first-half', '\\', 'second-half' + prefix.at(-1)]) {
+      projection.handle({ method: 'item/agentMessage/delta', params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'quoted', delta } }, scope)
+    }
+    expect(JSON.stringify(publish.mock.calls)).not.toMatch(/first-half|second-half/)
   })
 
   it('redacts sensitive values that are split across incremental notifications', () => {
@@ -442,6 +465,19 @@ describe('Codex Item Projection', () => {
       expect.objectContaining({ id: 'approval-1', type: 'command', status: 'declined' })
     ])
     expect(JSON.stringify(projection.list(scope.executionId))).not.toMatch(/approval-secret|raw-secret|decision-secret|secret\.example/)
+  })
+
+  it('keeps active history open for subsequent live updates', () => {
+    const projection = createCodexItemProjection()
+    const history = { thread: { id: 'thread-1', turns: [{ id: 'turn-1', status: 'inProgress', items: [
+      { type: 'agentMessage', id: 'active', text: 'Draft' }
+    ] }] } }
+    projection.restore(history, scope)
+    projection.handle({ method: 'item/agentMessage/delta', params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'active', delta: ' answer' } }, scope)
+    projection.restore(history, scope)
+    expect(projection.list(scope.executionId)[0]).toMatchObject({ text: 'Draft answer', status: 'in_progress' })
+    projection.handle({ method: 'item/completed', params: { threadId: 'thread-1', turnId: 'turn-1', item: { type: 'agentMessage', id: 'active', text: 'Final answer' } } }, scope)
+    expect(projection.list(scope.executionId)[0]).toMatchObject({ text: 'Final answer', status: 'completed' })
   })
 
   it('rebuilds completed history through the same safe Item contract without replaying deltas', () => {

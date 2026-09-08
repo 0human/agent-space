@@ -1,3 +1,15 @@
+import type { RuntimeApprovalDecision } from '../../../../shared/workflow-run'
+
+const approvalDecisionLabels: Record<RuntimeApprovalDecision, string> = {
+  accept: '允许',
+  acceptForSession: '在本次会话中允许',
+  decline: '拒绝',
+  cancel: '取消',
+  acceptWithExecpolicyAmendment: '允许并更新执行策略',
+  applyNetworkPolicyAmendment: '应用网络策略更新',
+  completed: '已完成',
+}
+
 export const workflowRunCopy = {
   run: {
     eyebrow: 'Workflow Run',
@@ -87,7 +99,8 @@ export const workflowRunCopy = {
     questionItem: '问题',
     questionAnswer: (answer: string) => `回答：${answer}`,
     approvalItem: 'Runtime Approval',
-    approvalDecision: (decision: string) => `决定：${decision}`,
+    approvalDecision: (decision: RuntimeApprovalDecision) =>
+      `决定：${approvalDecisionLabels[decision]}`,
     interruptItem: '中断',
     interrupting: '正在停止当前 Turn。',
     interrupted: '当前 Turn 已中断。',

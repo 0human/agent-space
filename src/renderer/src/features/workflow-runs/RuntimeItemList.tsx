@@ -1,3 +1,4 @@
+import { memo } from 'react'
 import {
   FileDiff,
   HelpCircle,
@@ -9,13 +10,16 @@ import {
 } from 'lucide-react'
 
 import { runtimeItemIdentity, type RuntimeItem } from '../../../../shared/workflow-run'
+import { Button } from '@renderer/components/ui/button'
 import { Badge } from '@renderer/components/ui/badge'
 import { zhCN as copy } from '@renderer/i18n/zh-CN'
 
 export function RuntimeItemList({
   items,
+  onOpenInIde,
 }: {
   items: RuntimeItem[]
+  onOpenInIde?: () => void
 }): React.JSX.Element {
   if (items.length === 0)
     return (
@@ -24,7 +28,7 @@ export function RuntimeItemList({
   return (
     <div className="grid gap-3">
       {items.map((item) => (
-        <RuntimeItemCard item={item} key={runtimeItemIdentity(item)} />
+        <MemoRuntimeItemCard item={item} key={runtimeItemIdentity(item)} onOpenInIde={onOpenInIde} />
       ))}
     </div>
   )
@@ -35,7 +39,7 @@ function outputSummary(output: string): string {
   return line.length > 160 ? `${line.slice(0, 157)}...` : line
 }
 
-function RuntimeItemCard({ item }: { item: RuntimeItem }): React.JSX.Element {
+function RuntimeItemCard({ item, onOpenInIde }: { item: RuntimeItem; onOpenInIde?: () => void }): React.JSX.Element {
   if (item.type === 'agent_message' || item.type === 'final_response')
     return (
       <ItemShell
@@ -91,10 +95,12 @@ function RuntimeItemCard({ item }: { item: RuntimeItem }): React.JSX.Element {
         icon={<FileDiff />}
         status={item.status}
       >
+        <details className="text-xs">
+          <summary className="mb-3 cursor-pointer">{copy.run.expandFiles}</summary>
         <ul className="grid gap-2 text-xs">
           {item.changes.map((change) => (
             <li
-              className="flex items-center justify-between gap-3"
+              className="flex flex-wrap items-center justify-between gap-3"
               key={`${change.path}:${change.kind}`}
             >
               <code className="break-all">
@@ -102,12 +108,15 @@ function RuntimeItemCard({ item }: { item: RuntimeItem }): React.JSX.Element {
                   ? copy.run.editedFile(change.path)
                   : copy.run.editingFile(change.path)}
               </code>
+              <span className="text-muted-foreground">{copy.run.fileChangeKind[change.kind]}</span>
               <span className="text-muted-foreground">
                 {copy.run.fileChangeCounts(change.additions, change.deletions)}
               </span>
             </li>
           ))}
         </ul>
+        </details>
+        {onOpenInIde ? <Button className="mt-3" size="sm" variant="outline" onClick={onOpenInIde}>{copy.run.openInIde}</Button> : null}
         <footer className="mt-3 text-xs text-muted-foreground">
           {copy.run.diffSummary(
             item.changes.length,
@@ -245,6 +254,8 @@ function RuntimeItemCard({ item }: { item: RuntimeItem }): React.JSX.Element {
   )
 }
 
+const MemoRuntimeItemCard = memo(RuntimeItemCard)
+
 function ItemShell({
   label,
   title = label,
@@ -260,7 +271,7 @@ function ItemShell({
 }): React.JSX.Element {
   return (
     <article
-      className="rounded-lg border border-border bg-card p-4"
+      className="min-w-0 rounded-lg border border-border bg-card p-4 [overflow-wrap:anywhere]"
       aria-label={label}
     >
       <header className="mb-3 flex items-center justify-between gap-3">

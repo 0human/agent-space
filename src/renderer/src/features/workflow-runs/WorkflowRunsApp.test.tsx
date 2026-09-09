@@ -12,7 +12,7 @@ describe('Workflow Run through the App seam', () => {
     window.appShell = createAppShellApi()
   })
 
-  it('shows persisted context, decisions, logs, blockers, and allowed operations for a Step card', async () => {
+  it('keeps persisted context, decisions, logs, blockers, and allowed operations accessible inline', async () => {
     const user = userEvent.setup()
     const project = {
       id: 'project-1',
@@ -51,6 +51,7 @@ describe('Workflow Run through the App seam', () => {
           stepIndex: 0,
           executionId: 'execution-1',
           reason: 'Merge conflict detected.',
+          recoveryAction: 'resume' as const,
         },
         nextAction: 'Workflow Run 已 blocked，需要处理阻塞原因。',
       },
@@ -125,7 +126,7 @@ describe('Workflow Run through the App seam', () => {
     await user.click(
       await screen.findByRole('button', { name: /这是一个用于验证窄窗口/ }),
     )
-    await user.click(screen.getByRole('button', { name: /澄清 Idea/ }))
+    await user.click(screen.getByText('Step 详情'))
 
     expect(
       screen.getByText('用户确认目标是建立可恢复的 Run Board。'),
@@ -140,14 +141,14 @@ describe('Workflow Run through the App seam', () => {
     expect(
       screen.getByText('Human Step：确认冲突解决结果后继续 Run'),
     ).toBeVisible()
-    expect(screen.getByRole('heading', { name: '可用操作' })).toBeVisible()
+    expect(screen.getByRole('contentinfo', { name: '可用操作' })).toBeVisible()
     expect(screen.getAllByRole('button', { name: '继续' }).at(-1)).toBeEnabled()
     expect(
       screen.getAllByRole('button', { name: '取消 Run' }).at(-1),
     ).toBeEnabled()
   })
 
-  it('keeps live Item cards stable and renders authoritative Agent and command completion', async () => {
+  it('shows live Items directly in Run Activity View and keeps cards stable through completion', async () => {
     const user = userEvent.setup()
     const project = {
       id: 'project-live',
@@ -255,12 +256,8 @@ describe('Workflow Run through the App seam', () => {
     await user.click(
       await screen.findByRole('button', { name: /Observe live Runtime Items/ }),
     )
-    await user.click(
-      screen.getByRole('button', { name: new RegExp(step.name) }),
-    )
-    await user.click(
-      screen.getByRole('button', { name: '查看实时 Runtime Item' }),
-    )
+    expect(screen.getByRole('region', { name: 'Run Activity View' })).toBeVisible()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
 
     const agentCard = await screen.findByRole('article', {
       name: 'Agent 消息',
@@ -326,6 +323,16 @@ describe('Workflow Run through the App seam', () => {
     expect(commandCard).toHaveTextContent('退出码 2')
     expect(commandCard).toHaveTextContent('耗时 1.25 秒')
 
+    act(() => emitUpdate?.({
+      id: 'files-1', ...itemMetadata, type: 'file_change', status: 'completed',
+      changes: [{ path: 'src/main.ts', kind: 'update', additions: 4, deletions: 1 }], additions: 4, deletions: 1,
+    }))
+    await user.click(screen.getByRole('button', { name: '在 IDE 中打开' }))
+    expect(window.appShell.openWorkflowRunInIde).toHaveBeenCalledWith('run-live')
+    window.appShell.openWorkflowRunInIde = vi.fn().mockResolvedValue({ ok: false, error: 'Run Workspace 不可用。' })
+    await user.click(screen.getByRole('button', { name: '在 IDE 中打开' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Run Workspace 不可用。')
+
     act(() =>
       emitUpdate?.({
         id: 'other-execution-item',
@@ -340,14 +347,11 @@ describe('Workflow Run through the App seam', () => {
       screen.queryByText('其他 Step Execution 的输出'),
     ).not.toBeInTheDocument()
 
-    await user.click(
-      screen.getByRole('button', { name: '关闭 Runtime Item 时间线' }),
-    )
     await user.click(screen.getByRole('button', { name: '返回 Project 详情' }))
     expect(unsubscribe).toHaveBeenCalledOnce()
   })
 
-  it('renders an Approval Gate as an actionable Run Board card', async () => {
+  it('renders an actionable Approval Gate in the activity stream', async () => {
     const user = userEvent.setup()
     const project = {
       id: 'project-1',

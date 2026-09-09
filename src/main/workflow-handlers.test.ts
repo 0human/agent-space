@@ -2,6 +2,11 @@
 
 import { describe, expect, it, vi } from 'vitest'
 import { join } from 'node:path'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { createWorkflowEngine } from './workflow-engine'
+import { createSqliteRunStore } from './workflow-store'
+import { createFakeRuntimeAdapter } from './fake-runtime'
 
 import { APP_SHELL_CHANNELS } from '../shared/app-shell'
 import { BUILT_IN_DEVELOPMENT_WORKFLOW, type WorkflowView } from '../shared/workflow'
@@ -209,4 +214,43 @@ describe('Workflow IPC handlers', () => {
     await expect(handlers.get(APP_SHELL_CHANNELS.retryWorkflowStep)?.({}, 'run-1')).rejects.toThrow('找不到这个 Project。')
     expect(engine.retryStep).not.toHaveBeenCalled()
   })
+  it('opens the persisted Run workspace through IPC and explains missing workspaces or IDEs', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'run-ide-'))
+    const databasePath = join(directory, 'runs.sqlite')
+    const store = createSqliteRunStore({ databasePath })
+    const project = {
+      id: 'project-ide', name: 'IDE', workspacePath: directory, workspaceAvailable: true,
+      remote: null, currentBranch: 'main', head: 'abc123', defaultBranch: 'main', isGreenfield: false,
+      dirty: false, dirtySummary: { staged: 0, unstaged: 0, untracked: 0, files: [] }, updatedAt: '2026-09-09T00:00:00Z',
+    }
+    await store.createRun({ id: 'run-ide', project, workflow: BUILT_IN_DEVELOPMENT_WORKFLOW,
+      workflowSource: { source: 'built-in', path: null }, idea: 'IDE', now: '2026-09-09T00:00:00Z' })
+    await store.createRun({ id: 'missing-workspace', project: { ...project, workspacePath: join(directory, 'missing') },
+      workflow: BUILT_IN_DEVELOPMENT_WORKFLOW, workflowSource: { source: 'built-in', path: null }, idea: 'IDE', now: '2026-09-09T00:00:00Z' })
+    await store.close()
+    const engine = createWorkflowEngine({ databasePath, runtime: createFakeRuntimeAdapter() })
+    try {
+      const handlers = new Map<string, (...args: unknown[]) => unknown>()
+      const openInIde = vi.fn().mockResolvedValue(undefined)
+      registerWorkflowHandlers({
+        handle: (channel, listener) => handlers.set(channel, listener),
+        projectService: { findById: async () => ({ ...project, workspacePath: '/different-project-root' }) },
+        workflowService: { getBuiltIn: async () => view, copyToProject: async () => view, loadProject: async () => view, startProjectRun: async () => ({ ok: true, error: null }) },
+        workflowEngine: engine, openInIde,
+      })
+      const open = handlers.get(APP_SHELL_CHANNELS.openWorkflowRunInIde)!
+      await expect(open({}, 'run-ide')).resolves.toEqual({ ok: true, error: null })
+      expect(openInIde).toHaveBeenCalledWith(directory)
+      await expect(open({}, 'missing-workspace')).resolves.toEqual({ ok: false, error: 'Run Workspace 不可用。' })
+      await expect(open({}, 'unknown')).resolves.toEqual({ ok: false, error: '找不到这个 Workflow Run。' })
+      await expect(open({}, { path: directory })).resolves.toMatchObject({ ok: false })
+      expect(openInIde).toHaveBeenCalledOnce()
+      openInIde.mockRejectedValueOnce(new Error('not installed'))
+      await expect(open({}, 'run-ide')).resolves.toEqual({ ok: false, error: '没有找到可用的外部 IDE。' })
+    } finally {
+      await engine.close()
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
 })

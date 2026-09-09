@@ -100,20 +100,20 @@ export function registerWorkflowHandlers({ handle, projectService, workflowServi
     return workflowEngine.getRun(runId)
   })
   handle(APP_SHELL_CHANNELS.openWorkflowRunInIde, async (_event: unknown, runId: unknown) => {
-    if (!workflowEngine || typeof runId !== 'string') return { ok: false, error: '找不到这个 Workflow Run。' }
+    if (!workflowEngine || typeof runId !== 'string') return { ok: false, error: zhCNMain.workflowRunOpen.notFound }
     const current = await workflowEngine.getRun(runId)
-    if (!current) return { ok: false, error: '找不到这个 Workflow Run。' }
+    if (!current) return { ok: false, error: zhCNMain.workflowRunOpen.notFound }
     try {
       if (!(await stat(current.workspacePath)).isDirectory()) throw new Error('Missing workspace')
     } catch {
-      return { ok: false, error: 'Run Workspace 不可用。' }
+      return { ok: false, error: zhCNMain.workflowRunOpen.workspaceUnavailable }
     }
     try {
       if (!openInIde) throw new Error('Missing IDE')
       await openInIde(current.workspacePath)
       return { ok: true, error: null }
     } catch {
-      return { ok: false, error: '没有找到可用的外部 IDE。' }
+      return { ok: false, error: zhCNMain.workflowRunOpen.ideUnavailable }
     }
   })
   handle(APP_SHELL_CHANNELS.pauseWorkflowRun, async (_event: unknown, runId: unknown) => workflowEngine!.pauseRun(String(runId)))

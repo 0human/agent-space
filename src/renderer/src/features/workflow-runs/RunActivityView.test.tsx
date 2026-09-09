@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 
@@ -142,6 +142,35 @@ describe('Run Activity View', () => {
     ).toHaveLength(5)
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
+  it('reveals the current Phase and Ticket when their navigation narrows', () => {
+    const callbacks: ResizeObserverCallback[] = []
+    const NativeObserver = globalThis.ResizeObserver
+    vi.stubGlobal('ResizeObserver', class extends NativeObserver {
+      constructor(callback: ResizeObserverCallback) {
+        super(callback)
+        callbacks.push(callback)
+      }
+    })
+    try {
+      render(<RunActivityView {...fixture()} />)
+      const navs = ['Workflow 总进度', 'Ticket 历史'].map((name) =>
+        screen.getByRole('navigation', { name }),
+      )
+      for (const nav of navs) {
+        vi.spyOn(nav, 'getBoundingClientRect').mockReturnValue({ left: 0, right: 320 } as DOMRect)
+        const current = within(nav).getAllByRole('button').find((button) =>
+          button.getAttribute('aria-current') === 'step',
+        )!
+        vi.spyOn(current, 'getBoundingClientRect').mockImplementation(() =>
+          ({ left: 500 - nav.scrollLeft, right: 600 - nav.scrollLeft }) as DOMRect,
+        )
+      }
+      act(() => callbacks.forEach((callback) => callback([], {} as ResizeObserver)))
+      for (const nav of navs) expect(nav.scrollLeft).toBe(280)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
   it('keeps Inspection scroll and keyboard focus stable while counting changed Items, then resumes live following', async () => {
     const user = userEvent.setup()
     const props = fixture()
@@ -210,6 +239,32 @@ describe('Run Activity View', () => {
       />,
     )
     expect(viewport.scrollTop).toBe(5100)
+  })
+
+  it('keeps the inspected Ticket at the same visible position when earlier history arrives', async () => {
+    const user = userEvent.setup()
+    const props = fixture()
+    const { rerender } = render(<RunActivityView {...props} />)
+    const viewport = screen.getByRole('region', { name: 'Run Activity View' })
+    const heading = screen.getByRole('heading', { name: 'Ticket 2/12 · 功能 2' })
+    let headingOffset = 800
+    vi.spyOn(viewport, 'getBoundingClientRect').mockImplementation(() =>
+      ({ top: 100, bottom: 500 }) as DOMRect,
+    )
+    vi.spyOn(heading, 'getBoundingClientRect').mockImplementation(() =>
+      ({ top: 100 + headingOffset - viewport.scrollTop,
+        bottom: 130 + headingOffset - viewport.scrollTop }) as DOMRect,
+    )
+    await user.click(screen.getByRole('button', { name: 'Ticket 2/12 · 功能 2' }))
+    expect(heading.getBoundingClientRect().top).toBe(100)
+    headingOffset += 300
+    rerender(<RunActivityView {...props} runtimeItems={[
+      { ...props.runtimeItems[0], id: 'restored-message', type: 'agent_message', text: '补齐的历史输出' },
+      ...props.runtimeItems,
+    ]} />)
+    expect(heading.getBoundingClientRect().top).toBe(100)
+    expect(heading).toHaveFocus()
+    expect(props.onPause).not.toHaveBeenCalled()
   })
 
   it('expands file paths with change counts and opens the Run workspace in an IDE', async () => {

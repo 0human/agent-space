@@ -34,6 +34,7 @@ export function useRunActivityScroll(run: WorkflowRun, items: RuntimeItem[]) {
   const contentRef = useRef<HTMLDivElement>(null)
   const targets = useRef(new Map<string, HTMLElement>())
   const liveRef = useRef(true)
+  const readingAnchor = useRef<{ element: HTMLElement; offset: number } | null>(null)
   const [inspection, setInspection] = useState<{
     target: string | null
     baseline: Map<string, string>
@@ -54,18 +55,45 @@ export function useRunActivityScroll(run: WorkflowRun, items: RuntimeItem[]) {
       )
   }, [])
 
-  useLayoutEffect(scrollToLive, [
+  const rememberReadingPosition = (): void => {
+    const viewport = viewportRef.current
+    if (!viewport) return
+    const bounds = viewport.getBoundingClientRect()
+    const element = [...(contentRef.current?.querySelectorAll<HTMLElement>('h2, h3, article') ?? [])]
+      .find((entry) => {
+        const rect = entry.getBoundingClientRect()
+        return rect.bottom > bounds.top && rect.top < bounds.bottom
+      })
+    readingAnchor.current = element
+      ? { element, offset: element.getBoundingClientRect().top - bounds.top }
+      : null
+  }
+
+  const restoreReadingPosition = useCallback(() => {
+    if (liveRef.current) {
+      scrollToLive()
+      return
+    }
+    const viewport = viewportRef.current
+    const anchor = readingAnchor.current
+    if (viewport && anchor?.element.isConnected) {
+      viewport.scrollTop += anchor.element.getBoundingClientRect().top -
+        viewport.getBoundingClientRect().top - anchor.offset
+    }
+  }, [scrollToLive])
+
+  useLayoutEffect(restoreReadingPosition, [
     items,
     run.updatedAt,
     run.snapshot.currentStepExecutionId,
-    scrollToLive,
+    restoreReadingPosition,
   ])
   useLayoutEffect(() => {
-    const observer = new ResizeObserver(scrollToLive)
+    const observer = new ResizeObserver(restoreReadingPosition)
     if (viewportRef.current) observer.observe(viewportRef.current)
     if (contentRef.current) observer.observe(contentRef.current)
     return () => observer.disconnect()
-  }, [scrollToLive])
+  }, [restoreReadingPosition])
 
   const inspect = (target: string | null): void => {
     liveRef.current = false
@@ -81,6 +109,7 @@ export function useRunActivityScroll(run: WorkflowRun, items: RuntimeItem[]) {
         viewport.getBoundingClientRect().top
       element.focus({ preventScroll: true })
     }
+    rememberReadingPosition()
   }
 
   return {
@@ -98,9 +127,12 @@ export function useRunActivityScroll(run: WorkflowRun, items: RuntimeItem[]) {
         viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop > 48
       )
         inspect(null)
+      else if (!liveRef.current)
+        rememberReadingPosition()
     },
     returnToLive: () => {
       liveRef.current = true
+      readingAnchor.current = null
       setInspection(null)
       scrollToLive()
       viewportRef.current?.focus({ preventScroll: true })

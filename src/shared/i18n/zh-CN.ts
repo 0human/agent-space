@@ -30,6 +30,11 @@ export const zhCNMain = {
     notFound: '找不到这个 Project。',
     unavailable: 'Project 删除功能暂不可用。'
   },
+  workflowRunOpen: {
+    notFound: '找不到这个 Workflow Run。',
+    workspaceUnavailable: 'Run Workspace 不可用。',
+    ideUnavailable: '没有找到可用的外部 IDE。'
+  },
   workflowRun: {
     runtimeBlocked: 'Runtime 报告当前 Step blocked。',
     workspaceUnavailable: 'Project Workspace 不可访问。',

@@ -30,6 +30,7 @@ export function createAppShellApi(): AppShellApi {
     startWorkflowRun: vi.fn(),
     listWorkflowRuns: vi.fn().mockResolvedValue([]),
     getWorkflowRun: vi.fn(),
+    openWorkflowRunInIde: vi.fn().mockResolvedValue({ ok: true, error: null }),
     listRuntimeItems: vi.fn().mockResolvedValue([]),
     subscribeRuntimeItemUpdates: vi.fn().mockReturnValue(() => undefined),
     pauseWorkflowRun: vi.fn(),

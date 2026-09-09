@@ -1,3 +1,4 @@
+import { stat } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import { APP_SHELL_CHANNELS } from '../shared/app-shell'
@@ -97,6 +98,23 @@ export function registerWorkflowHandlers({ handle, projectService, workflowServi
   handle(APP_SHELL_CHANNELS.getWorkflowRun, async (_event: unknown, runId: unknown) => {
     if (!workflowEngine || typeof runId !== 'string') return null
     return workflowEngine.getRun(runId)
+  })
+  handle(APP_SHELL_CHANNELS.openWorkflowRunInIde, async (_event: unknown, runId: unknown) => {
+    if (!workflowEngine || typeof runId !== 'string') return { ok: false, error: zhCNMain.workflowRunOpen.notFound }
+    const current = await workflowEngine.getRun(runId)
+    if (!current) return { ok: false, error: zhCNMain.workflowRunOpen.notFound }
+    try {
+      if (!(await stat(current.workspacePath)).isDirectory()) throw new Error('Missing workspace')
+    } catch {
+      return { ok: false, error: zhCNMain.workflowRunOpen.workspaceUnavailable }
+    }
+    try {
+      if (!openInIde) throw new Error('Missing IDE')
+      await openInIde(current.workspacePath)
+      return { ok: true, error: null }
+    } catch {
+      return { ok: false, error: zhCNMain.workflowRunOpen.ideUnavailable }
+    }
   })
   handle(APP_SHELL_CHANNELS.pauseWorkflowRun, async (_event: unknown, runId: unknown) => workflowEngine!.pauseRun(String(runId)))
   handle(APP_SHELL_CHANNELS.resumeWorkflowRun, async (_event: unknown, runId: unknown, guidance: unknown) => workflowEngine!.resumeRun(String(runId), typeof guidance === 'string' ? guidance : undefined))

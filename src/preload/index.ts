@@ -17,6 +17,7 @@ const appShellApi: AppShellApi = Object.freeze({
   startWorkflowRun: (projectId, idea) => ipcRenderer.invoke(APP_SHELL_CHANNELS.startWorkflowRun, projectId, idea),
   listWorkflowRuns: (projectId) => ipcRenderer.invoke(APP_SHELL_CHANNELS.listWorkflowRuns, projectId),
   getWorkflowRun: (runId) => ipcRenderer.invoke(APP_SHELL_CHANNELS.getWorkflowRun, runId),
+  openWorkflowRunInIde: (runId) => ipcRenderer.invoke(APP_SHELL_CHANNELS.openWorkflowRunInIde, runId),
   listRuntimeItems: (runId, executionId) => ipcRenderer.invoke(APP_SHELL_CHANNELS.listRuntimeItems, runId, executionId),
   subscribeRuntimeItemUpdates: (listener) => {
     const ipcListener = (_event: IpcRendererEvent, item: RuntimeItem): void => listener(item)

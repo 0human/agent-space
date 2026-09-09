@@ -22,6 +22,7 @@ export const APP_SHELL_CHANNELS = {
   startWorkflowRun: 'workflow:start-run',
   listWorkflowRuns: 'workflow-run:list',
   getWorkflowRun: 'workflow-run:get',
+  openWorkflowRunInIde: 'workflow-run:open-in-ide',
   listRuntimeItems: 'runtime-item:list',
   runtimeItemUpdated: 'runtime-item:updated',
   pauseWorkflowRun: 'workflow-run:pause',
@@ -51,6 +52,7 @@ export interface AppShellApi {
   startWorkflowRun: (projectId: string, idea: string) => Promise<WorkflowRunActionResult>
   listWorkflowRuns: (projectId: string) => Promise<WorkflowRun[]>
   getWorkflowRun: (runId: string) => Promise<WorkflowRun | null>
+  openWorkflowRunInIde: (runId: string) => Promise<OpenProjectResult>
   listRuntimeItems: (runId: string, executionId: string) => Promise<RuntimeItem[]>
   subscribeRuntimeItemUpdates: (listener: (item: RuntimeItem) => void) => () => void
   pauseWorkflowRun: (runId: string) => Promise<WorkflowRun>

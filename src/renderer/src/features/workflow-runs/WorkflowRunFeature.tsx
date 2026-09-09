@@ -5,7 +5,8 @@ import type { RuntimeItem, WorkflowRun } from '../../../../shared/workflow-run'
 import { useAppShell } from '@renderer/app/app-shell-provider'
 import type { AppPage } from '@renderer/app/navigation'
 
-import { RunBoardView } from './RunBoardView'
+import { RunActivityView } from './RunActivityView'
+import { zhCN as copy } from '@renderer/i18n/zh-CN'
 import { mergeRuntimeItemTimeline } from './runtime-item-timeline'
 
 export function WorkflowRunFeature({
@@ -90,11 +91,17 @@ export function WorkflowRunFeature({
   }
 
   return (
-    <RunBoardView
+    <RunActivityView
+      key={run.id}
       run={run}
       runtimeItems={runtimeItems}
       runtimeItemsUnavailable={runtimeItemsUnavailable}
       error={error}
+      onOpenInIde={() => {
+        void api.openWorkflowRunInIde(run.id).then((result) => {
+          setError(result.ok ? null : result.error ?? copy.run.openInIdeError)
+        }).catch(() => setError(copy.run.openInIdeError))
+      }}
       onBack={() => onNavigate({ name: 'projectDetail', project })}
       onPause={() => {
         void updateRun(() => api.pauseWorkflowRun(run.id))

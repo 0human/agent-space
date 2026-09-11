@@ -326,8 +326,26 @@ export interface WorkflowRun {
   phaseContexts: PhaseContext[]
   decisionRecords: DecisionRecord[]
   artifacts: ArtifactIndex[]
+  summaries?: RunSummary[]
   createdAt: string
   updatedAt: string
+}
+
+export interface RunSummary {
+  scope: 'ticket' | 'run'
+  ticketId: string | null
+  title: string
+  status: 'completed'
+  finishedAt: string
+  durationMs: number | null
+  attemptCount: number
+  ticketCount: number
+  failedAttemptCount: number
+  interruptionCount: number
+  failures: string[]
+  results: Array<{ category: ImplementationTicketStage | 'build' | 'verification'; name: string; status: string }>
+  files: Array<{ path: string; kinds: RuntimeFileChange['kind'][]; additions: number; deletions: number }>
+  artifacts: ArtifactIndex[]
 }
 
 export interface WorkflowSourceSnapshot {
@@ -373,6 +391,7 @@ type RuntimeEventPayload =
   | { type: 'approval_required'; approval: string }
   | { type: 'artifact_produced'; artifact: RuntimeArtifact }
   | { type: 'ticket_progress'; stage: ImplementationTicketStage; status: ImplementationTicketStageStatus }
+  | { type: 'file_changes'; changes: RuntimeFileChange[] }
   | { type: 'status_changed'; status: 'running' | 'paused' | 'completed' | 'blocked'; reason?: string }
   | { type: 'error'; error: string }
 
@@ -399,7 +418,8 @@ export type WorkflowLogType = RuntimeEvent['type']
 export interface AgentRuntimeAdapter {
   preflight?(context: RuntimePreflightContext): Promise<RuntimePreflightResult>
   execute(context: RuntimeExecutionContext): Promise<RuntimeEventInput[]>
-  interrupt?(context: RuntimeInterruptContext): Promise<void>
+  interrupt?(context: RuntimeInterruptContext): Promise<void | boolean>
+  rejectApproval?(context: RuntimeInterruptContext): Promise<void>
 }
 
 export interface RuntimeInterruptContext {

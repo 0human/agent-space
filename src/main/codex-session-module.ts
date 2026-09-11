@@ -10,6 +10,7 @@ import { zhCNMain } from '../shared/i18n/zh-CN'
 import { createStdioCodexAppServerTransport, type CodexAppServerTransport, type JsonRpcServerRequest, type JsonRpcNotification } from './codex-app-server-transport'
 import type { CodexItemProjection, CodexItemProjectionScope } from './codex-item-projection'
 import { sanitizeSensitiveText } from './sensitive-text'
+import { fileChanges } from './runtime-file-changes'
 import { asRecord, asString } from './unknown-value'
 
 export type CodexSessionTransport = CodexAppServerTransport
@@ -80,8 +81,8 @@ export interface CodexSessionTurnResult {
 export interface CodexSessionModule {
   preflight(input: CodexSessionPreflightInput): Promise<CodexCapabilityNegotiation>
   runTurn(input: CodexSessionTurnInput): Promise<CodexSessionTurnResult>
-  interrupt(locator: Pick<RuntimeLocator, 'threadId' | 'turnId'>): Promise<void>
-  respondToApproval(request: CodexRuntimeApprovalRequest, result: unknown): Promise<void>
+  interrupt(locator: Pick<RuntimeLocator, 'threadId' | 'turnId'>): Promise<boolean>
+  respondToApproval(request: CodexRuntimeApprovalRequest, result: unknown, endTurn?: boolean): Promise<CodexSessionTurnResult>
   readThread(input: CodexSessionPreflightInput & {
     locator: Pick<RuntimeLocator, 'threadId'> & Partial<Omit<RuntimeLocator, 'threadId'>>
     projectionScope?: Omit<CodexItemProjectionScope, 'runtimeLocator'>
@@ -237,7 +238,28 @@ function approvalSummary(request: JsonRpcServerRequest): string {
 }
 
 function normalizeApprovalResult(request: JsonRpcServerRequest, result: unknown): unknown {
-  const value = asRecord(result)
+  let value = asRecord(result)
+  if (typeof value?.answer === 'string' && request.method === 'item/tool/requestUserInput') {
+    const answer = value.answer
+    const questions = Array.isArray(request.params?.questions) ? request.params.questions : []
+    value = { answers: Object.fromEntries(questions.flatMap((question) => {
+      const id = asString(asRecord(question)?.id)
+      return id ? [[id, { answers: [answer] }]] : []
+    })) }
+  }
+  if (typeof value?.approved === 'boolean') {
+    const approved = value.approved
+    if (request.method === 'item/permissions/requestApproval') {
+      // Only echo the explicit requested permissions; never widen their scope.
+      value = { permissions: approved ? asRecord(request.params?.permissions) ?? {} : {}, scope: 'turn' }
+    } else if (request.method === 'execCommandApproval' || request.method === 'applyPatchApproval') {
+      value = { decision: approved ? 'approved' : 'denied' }
+    } else if (request.method === 'mcpServer/elicitation/request') {
+      value = { action: approved ? 'accept' : 'decline' }
+    } else {
+      value = { decision: approved ? 'accept' : 'decline' }
+    }
+  }
   const decision = value && 'decision' in value ? value.decision : result
   if (request.method === 'item/permissions/requestApproval') {
     if (value && 'permissions' in value) return value
@@ -302,6 +324,9 @@ function runtimeEventForNotification(notification: JsonRpcNotification): Runtime
       const text = asString(item.text)
       return text ? parseAgentMessage(text) : null
     }
+    if (type === 'fileChange' && item.status !== 'failed' && item.status !== 'declined') {
+      return { type: 'file_changes', changes: fileChanges(item.changes), idempotencyKey: `file-changes:${notification.params?.threadId}:${notification.params?.turnId}:${item.id}` }
+    }
     if (type === 'commandExecution') {
       const command = asString(item.command)
       if (!command) return null
@@ -360,6 +385,8 @@ export function createCodexSessionModule(dependencies: CodexSessionModuleDepende
     input: CodexSessionTurnInput
     waitingRequest: CodexRuntimeApprovalRequest | null
     waitingRawRequest: JsonRpcServerRequest | null
+    stopping?: boolean
+    respondedRequestId?: string
     processing: Promise<CodexSessionTurnResult> | null
   }
   const turnStates = new Map<string, TurnState>()
@@ -430,20 +457,34 @@ export function createCodexSessionModule(dependencies: CodexSessionModuleDepende
     await transport.close().catch(() => undefined)
   }
 
-  async function respondToApproval(request: CodexRuntimeApprovalRequest, result: unknown): Promise<void> {
+  async function respondToApproval(request: CodexRuntimeApprovalRequest, result: unknown, endTurn?: boolean): Promise<CodexSessionTurnResult> {
     const state = [...turnStates.values()].find((candidate) => candidate.waitingRequest?.id === request.id)
     const original = state?.waitingRawRequest ?? null
     if (!state || !original) throw new Error(zhCNMain.codexSession.approvalContinuationExpired)
     if (!state.transport.respond) throw new Error(zhCNMain.codexSession.approvalExpired)
     const normalized = normalizeApprovalResult(original, result)
-    await state.transport.respond(original.id, normalized)
-    if (state.input.executionId) {
-      observeProjection(() => itemProjection?.completeRequest(original, normalized, projectionScope(state)))
+    if (state.respondedRequestId !== request.id) {
+      await state.transport.respond(original.id, normalized)
+      state.respondedRequestId = request.id
+      if (state.input.executionId) {
+        observeProjection(() => itemProjection?.completeRequest(original, normalized, projectionScope(state)))
+      }
+    }
+    if (endTurn) {
+      state.stopping = true
+      try {
+        await state.transport.request('turn/interrupt', { threadId: state.locator.threadId, turnId: state.locator.turnId })
+      } catch (error) {
+        state.stopping = false
+        throw error
+      }
+      if (state.input.executionId) observeProjection(() => itemProjection?.setInterrupt('in_progress', projectionScope(state)))
     }
     state.waitingRequest = null
     state.waitingRawRequest = null
+    state.events = []
     state.processing = consumeTurn(state)
-    await state.processing
+    return state.processing
   }
 
   async function consumeTurn(state: TurnState): Promise<CodexSessionTurnResult> {
@@ -460,6 +501,7 @@ export function createCodexSessionModule(dependencies: CodexSessionModuleDepende
           }
         }
         if ('id' in message) {
+          if (state.stopping) continue
           const request = message as JsonRpcServerRequest
           const publicRequest = publicApprovalRequest(request)
           if (state.input.executionId) {
@@ -578,12 +620,27 @@ export function createCodexSessionModule(dependencies: CodexSessionModuleDepende
     async interrupt(locator) {
       const activeKey = `${locator.threadId}:${locator.turnId}`
       const transport = activeTransports.get(activeKey)
-      if (!transport) throw new Error(zhCNMain.codexSession.turnNotActive)
-      await transport.request('turn/interrupt', { threadId: locator.threadId, turnId: locator.turnId })
+      if (!transport) return false
       const state = turnStates.get(activeKey)
+      const wasStopping = state?.stopping
+      if (state) state.stopping = true
+      try {
+        await transport.request('turn/interrupt', { threadId: locator.threadId, turnId: locator.turnId })
+      } catch (error) {
+        if (state) state.stopping = wasStopping
+        throw error
+      }
       if (state?.input.executionId) {
         observeProjection(() => itemProjection?.setInterrupt('in_progress', projectionScope(state)))
       }
+      if (state?.waitingRequest) {
+        state.waitingRequest = null
+        state.waitingRawRequest = null
+        state.events = []
+        state.processing = consumeTurn(state)
+        await state.processing
+      }
+      return true
     },
     respondToApproval,
     async readThread(input) {

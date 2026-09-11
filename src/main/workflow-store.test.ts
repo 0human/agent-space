@@ -41,6 +41,61 @@ afterEach(async () => {
 })
 
 describe('Workflow Store forward migrations', () => {
+  it('persists adaptive Ticket and Run summaries across failed attempts, interruptions and reopening', async () => {
+    const directory = await mkdtemp(join(process.cwd(), '.tmp-workflow-store-'))
+    temporaryDirectories.push(directory)
+    const databasePath = join(directory, 'runs.sqlite')
+    let timestamp = '2026-09-11T00:00:00.000Z'
+    const store = createSqliteRunStore({ databasePath, now: () => timestamp })
+    const definition = { ...workflow, phases: [
+      { id: 'planning', name: 'Planning', goal: 'Plan', steps: [{ id: 'plan', name: 'Plan', kind: 'skill' as const }] },
+      { id: 'implementation', name: 'Implementation', goal: 'Ship', steps: [{ id: 'implement', name: 'Implement', kind: 'skill' as const }] },
+    ] }
+    let run = await store.createRun({ id: 'summary-run', project, workflow: definition, workflowSource: { source: 'project', path: null }, idea: 'Summary', now: timestamp })
+    run = await store.recordRuntimeResult(run.id, run.snapshot.currentStepExecutionId!, [
+      { type: 'artifact_produced', artifact: { type: 'ticket', name: 'Control slice', location: 'https://github.com/example/demo/issues/1', runId: run.id } },
+      { type: 'status_changed', status: 'completed' },
+    ])
+    const first = run.snapshot.currentStepExecutionId!
+    timestamp = '2026-09-11T00:00:10.000Z'
+    run = await store.recordRuntimeResult(run.id, first, [
+      { type: 'file_changes', changes: [{ path: 'src/run.ts', kind: 'add', additions: 12, deletions: 0 }], idempotencyKey: 'file-1' },
+      { type: 'ticket_progress', stage: 'implementation', status: 'completed' },
+      { type: 'error', error: 'Review failed' },
+    ])
+    run = await store.retry(run.id, 'Fix the failure')
+    const second = run.snapshot.currentStepExecutionId!
+    timestamp = '2026-09-11T00:00:20.000Z'
+    run = await store.recordRuntimeResult(run.id, second, [{ type: 'status_changed', status: 'paused' }])
+    timestamp = '2026-09-11T00:00:30.000Z'
+    run = await store.resume(run.id)
+    expect(run.stepExecutions.at(-1)?.startedAt).toBe('2026-09-11T00:00:10.000Z')
+    timestamp = '2026-09-11T00:01:00.000Z'
+    const results: RuntimeEventInput[] = [
+      { type: 'file_changes', changes: [{ path: 'src/run.ts', kind: 'update', additions: 3, deletions: 2 }], idempotencyKey: 'file-2' },
+      { type: 'ticket_progress', stage: 'testing', status: 'skipped' },
+      { type: 'ticket_progress', stage: 'review', status: 'completed' },
+      { type: 'ticket_progress', stage: 'commit', status: 'completed' },
+      { type: 'artifact_produced', artifact: { type: 'commit', name: 'Fix controls', versionHash: 'abc456' } },
+      { type: 'status_changed', status: 'completed' },
+    ]
+    run = await store.recordRuntimeResult(run.id, second, results)
+    expect(run.summaries).toEqual([
+      expect.objectContaining({ scope: 'ticket', title: 'Control slice', status: 'completed', attemptCount: 2, durationMs: 60000,
+        files: [{ path: 'src/run.ts', kinds: ['add', 'update'], additions: 15, deletions: 2 }],
+        failedAttemptCount: 1, interruptionCount: 1,
+        artifacts: [expect.objectContaining({ type: 'commit', versionHash: 'abc456' })],
+      }),
+      expect.objectContaining({ scope: 'run', status: 'completed', ticketCount: 1, durationMs: 60000 }),
+    ])
+    expect(run.summaries?.[0].results.map((result) => result.category)).toEqual(['implementation', 'review', 'commit'])
+    await store.recordRuntimeResult(run.id, second, results)
+    await store.close()
+    const reopened = createSqliteRunStore({ databasePath })
+    expect((await reopened.getRun(run.id))?.summaries).toEqual(run.summaries)
+    await reopened.close()
+  })
+
   it('opens a database written by the previous schema and keeps it usable', async () => {
     const directory = await mkdtemp(join(process.cwd(), '.tmp-workflow-store-'))
     temporaryDirectories.push(directory)

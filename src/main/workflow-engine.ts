@@ -161,11 +161,26 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
   const releaseManager = dependencies.releaseManager ?? createDefaultReleaseManager()
   const platform = supportedPlatform(dependencies.platform ?? process.platform)
   const active = new Map<string, Promise<void>>()
+  const controls = new Map<string, { action: string; promise: Promise<WorkflowRun> }>()
   let closed = false
+
+  function control(runId: string, action: string, operation: () => Promise<WorkflowRun>): Promise<WorkflowRun> {
+    const pending = controls.get(runId)
+    if (pending) return pending.action === action ? pending.promise : Promise.reject(new Error('Run 正在处理另一个操作。'))
+    const promise = Promise.resolve().then(operation).finally(() => { controls.delete(runId) })
+    controls.set(runId, { action, promise })
+    return promise
+  }
+
+  function stopIntent(runId: string): 'paused' | 'cancelled' | undefined {
+    const action = controls.get(runId)?.action
+    return action === 'pause' ? 'paused' : action === 'cancel' ? 'cancelled' : undefined
+  }
 
   async function execute(runId: string): Promise<void> {
     while (true) {
       const run = await store.getRun(runId)
+      if (stopIntent(runId)) return
       if (!run || run.status !== 'running' || !run.snapshot.currentStepExecutionId) return
       const execution = run.stepExecutions.find((candidate) => candidate.id === run.snapshot.currentStepExecutionId)
       if (!execution) return
@@ -263,24 +278,20 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
       }
       events = normalizeExternalFailure(events)
       if (closed) return
-      let updated = await store.recordRuntimeResult(runId, execution.id, events)
-      if (delivery) updated = await store.setPullRequest(runId, delivery.pullRequest)
       const reviewStep = step?.id === 'review' || step?.skill?.name === 'code-review' || /review/i.test(step?.name ?? '')
-      if (reviewStep && events.some((event) => event.type === 'status_changed' && event.status === 'completed') && dependencies.gitDeliveryManager) {
+      if (!stopIntent(runId) && reviewStep && events.some((event) => event.type === 'status_changed' && event.status === 'completed') && !events.some((event) => event.type === 'error') && dependencies.gitDeliveryManager) {
         try {
-          const delivery = await dependencies.gitDeliveryManager.commitAfterReview({
-            workspacePath: updated.workspacePath,
-            runId: updated.id,
-            baseCommit: updated.baseCommit,
-            ticket: ticketReference(updated.idea, updated.artifacts),
-            idempotencyKey: `git.commit:${updated.id}`
+          const committed = await dependencies.gitDeliveryManager.commitAfterReview({
+            workspacePath: run.workspacePath, runId: run.id, baseCommit: run.baseCommit,
+            ticket: ticketReference(run.idea, run.artifacts), idempotencyKey: `git.commit:${run.id}`
           })
-          await store.registerArtifact(updated.id, execution.id, delivery.artifact)
+          events.push({ type: 'artifact_produced', artifact: committed.artifact, source: 'git.commit' })
         } catch (error) {
-          await store.markDeliveryFailed(updated.id, execution.id, error instanceof Error ? error.message : String(error))
-          return
+          events.push({ type: 'error', error: error instanceof Error ? error.message : String(error), source: 'git.commit' })
         }
       }
+      let updated = await store.recordRuntimeResult(runId, execution.id, events, stopIntent(runId))
+      if (delivery) updated = await store.setPullRequest(runId, delivery.pullRequest)
       if (updated.status !== 'running' || updated.snapshot.currentStepExecutionId === execution.id) return
     }
   }
@@ -326,7 +337,13 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
   }
 
   function ensureRunning(runId: string): void {
-    if (active.has(runId)) return
+    const previous = active.get(runId)
+    if (previous) {
+      void previous.then(async () => {
+        if (!closed && (await store.getRun(runId))?.status === 'running') ensureRunning(runId)
+      })
+      return
+    }
     const promise = execute(runId).finally(() => {
       if (active.get(runId) === promise) active.delete(runId)
     })
@@ -346,7 +363,7 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
       : null
     const runtimeLocator = execution?.runtimeLocators.at(-1)
     if (!execution || !runtimeLocator || !dependencies.runtime.interrupt) return false
-    await dependencies.runtime.interrupt({ runId: run.id, executionId: execution.id, runtimeLocator })
+    if (await dependencies.runtime.interrupt({ runId: run.id, executionId: execution.id, runtimeLocator }) === false) return false
     await active.get(run.id)
     return true
   }
@@ -449,61 +466,79 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
     },
 
     async pauseRun(runId) {
-      const current = await requireRunStatus(runId, '暂停', ['running'])
-      if (await interruptActiveTurn(current)) return (await store.getRun(runId)) ?? current
-      throw new Error('当前 Runtime Turn 无法安全暂停。')
+      return control(runId, 'pause', async () => {
+        const current = await requireRunStatus(runId, '暂停', ['running'])
+        if (await interruptActiveTurn(current)) return (await store.getRun(runId)) ?? current
+        throw new Error('当前 Runtime Turn 无法安全暂停。')
+      })
     },
 
     async resumeRun(runId, guidance) {
-      const current = await requireRunStatus(runId, '继续', ['paused', 'blocked'])
-      if (current.status === 'blocked' && current.snapshot.blockedBy?.recoveryAction !== 'resume') {
-        throw new Error('blocked 状态没有可执行的恢复动作。')
-      }
-      const run = await store.resume(runId, guidance)
-      if (run.status === 'running') ensureRunning(runId)
-      return run
+      return control(runId, 'resume', async () => {
+        const current = await requireRunStatus(runId, '继续', ['paused', 'blocked'])
+        if (current.status === 'blocked' && current.snapshot.blockedBy?.recoveryAction !== 'resume') {
+          throw new Error('blocked 状态没有可执行的恢复动作。')
+        }
+        const run = await store.resume(runId, guidance)
+        if (run.status === 'running') ensureRunning(runId)
+        return run
+      })
     },
 
     async retryStep(runId, guidance) {
-      await requireRunStatus(runId, '重试', ['failed'])
-      const run = await store.retry(runId, guidance)
-      ensureRunning(runId)
-      return run
+      return control(runId, 'retry', async () => {
+        await requireRunStatus(runId, '重试', ['failed'])
+        const run = await store.retry(runId, guidance)
+        ensureRunning(runId)
+        return run
+      })
     },
 
     async cancelRun(runId) {
-      const current = await requireRunStatus(runId, '结束 Run', ['running', 'paused', 'waiting', 'blocked', 'failed'])
-      if (current.status === 'running' && !(await interruptActiveTurn(current))) {
-        throw new Error('当前 Runtime Turn 无法安全结束。')
-      }
-      return store.setStatus(runId, 'cancelled')
+      return control(runId, 'cancel', async () => {
+        const current = await requireRunStatus(runId, '结束 Run', ['running', 'paused', 'waiting', 'blocked', 'failed'])
+        if (current.status === 'running' && !(await interruptActiveTurn(current))) {
+          throw new Error('当前 Runtime Turn 无法安全结束。')
+        }
+        if (current.status === 'waiting') await interruptActiveTurn(current)
+        return store.setStatus(runId, 'cancelled')
+      })
     },
 
     async answerQuestion(runId, answer) {
-      const current = await requireRunStatus(runId, '回答', ['waiting'])
-      if (!current.snapshot.pendingQuestionDetails || !current.snapshot.pendingQuestion) throw new Error('waiting 状态没有可回答的 Agent Question。')
-      const run = await store.answerQuestion(runId, answer)
-      ensureRunning(runId)
-      return run
+      return control(runId, 'answer', async () => {
+        const current = await requireRunStatus(runId, '回答', ['waiting'])
+        if (!current.snapshot.pendingQuestionDetails || !current.snapshot.pendingQuestion) throw new Error('waiting 状态没有可回答的 Agent Question。')
+        const run = await store.answerQuestion(runId, answer)
+        ensureRunning(runId)
+        return run
+      })
     },
 
     async approve(runId) {
-      const stored = await requireRunStatus(runId, '批准', ['waiting'])
-      if (!stored.snapshot.pendingApprovalDetails || !stored.snapshot.pendingApproval) throw new Error('waiting 状态没有可决定的 Approval。')
-      const execution = stored.snapshot.currentStepExecutionId ? stored.stepExecutions.find((candidate) => candidate.id === stored.snapshot.currentStepExecutionId) : null
-      const step = execution ? stored.workflow.phases[stored.snapshot.phaseIndex]?.steps[stored.snapshot.stepIndex] : undefined
-      const current = await refreshPullRequest(stored, isPullRequestStep(step))
-      if (!current) throw new Error('找不到 Workflow Run。')
-      if (isPullRequestStep(step) && !current.pullRequest?.gate.canMerge) throw new Error(`Merge Gate 不可批准：${current.pullRequest?.gate.reason ?? 'Pull Request 状态不可用。'}`)
-      const run = await store.decideApproval(runId, 'approved')
-      ensureRunning(runId)
-      return run
+      return control(runId, 'approve', async () => {
+        const stored = await requireRunStatus(runId, '批准', ['waiting'])
+        if (!stored.snapshot.pendingApprovalDetails || !stored.snapshot.pendingApproval) throw new Error('waiting 状态没有可决定的 Approval。')
+        const execution = stored.snapshot.currentStepExecutionId ? stored.stepExecutions.find((candidate) => candidate.id === stored.snapshot.currentStepExecutionId) : null
+        const step = execution ? stored.workflow.phases[stored.snapshot.phaseIndex]?.steps[stored.snapshot.stepIndex] : undefined
+        const current = await refreshPullRequest(stored, isPullRequestStep(step))
+        if (!current) throw new Error('找不到 Workflow Run。')
+        if (isPullRequestStep(step) && !current.pullRequest?.gate.canMerge) throw new Error(`Merge Gate 不可批准：${current.pullRequest?.gate.reason ?? 'Pull Request 状态不可用。'}`)
+        const run = await store.decideApproval(runId, 'approved')
+        ensureRunning(runId)
+        return run
+      })
     },
 
     async reject(runId) {
-      const current = await requireRunStatus(runId, '拒绝', ['waiting'])
-      if (!current.snapshot.pendingApprovalDetails || !current.snapshot.pendingApproval) throw new Error('waiting 状态没有可决定的 Approval。')
-      return store.decideApproval(runId, 'rejected')
+      return control(runId, 'reject', async () => {
+        const current = await requireRunStatus(runId, '拒绝', ['waiting'])
+        if (!current.snapshot.pendingApprovalDetails || !current.snapshot.pendingApproval) throw new Error('waiting 状态没有可决定的 Approval。')
+        const execution = current.stepExecutions.find((execution) => execution.id === current.snapshot.currentStepExecutionId)
+        const locator = execution?.runtimeLocators.at(-1)
+        if (execution && locator) await dependencies.runtime.rejectApproval?.({ runId, executionId: execution.id, runtimeLocator: locator })
+        return store.decideApproval(runId, 'rejected')
+      })
     },
 
     async recover() {

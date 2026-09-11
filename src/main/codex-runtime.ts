@@ -10,7 +10,7 @@ import { zhCNMain } from '../shared/i18n/zh-CN'
 import { isCommandAllowed, isNetworkHostAllowed, isPathAllowed } from './permission-policy'
 import { createStdioCodexAppServerTransport, type CodexAppServerTransport } from './codex-app-server-transport'
 import type { CodexItemProjection } from './codex-item-projection'
-import { createCodexSessionModule, CodexCapabilityNegotiationError, type CodexCapabilityInspector, type CodexSessionModule } from './codex-session-module'
+import { createCodexSessionModule, CodexCapabilityNegotiationError, type CodexCapabilityInspector, type CodexSessionModule, type CodexRuntimeApprovalRequest, type CodexSessionTurnResult } from './codex-session-module'
 import { sanitizePermissionPolicy, sanitizeSensitivePath, sanitizeSensitiveText, sanitizeSensitiveValue } from './sensitive-text'
 
 export { sanitizeSensitiveText } from './sensitive-text'
@@ -205,6 +205,8 @@ function sanitizeRuntimeEvent(event: RuntimeEventInput): RuntimeEventInput {
       return { type: 'question', ...metadata, question: sanitizeSensitiveText(event.question) }
     case 'approval_required':
       return { type: 'approval_required', ...metadata, approval: sanitizeSensitiveText(event.approval) }
+    case 'file_changes':
+      return { type: 'file_changes', ...metadata, changes: sanitizeSensitiveValue(event.changes, 'changes') as typeof event.changes }
     case 'ticket_progress':
       return { type: 'ticket_progress', ...metadata, stage: event.stage, status: event.status }
     case 'status_changed':
@@ -334,6 +336,7 @@ function promptFor(context: RuntimeExecutionContext, skillInstructions: string):
     '这是一次可恢复的 Workflow Phase 执行。只使用下面提供的上下文和输入，不要创建隐藏的 Workflow 状态。',
     `Workflow Run ID: ${context.runId}（所有 GitHub spec、ticket、Decision Record 和 URL 必须在正文或 Artifact 元数据中关联此 Run ID。）`,
     `Idea: ${context.idea}`,
+    `Step Input: ${JSON.stringify(context.execution.input ?? {})}`,
     `Phase: ${context.workflow.phases[context.phaseIndex]?.id ?? 'unknown'}`,
     `Implementation Ticket: ${context.implementationTicket ? `${context.implementationTicket.id} · ${context.implementationTicket.position} · ${context.implementationTicket.title}` : '(none)'}`,
     `Workspace: ${context.workspace.path}`,
@@ -417,6 +420,8 @@ export function createCodexRuntimeAdapter(dependencies: CodexRuntimeDependencies
     inspectCapabilities: dependencies.inspectCapabilities,
     itemProjection: dependencies.itemProjection
   })
+
+  const pendingRequests = new Map<string, { request: CodexRuntimeApprovalRequest; guard: GitGuard | null }>()
 
   async function loadSkillInstructions(manifest: SkillManifest, packagePath: string, visited = new Set<string>()): Promise<string> {
     const key = `${manifest.name}@${manifest.version}`
@@ -512,20 +517,28 @@ export function createCodexRuntimeAdapter(dependencies: CodexRuntimeDependencies
           return [{ type: 'error', error: sanitizeSensitiveText(zhCNMain.codexRuntime.fixedSkillReadFailed(error instanceof Error ? error.message : String(error))), runId: context.runId, executionId: context.execution.id, source: zhCNMain.codexRuntime.appServerSource }]
         }
       }
-      let gitGuard: GitGuard | null = null
+      const pending = pendingRequests.get(context.execution.id)
+      let gitGuard: GitGuard | null = pending?.guard ?? null
       let runtimeLocator: RuntimeLocator | null = null
       const events: RuntimeEventInput[] = []
       try {
-        gitGuard = await createGitGuard(context.project.defaultBranch, context.permissionPolicy.grantedPermissions.includes('network.github'))
+        if (!pending) gitGuard = await createGitGuard(context.project.defaultBranch, context.permissionPolicy.grantedPermissions.includes('network.github'))
         const sandbox = context.permissionPolicy.grantedPermissions.includes('workspace.write') ? 'workspace-write' : 'read-only'
         const phaseId = context.workflow.phases[context.phaseIndex]?.id ?? 'unknown'
         const workUnit = context.implementationTicket?.id
           ? { kind: 'implementation-ticket' as const, runId: context.runId, ticketId: context.implementationTicket.id }
           : { kind: 'phase' as const, runId: context.runId, phaseId }
-        const result = await session.runTurn({
+        let result: CodexSessionTurnResult
+        if (pending) {
+          const answer = context.execution.input?.answer
+          const approved = context.events.some((event) => event.type === 'approval_approved' && event.data.executionId === context.execution.id)
+          if (pending.request.kind === 'question' ? typeof answer !== 'string' : !approved) throw new Error('当前 Runtime 请求尚未收到有效回答。')
+          pendingRequests.delete(context.execution.id)
+          result = await session.respondToApproval(pending.request, pending.request.kind === 'question' ? { answer } : { approved })
+        } else result = await session.runTurn({
           command,
           cwd: context.workspace.path,
-          env: gitGuard.env,
+          env: gitGuard?.env,
           workUnit,
           resumeLocator: context.execution.runtimeLocators?.at(-1) ?? (context.execution.runtimeSessionId ? { runtimeProvider: 'codex', threadId: context.execution.runtimeSessionId, turnId: '', runtimeVersion: '' } : null),
           input: promptFor(context, skillInstructions),
@@ -537,10 +550,7 @@ export function createCodexRuntimeAdapter(dependencies: CodexRuntimeDependencies
           },
           executionId: context.execution.id,
           onApproval: async (request) => {
-            if (request.kind !== 'question') events.push({ type: 'approval_required', approval: request.summary })
-            // Approval decisions belong to the host Workflow/UI. Returning
-            // undefined keeps the original JSON-RPC request pending so the
-            // caller can later respond through CodexSessionModule.
+            pendingRequests.set(context.execution.id, { request, guard: gitGuard })
             return undefined
           },
         })
@@ -549,8 +559,8 @@ export function createCodexRuntimeAdapter(dependencies: CodexRuntimeDependencies
         if (result.status === 'completed') events.push({ type: 'status_changed', status: 'completed' })
         else if (result.status === 'interrupted') events.push({ type: 'status_changed', status: 'paused' })
         else if (result.status === 'waiting') {
-          // The approval_required event drives Workflow waiting state. The
-          // Session Module retains the original App Server request.
+          const request = pendingRequests.get(context.execution.id)?.request
+          if (request && request.kind !== 'question') events.push({ type: 'approval_required', approval: request.summary })
         }
         else if (!events.some((event) => event.type === 'error')) {
           events.push({ type: 'error', error: result.error ?? zhCNMain.codexRuntime.turnFailed })
@@ -565,11 +575,27 @@ export function createCodexRuntimeAdapter(dependencies: CodexRuntimeDependencies
           ? [{ type: 'status_changed', status: 'blocked', reason: message, runId: context.runId, executionId: context.execution.id, provider: 'codex', source: 'codex app-server', permissionPolicy: sanitizePermissionPolicy(context.permissionPolicy), ...(runtimeLocator ? { runtimeLocator } : {}) }]
           : [{ type: 'error', error: message, runId: context.runId, executionId: context.execution.id, provider: 'codex', source: 'codex app-server', permissionPolicy: sanitizePermissionPolicy(context.permissionPolicy), ...(runtimeLocator ? { runtimeLocator } : {}) }]
       } finally {
-        await gitGuard?.cleanup().catch(() => undefined)
+        if (!pendingRequests.has(context.execution.id)) await gitGuard?.cleanup().catch(() => undefined)
       }
     },
     async interrupt(context) {
-      await session.interrupt(context.runtimeLocator)
+      const interrupted = await session.interrupt(context.runtimeLocator)
+      if (interrupted) {
+        const pending = pendingRequests.get(context.executionId)
+        pendingRequests.delete(context.executionId)
+        await pending?.guard?.cleanup().catch(() => undefined)
+      }
+      return interrupted
+    },
+    async rejectApproval(context) {
+      const pending = pendingRequests.get(context.executionId)
+      if (!pending) return
+      pendingRequests.delete(context.executionId)
+      try {
+        await session.respondToApproval(pending.request, { approved: false })
+      } finally {
+        await pending.guard?.cleanup().catch(() => undefined)
+      }
     }
   }
 }

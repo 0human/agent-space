@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { ArrowLeft } from 'lucide-react'
 
 import type {
@@ -8,16 +8,16 @@ import type {
 } from '../../../../shared/workflow-run'
 import { Alert, AlertDescription } from '@renderer/components/ui/alert'
 import { Button } from '@renderer/components/ui/button'
-import { Textarea } from '@renderer/components/ui/textarea'
 import { zhCN as copy } from '@renderer/i18n/zh-CN'
 
 import { createRunActivityModel } from './run-activity-model'
 import {
   Artifact,
   DeliveryCard,
-  RunActionButtons,
   StatusBadge,
 } from './RunActivitySupport'
+import { RunComposer, RunEndMenu, type RunControlAction } from './RunControls'
+import { RunSummaryMessage } from './RunSummaryMessage'
 import { RuntimeItemList } from './RuntimeItemList'
 import { useRunActivityScroll } from './use-run-activity-scroll'
 import { currentRunPosition, RunProgress } from './RunProgress'
@@ -29,13 +29,13 @@ export interface RunActivityViewProps {
   error: string | null
   onOpenInIde?: () => void
   onBack: () => void
-  onPause: () => void
-  onResume: () => void
-  onRetry: () => void
-  onCancel: () => void
-  onAnswer: (answer: string) => void
-  onApprove: () => void
-  onReject: () => void
+  onPause: () => void | Promise<void | boolean>
+  onResume: (guidance?: string) => void | Promise<void | boolean>
+  onRetry: (guidance?: string) => void | Promise<void | boolean>
+  onCancel: () => void | Promise<void | boolean>
+  onAnswer: (answer: string) => void | Promise<void | boolean>
+  onApprove: () => void | Promise<void | boolean>
+  onReject: () => void | Promise<void | boolean>
 }
 
 export function RunActivityView(
@@ -44,7 +44,24 @@ export function RunActivityView(
   const { run, runtimeItems, runtimeItemsUnavailable, error } = props
   const model = createRunActivityModel(run)
   const scroll = useRunActivityScroll(run, runtimeItems)
-  const [answer, setAnswer] = useState('')
+  const [pending, setPending] = useState<RunControlAction | null>(null)
+  const actionInFlight = useRef(false)
+  const [controlError, setControlError] = useState<string | null>(null)
+  async function perform(action: RunControlAction, operation: () => void | Promise<void | boolean>): Promise<boolean> {
+    if (actionInFlight.current) return false
+    actionInFlight.current = true
+    setPending(action)
+    setControlError(null)
+    try {
+      return await operation() !== false
+    } catch (reason) {
+      setControlError(reason instanceof Error ? reason.message : String(reason))
+      return false
+    } finally {
+      actionInFlight.current = false
+      setPending(null)
+    }
+  }
   const itemsByExecution = new Map<string, RuntimeItem[]>()
   for (const item of runtimeItems) {
     if (item.runId !== run.id) continue
@@ -52,8 +69,6 @@ export function RunActivityView(
     items.push(item)
     itemsByExecution.set(item.executionId, items)
   }
-  const question =
-    run.status === 'waiting' ? run.snapshot.pendingQuestionDetails : null
 
   return (
     <main
@@ -73,7 +88,8 @@ export function RunActivityView(
           >
             {run.idea}
           </h1>
-          <StatusBadge status={run.status} />
+          <StatusBadge status={pending === 'pause' ? 'interrupting' : run.status} />
+          <RunEndMenu disabled={!model.canCancel || pending !== null} onEnd={() => { void perform('end', props.onCancel) }} />
         </div>
         <p className="mt-1 text-xs text-muted-foreground">
           {copy.run.sourceSnapshot(
@@ -81,9 +97,9 @@ export function RunActivityView(
             run.workflowSource?.version ?? run.workflowVersion,
           )}
         </p>
-        {run.error || error ? (
+        {run.error || error || controlError ? (
           <Alert variant="destructive" className="my-4" role="alert">
-            <AlertDescription>{error ?? run.error}</AlertDescription>
+            <AlertDescription>{controlError ?? error ?? run.error}</AlertDescription>
           </Alert>
         ) : null}
       </header>
@@ -180,14 +196,18 @@ export function RunActivityView(
                   onOpenInIde={props.onOpenInIde}
                 />
                 <ExecutionDetails run={run} execution={execution} />
+                {ticket && !run.stepExecutions.slice(index + 1).some((next) => next.implementationTicketId === ticket.id)
+                  ? (run.summaries ?? []).filter((summary) => summary.ticketId === ticket.id).map((summary) => <RunSummaryMessage key={ticket.id} summary={summary} onOpenInIde={props.onOpenInIde} />)
+                  : null}
                 {run.snapshot.pendingApprovalDetails?.continuation
                   .executionId === execution.id &&
-                run.snapshot.pendingApprovalDetails.decision === null ? (
+                run.snapshot.pendingApprovalDetails.decision === null && run.status === 'waiting' ? (
                   <Approval
                     run={run}
                     execution={execution}
-                    onApprove={props.onApprove}
-                    onReject={props.onReject}
+                    disabled={pending !== null}
+                    onApprove={() => { void perform('approve', props.onApprove) }}
+                    onReject={() => { void perform('reject', props.onReject) }}
                   />
                 ) : null}
               </section>
@@ -205,6 +225,7 @@ export function RunActivityView(
             </summary>
             <DeliveryCard delivery={model.delivery} />
           </details>
+          {run.status === 'completed' ? (run.summaries ?? []).filter((summary) => summary.scope === 'run').map((summary) => <RunSummaryMessage key="run-summary" summary={summary} onOpenInIde={props.onOpenInIde} />) : null}
         </div>
       </div>
       <footer
@@ -214,32 +235,16 @@ export function RunActivityView(
         <p className="mb-2 text-xs text-muted-foreground">
           {run.snapshot.nextAction}
         </p>
-        <RunActionButtons {...model} {...props} />
-        {question?.answer === null ? (
-          <form
-            className="mt-3 grid gap-2"
-            onSubmit={(event) => {
-              event.preventDefault()
-              if (answer.trim()) {
-                props.onAnswer(answer)
-                setAnswer('')
-              }
-            }}
-          >
-            <p className="text-sm">{question.question}</p>
-            <label className="text-xs" htmlFor="run-answer">
-              {copy.run.answerPlaceholder}
-            </label>
-            <Textarea
-              id="run-answer"
-              value={answer}
-              onChange={(event) => setAnswer(event.target.value)}
-            />
-            <Button className="w-fit" type="submit" disabled={!answer.trim()}>
-              {copy.run.answerAction}
-            </Button>
-          </form>
-        ) : null}
+        <RunComposer
+          run={run}
+          pending={pending}
+          onPause={() => perform('pause', props.onPause)}
+          onSubmit={(value) => run.status === 'failed'
+            ? perform('send', () => props.onRetry(value))
+            : run.status === 'waiting'
+              ? perform('send', () => props.onAnswer(value ?? ''))
+              : perform('send', () => props.onResume(value))}
+        />
       </footer>
     </main>
   )
@@ -313,11 +318,13 @@ function Approval({
   execution,
   onApprove,
   onReject,
+  disabled,
 }: {
   run: WorkflowRun
   execution: StepExecution
-  onApprove: () => void
-  onReject: () => void
+  onApprove: () => void | Promise<void | boolean>
+  onReject: () => void | Promise<void | boolean>
+  disabled: boolean
 }): React.JSX.Element {
   const step = run.definition.phases
     .find((phase) => phase.id === execution.phaseId)
@@ -333,10 +340,10 @@ function Approval({
     >
       <h4 className="font-semibold">{approval}</h4>
       <div className="mt-3 flex flex-wrap gap-2">
-        <Button size="sm" onClick={onApprove} disabled={!canApprove}>
+        <Button size="sm" onClick={onApprove} disabled={disabled || !canApprove}>
           {copy.run.approveAction}
         </Button>
-        <Button size="sm" variant="outline" onClick={onReject}>
+        <Button size="sm" variant="outline" onClick={onReject} disabled={disabled}>
           {copy.run.rejectAction}
         </Button>
       </div>

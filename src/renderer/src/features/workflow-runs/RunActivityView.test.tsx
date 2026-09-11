@@ -116,6 +116,103 @@ function fixture(): RunActivityViewProps {
 }
 
 describe('Run Activity View', () => {
+  it('keeps the composer visible while running and locks repeated pause clicks until interruption finishes', async () => {
+    const props = fixture()
+    let finish!: () => void
+    props.onPause = vi.fn(() => new Promise<void>((resolve) => { finish = resolve }))
+    const { rerender } = render(<RunActivityView {...props} />)
+    expect(screen.getByRole('textbox', { name: 'Run 输入' })).toBeDisabled()
+    const controls = screen.getByRole('contentinfo', { name: '可用操作' })
+    expect(within(controls).getAllByRole('button')).toHaveLength(1)
+    fireEvent.click(within(controls).getByRole('button', { name: '暂停' }))
+    fireEvent.click(within(controls).getByRole('button', { name: '正在暂停' }))
+    expect(props.onPause).toHaveBeenCalledTimes(1)
+    expect(screen.getByRole('textbox')).toBeDisabled()
+    await act(async () => { finish() })
+    rerender(<RunActivityView {...props} run={{ ...props.run, status: 'paused' }} />)
+    expect(screen.getByRole('textbox')).toBeEnabled()
+    expect(within(controls).getByRole('button', { name: '继续' })).toBeEnabled()
+  })
+  it.each(['paused', 'failed', 'waiting', 'blocked'] as const)('sends guidance or answers once from %s and preserves text after an error', async (status) => {
+    const props = fixture()
+    const question = { question: 'What next?', answer: null, continuation: { phaseIndex: 3, stepIndex: 0, executionId: 'execution-5' } }
+    const run: WorkflowRun = { ...props.run, status, snapshot: { ...props.run.snapshot,
+      ...(status === 'waiting' ? { pendingQuestion: question.question, pendingQuestionDetails: question } : {}),
+      ...(status === 'blocked' ? { blockedBy: { ...question.continuation, reason: 'Network unavailable', recoveryAction: 'resume' } } : {}),
+    } }
+    let finish!: (success: boolean) => void
+    const operation = vi.fn(() => new Promise<boolean>((resolve) => { finish = resolve }))
+    props.onResume = operation
+    props.onRetry = operation
+    props.onAnswer = operation
+    render(<RunActivityView {...props} run={run} />)
+    const input = screen.getByRole('textbox')
+    fireEvent.change(input, { target: { value: '修复测试后继续' } })
+    const form = input.closest('form')!
+    fireEvent.submit(form)
+    fireEvent.submit(form)
+    expect(operation).toHaveBeenCalledTimes(1)
+    expect(operation).toHaveBeenCalledWith('修复测试后继续')
+    expect(input).toBeDisabled()
+    await act(async () => { finish(false) })
+    expect(input).toHaveValue('修复测试后继续')
+    expect(input).toBeEnabled()
+    fireEvent.submit(form)
+    await act(async () => { finish(true) })
+    expect(input).toHaveValue('')
+  })
+
+  it('continues a paused attempt with empty input and hides unsupported blocked actions', async () => {
+    const props = fixture()
+    const { rerender } = render(<RunActivityView {...props} run={{ ...props.run, status: 'paused' }} />)
+    await userEvent.click(screen.getByRole('button', { name: '继续' }))
+    expect(props.onResume).toHaveBeenCalledWith(undefined)
+    rerender(<RunActivityView {...props} run={{ ...props.run, status: 'blocked' }} />)
+    expect(screen.getByRole('textbox')).toBeDisabled()
+    expect(screen.queryByRole('button', { name: '重试' })).not.toBeInTheDocument()
+  })
+
+  it('requires confirmation from the header menu before ending a Run', async () => {
+    const props = fixture()
+    render(<RunActivityView {...props} />)
+    const user = userEvent.setup()
+    expect(screen.queryByRole('menuitem', { name: '结束 Run' })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '更多 Run 操作' }))
+    await user.click(screen.getByRole('menuitem', { name: '结束 Run' }))
+    expect(props.onCancel).not.toHaveBeenCalled()
+    const dialog = screen.getByRole('alertdialog')
+    expect(dialog).toHaveTextContent('Workspace 修改、历史和 Artifact 均保留')
+    await user.click(within(dialog).getByRole('button', { name: '返回' }))
+    expect(props.onCancel).not.toHaveBeenCalled()
+    await user.click(screen.getByRole('button', { name: '更多 Run 操作' }))
+    await user.click(screen.getByRole('menuitem', { name: '结束 Run' }))
+    await user.click(screen.getByRole('button', { name: '确认结束' }))
+    expect(props.onCancel).toHaveBeenCalledTimes(1)
+  })
+
+  it('renders adaptive durable summaries after the final Ticket attempt and as the last formal Run message', () => {
+    const props = fixture()
+    const summary = {
+      scope: 'ticket' as const, ticketId: 'ticket-5', title: '功能 5', status: 'completed' as const,
+      finishedAt: '2026-09-11T00:01:00Z', durationMs: 60000, attemptCount: 2, ticketCount: 1,
+      failedAttemptCount: 1, interruptionCount: 1, failures: ['首次 Review 失败'],
+      results: [{ category: 'implementation' as const, name: '功能 5', status: 'completed' }],
+      files: [{ path: 'src/run.ts', kinds: ['add' as const], additions: 15, deletions: 2 }], artifacts: [],
+    }
+    const run = { ...props.run, status: 'completed' as const, summaries: [summary, { ...summary, scope: 'run' as const, ticketId: null, title: props.run.idea }] }
+    render(<RunActivityView {...props} run={run} runtimeItemsUnavailable />)
+    const ticket = screen.getByRole('article', { name: 'Ticket 累计总结：功能 5' })
+    expect(ticket).toHaveTextContent('实现：已完成')
+    expect(ticket).toHaveTextContent('+15 -2')
+    expect(ticket).toHaveTextContent('失败 attempt 1')
+    expect(ticket).toHaveTextContent('中断 1 次')
+    expect(within(ticket).queryByText(/^测试：/)).not.toBeInTheDocument()
+    expect(within(ticket).queryByText('Artifact')).not.toBeInTheDocument()
+    const activity = screen.getByRole('region', { name: 'Run Activity View' })
+    expect(within(activity).getAllByRole('article').at(-1)).toHaveAccessibleName('Workflow Run 最终总结')
+    expect(screen.getByRole('textbox')).toBeDisabled()
+  })
+
   it('shows one Workflow phase per definition and Ticket 5/12 with its four stage states', () => {
     const props = fixture()
     render(<RunActivityView {...props} />)
@@ -474,9 +571,9 @@ describe('Run Activity View', () => {
         />,
       )
       expect(
-        screen.getByRole('button', { name: '重试失败 Step' }),
-      ).toBeDisabled()
-      expect(screen.getByRole('button', { name: '继续' })).toBeDisabled()
+        screen.queryByRole('button', { name: '重试失败 Step' }),
+      ).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: '继续' })).not.toBeInTheDocument()
     },
   )
 })

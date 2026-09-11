@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { runControlAvailability } from './run-activity-model'
 import { MoreHorizontal } from 'lucide-react'
 import { DropdownMenu } from 'radix-ui'
 
@@ -21,8 +22,8 @@ export function RunComposer({ run, pending, onPause, onSubmit }: {
 }): React.JSX.Element {
   const [input, setInput] = useState('')
   const question = run.status === 'waiting' ? run.snapshot.pendingQuestionDetails : null
-  const canResume = run.status === 'paused' || (run.status === 'blocked' && run.snapshot.blockedBy?.recoveryAction === 'resume')
-  const canSend = run.status === 'failed' || question?.answer === null
+  const { canResume, canRetry, canAnswer } = runControlAvailability(run)
+  const canSend = canRetry || canAnswer
   const enabled = pending === null && (canResume || canSend)
   const label = pending === 'pause' ? copy.run.pausing
     : pending ? copy.run.processing

@@ -82,7 +82,7 @@ export interface CodexSessionModule {
   preflight(input: CodexSessionPreflightInput): Promise<CodexCapabilityNegotiation>
   runTurn(input: CodexSessionTurnInput): Promise<CodexSessionTurnResult>
   interrupt(locator: Pick<RuntimeLocator, 'threadId' | 'turnId'>): Promise<boolean>
-  respondToApproval(request: CodexRuntimeApprovalRequest, result: unknown): Promise<CodexSessionTurnResult>
+  respondToApproval(request: CodexRuntimeApprovalRequest, result: unknown, endTurn?: boolean): Promise<CodexSessionTurnResult>
   readThread(input: CodexSessionPreflightInput & {
     locator: Pick<RuntimeLocator, 'threadId'> & Partial<Omit<RuntimeLocator, 'threadId'>>
     projectionScope?: Omit<CodexItemProjectionScope, 'runtimeLocator'>
@@ -385,6 +385,8 @@ export function createCodexSessionModule(dependencies: CodexSessionModuleDepende
     input: CodexSessionTurnInput
     waitingRequest: CodexRuntimeApprovalRequest | null
     waitingRawRequest: JsonRpcServerRequest | null
+    stopping?: boolean
+    respondedRequestId?: string
     processing: Promise<CodexSessionTurnResult> | null
   }
   const turnStates = new Map<string, TurnState>()
@@ -455,15 +457,28 @@ export function createCodexSessionModule(dependencies: CodexSessionModuleDepende
     await transport.close().catch(() => undefined)
   }
 
-  async function respondToApproval(request: CodexRuntimeApprovalRequest, result: unknown): Promise<CodexSessionTurnResult> {
+  async function respondToApproval(request: CodexRuntimeApprovalRequest, result: unknown, endTurn?: boolean): Promise<CodexSessionTurnResult> {
     const state = [...turnStates.values()].find((candidate) => candidate.waitingRequest?.id === request.id)
     const original = state?.waitingRawRequest ?? null
     if (!state || !original) throw new Error(zhCNMain.codexSession.approvalContinuationExpired)
     if (!state.transport.respond) throw new Error(zhCNMain.codexSession.approvalExpired)
     const normalized = normalizeApprovalResult(original, result)
-    await state.transport.respond(original.id, normalized)
-    if (state.input.executionId) {
-      observeProjection(() => itemProjection?.completeRequest(original, normalized, projectionScope(state)))
+    if (state.respondedRequestId !== request.id) {
+      await state.transport.respond(original.id, normalized)
+      state.respondedRequestId = request.id
+      if (state.input.executionId) {
+        observeProjection(() => itemProjection?.completeRequest(original, normalized, projectionScope(state)))
+      }
+    }
+    if (endTurn) {
+      state.stopping = true
+      try {
+        await state.transport.request('turn/interrupt', { threadId: state.locator.threadId, turnId: state.locator.turnId })
+      } catch (error) {
+        state.stopping = false
+        throw error
+      }
+      if (state.input.executionId) observeProjection(() => itemProjection?.setInterrupt('in_progress', projectionScope(state)))
     }
     state.waitingRequest = null
     state.waitingRawRequest = null
@@ -486,6 +501,7 @@ export function createCodexSessionModule(dependencies: CodexSessionModuleDepende
           }
         }
         if ('id' in message) {
+          if (state.stopping) continue
           const request = message as JsonRpcServerRequest
           const publicRequest = publicApprovalRequest(request)
           if (state.input.executionId) {
@@ -605,8 +621,15 @@ export function createCodexSessionModule(dependencies: CodexSessionModuleDepende
       const activeKey = `${locator.threadId}:${locator.turnId}`
       const transport = activeTransports.get(activeKey)
       if (!transport) return false
-      await transport.request('turn/interrupt', { threadId: locator.threadId, turnId: locator.turnId })
       const state = turnStates.get(activeKey)
+      const wasStopping = state?.stopping
+      if (state) state.stopping = true
+      try {
+        await transport.request('turn/interrupt', { threadId: locator.threadId, turnId: locator.turnId })
+      } catch (error) {
+        if (state) state.stopping = wasStopping
+        throw error
+      }
       if (state?.input.executionId) {
         observeProjection(() => itemProjection?.setInterrupt('in_progress', projectionScope(state)))
       }

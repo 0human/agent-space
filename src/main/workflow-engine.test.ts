@@ -1326,6 +1326,22 @@ describe('WorkflowEngine public API', () => {
     expect(resumedContexts[1]?.implementationTicket?.stages).toMatchObject({ implementation: 'completed', testing: 'running' })
   })
 
+  it.each(['pause', 'cancel'] as const)('handles %s before a Turn has been dispatched without stranding a running Run', async (action) => {
+    directory = await mkdtemp(join(tmpdir(), 'agent-space-run-'))
+    const runtime = new FakeRuntime()
+    engine = createWorkflowEngine({ databasePath: join(directory, 'runs.sqlite'), runtime })
+    const run = await engine.startRun({ project, workflow, idea: 'Stop at the scheduling boundary' })
+    const stopped = action === 'pause' ? await engine.pauseRun(run.id) : await engine.cancelRun(run.id)
+    expect(stopped.status).toBe(action === 'pause' ? 'paused' : 'cancelled')
+    expect(runtime.calls).toHaveLength(0)
+    if (action === 'pause') {
+      await engine.resumeRun(run.id)
+      await vi.waitFor(() => expect(runtime.calls).toHaveLength(1))
+      runtime.finish([{ type: 'status_changed', status: 'completed' }])
+      expect((await engine.waitForIdle(run.id)).status).toBe('completed')
+    }
+  })
+
   it.each(['pause', 'cancel'] as const)('does not schedule the next Step when %s races with Turn completion or repeats', async (action) => {
     directory = await mkdtemp(join(tmpdir(), 'agent-space-run-'))
     const runtime = new FakeRuntime()
@@ -1351,7 +1367,7 @@ describe('WorkflowEngine public API', () => {
     expect(outcomes[0].stepExecutions).toHaveLength(1)
   })
 
-  it.each(['approve', 'answer', 'reject', 'end'] as const)('handles %s on the original waiting Codex Turn', async (action) => {
+  it.each(['approve', 'answer', 'reject', 'end', 'reject-retry'] as const)('handles %s on the original waiting Codex Turn', async (action) => {
     directory = await mkdtemp(join(tmpdir(), 'agent-space-run-'))
     const incoming: Array<JsonRpcNotification | JsonRpcServerRequest> = [{
       id: 'original-request', method: action === 'answer' ? 'item/tool/requestUserInput' : 'item/commandExecution/requestApproval',
@@ -1363,6 +1379,7 @@ describe('WorkflowEngine public API', () => {
       request: async (method: string) => {
         requests.push(method)
         if (method === 'initialize') return { userAgent: 'codex/1.0.0', capabilities: { methods: ['thread/start', 'thread/resume', 'thread/read', 'turn/start', 'turn/interrupt'], events: ['item/started', 'item/completed', 'turn/completed'] } }
+        if (method === 'turn/interrupt' && action === 'reject-retry' && requests.filter((method) => method === 'turn/interrupt').length === 1) throw new Error('Interrupt temporarily unavailable')
         if (method === 'turn/interrupt') incoming.push({ method: 'turn/completed', params: { threadId: 'original-thread', turn: { id: 'original-turn', status: 'interrupted' } } })
         if (method === 'turn/start') return { turn: { id: 'original-turn' } }
         return { thread: { id: 'original-thread' } }
@@ -1370,11 +1387,13 @@ describe('WorkflowEngine public API', () => {
       notify: async () => undefined,
       respond: async (id: string | number, result: unknown) => {
         replies.push({ id, result })
-        incoming.push({ method: 'turn/completed', params: { threadId: 'original-thread', turn: { id: 'original-turn', status: 'completed' } } })
+        incoming.push(action === 'reject' || action === 'reject-retry'
+          ? { id: 'followup-request', method: 'item/commandExecution/requestApproval', params: { threadId: 'original-thread', turnId: 'original-turn', command: 'git diff' } }
+          : { method: 'turn/completed', params: { threadId: 'original-thread', turn: { id: 'original-turn', status: 'completed' } } })
       },
       nextMessage: async () => incoming.shift() ?? null,
       nextNotification: async () => null,
-      close: async () => undefined,
+      close: vi.fn(async () => undefined),
     }
     const runtime = createCodexRuntimeAdapter({ createTransport: () => transport })
     // The protocol transport is the external boundary; skip unrelated CLI login checks.
@@ -1387,13 +1406,59 @@ describe('WorkflowEngine public API', () => {
     if (action === 'answer') await engine.answerQuestion(run.id, 'blue')
     if (action === 'reject') await engine.reject(run.id)
     if (action === 'end') await engine.cancelRun(run.id)
+    if (action === 'reject-retry') {
+      await expect(engine.reject(run.id)).rejects.toThrow('Interrupt temporarily unavailable')
+      expect((await engine.getRun(run.id))?.status).toBe('waiting')
+      await engine.reject(run.id)
+    }
     const finished = await engine.waitForIdle(run.id)
-    expect(finished.status).toBe(action === 'reject' || action === 'end' ? 'cancelled' : 'completed')
+    expect(finished.status).toBe(action === 'reject' || action === 'reject-retry' || action === 'end' ? 'cancelled' : 'completed')
+    expect(transport.close).toHaveBeenCalledTimes(1)
+    if (action === 'reject-retry') expect(requests.filter((method) => method === 'turn/interrupt')).toHaveLength(2)
     expect(finished.stepExecutions).toHaveLength(1)
     expect(finished.stepExecutions[0].runtimeLocators).toHaveLength(1)
     expect(requests.filter((method) => method === 'turn/start')).toHaveLength(1)
-    if (action === 'end') expect(requests).toContain('turn/interrupt')
+    if (action === 'end' || action === 'reject' || action === 'reject-retry') expect(requests).toContain('turn/interrupt')
+    if (action === 'end') expect(replies).toEqual([])
     else expect(replies).toEqual([{ id: 'original-request', result: action === 'answer' ? { answers: { color: { answers: ['blue'] } } } : { decision: action === 'approve' ? 'accept' : 'decline' } }])
+  })
+
+  it('still presents a Runtime Approval after a pause interrupt fails', async () => {
+    directory = await mkdtemp(join(tmpdir(), 'agent-space-run-'))
+    type Message = JsonRpcNotification | JsonRpcServerRequest
+    const queued: Message[] = []
+    let receive: ((message: Message) => void) | undefined
+    const enqueue = (message: Message): void => {
+      if (receive) { const resolve = receive; receive = undefined; resolve(message) }
+      else queued.push(message)
+    }
+    let interrupts = 0
+    const transport = {
+      request: async (method: string) => {
+        if (method === 'initialize') return { userAgent: 'codex/1.0.0', capabilities: { methods: ['thread/start', 'thread/resume', 'thread/read', 'turn/start', 'turn/interrupt'], events: ['item/started', 'item/completed', 'turn/completed'] } }
+        if (method === 'turn/start') return { turn: { id: 'turn-pause-error' } }
+        if (method === 'turn/interrupt') {
+          if (++interrupts === 1) throw new Error('Temporary interrupt failure')
+          enqueue({ method: 'turn/completed', params: { threadId: 'thread-pause-error', turn: { id: 'turn-pause-error', status: 'interrupted' } } })
+        }
+        return { thread: { id: 'thread-pause-error' } }
+      },
+      notify: async () => undefined,
+      nextMessage: async () => queued.shift() ?? new Promise<Message>((resolve) => { receive = resolve }),
+      nextNotification: async () => null,
+      close: vi.fn(async () => undefined),
+    }
+    const runtime = createCodexRuntimeAdapter({ createTransport: () => transport })
+    runtime.preflight = undefined
+    engine = createWorkflowEngine({ databasePath: join(directory, 'runs.sqlite'), runtime })
+    const run = await engine.startRun({ project, workflow, idea: 'Recover a failed interrupt' })
+    await vi.waitFor(async () => expect((await engine.getRun(run.id))?.stepExecutions[0].runtimeLocators).toHaveLength(1))
+    await expect(engine.pauseRun(run.id)).rejects.toThrow('Temporary interrupt failure')
+    enqueue({ id: 'after-pause-error', method: 'item/commandExecution/requestApproval', params: { threadId: 'thread-pause-error', turnId: 'turn-pause-error', command: 'git status' } })
+    await vi.waitFor(async () => expect((await engine.getRun(run.id))?.status).toBe('waiting'))
+    await engine.cancelRun(run.id)
+    expect((await engine.getRun(run.id))?.status).toBe('cancelled')
+    expect(transport.close).toHaveBeenCalledTimes(1)
   })
 
   it('interrupts the active Turn before ending a running Run', async () => {

@@ -253,7 +253,7 @@ function runtimeLogMessage(event: RuntimeEvent): string {
     case 'question': return event.question
     case 'approval_required': return event.approval
     case 'artifact_produced': return event.artifact.name
-    case 'file_changes': return '文件修改累计数据'
+    case 'file_changes': return zhCNMain.workflowRun.fileChangesSummary
     case 'ticket_progress': return `${event.stage}:${event.status}`
     case 'status_changed': return event.status
     case 'error': return event.error

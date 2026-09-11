@@ -36,6 +36,8 @@ export const zhCNMain = {
     ideUnavailable: '没有找到可用的外部 IDE。'
   },
   workflowRun: {
+    controlInProgress: 'Run 正在处理另一个操作。',
+    fileChangesSummary: '文件修改累计数据',
     runtimeBlocked: 'Runtime 报告当前 Step blocked。',
     workspaceUnavailable: 'Project Workspace 不可访问。',
     workflowInvalid: (errors: string) => `Project Workflow Validation 失败：${errors}`,
@@ -72,6 +74,7 @@ export const zhCNMain = {
     turnNotActive: '当前 Runtime Turn 不可中断。'
   },
   codexRuntime: {
+    requestUnanswered: '当前 Runtime 请求尚未收到有效回答。',
     cliAvailable: 'Codex CLI 可用。',
     cliUnavailable: 'Codex CLI 不可用。',
     credentialsAvailable: 'Codex 凭据可用。',

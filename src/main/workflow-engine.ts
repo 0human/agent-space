@@ -162,12 +162,16 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
   const platform = supportedPlatform(dependencies.platform ?? process.platform)
   const active = new Map<string, Promise<void>>()
   const controls = new Map<string, { action: string; promise: Promise<WorkflowRun> }>()
+  const executing = new Set<string>()
   let closed = false
 
   function control(runId: string, action: string, operation: () => Promise<WorkflowRun>): Promise<WorkflowRun> {
     const pending = controls.get(runId)
-    if (pending) return pending.action === action ? pending.promise : Promise.reject(new Error('Run 正在处理另一个操作。'))
-    const promise = Promise.resolve().then(operation).finally(() => { controls.delete(runId) })
+    if (pending) return pending.action === action ? pending.promise : Promise.reject(new Error(zhCNMain.workflowRun.controlInProgress))
+    const promise = Promise.resolve().then(operation).finally(async () => {
+      controls.delete(runId)
+      if (!closed && (await store.getRun(runId))?.status === 'running') ensureRunning(runId)
+    })
     controls.set(runId, { action, promise })
     return promise
   }
@@ -223,6 +227,7 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
       }
       let events: RuntimeEventInput[]
       let delivery: GitPullRequestResult | null = null
+      executing.add(runId)
       try {
         if (pullRequestStep) {
           if (!dependencies.gitDeliveryManager?.deliverPullRequest) throw new Error('GitHub delivery adapter 不可用。')
@@ -277,7 +282,7 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
           : [{ type: 'error' as const, error: message }]
       }
       events = normalizeExternalFailure(events)
-      if (closed) return
+      if (closed) { executing.delete(runId); return }
       const reviewStep = step?.id === 'review' || step?.skill?.name === 'code-review' || /review/i.test(step?.name ?? '')
       if (!stopIntent(runId) && reviewStep && events.some((event) => event.type === 'status_changed' && event.status === 'completed') && !events.some((event) => event.type === 'error') && dependencies.gitDeliveryManager) {
         try {
@@ -290,6 +295,7 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
           events.push({ type: 'error', error: error instanceof Error ? error.message : String(error), source: 'git.commit' })
         }
       }
+      executing.delete(runId)
       let updated = await store.recordRuntimeResult(runId, execution.id, events, stopIntent(runId))
       if (delivery) updated = await store.setPullRequest(runId, delivery.pullRequest)
       if (updated.status !== 'running' || updated.snapshot.currentStepExecutionId === execution.id) return
@@ -469,6 +475,10 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
       return control(runId, 'pause', async () => {
         const current = await requireRunStatus(runId, '暂停', ['running'])
         if (await interruptActiveTurn(current)) return (await store.getRun(runId)) ?? current
+        if (!executing.has(runId)) {
+          await active.get(runId)
+          return store.setStatus(runId, 'paused')
+        }
         throw new Error('当前 Runtime Turn 无法安全暂停。')
       })
     },
@@ -498,7 +508,8 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
       return control(runId, 'cancel', async () => {
         const current = await requireRunStatus(runId, '结束 Run', ['running', 'paused', 'waiting', 'blocked', 'failed'])
         if (current.status === 'running' && !(await interruptActiveTurn(current))) {
-          throw new Error('当前 Runtime Turn 无法安全结束。')
+          if (executing.has(runId)) throw new Error('当前 Runtime Turn 无法安全结束。')
+          await active.get(runId)
         }
         if (current.status === 'waiting') await interruptActiveTurn(current)
         return store.setStatus(runId, 'cancelled')

@@ -532,7 +532,7 @@ export function createCodexRuntimeAdapter(dependencies: CodexRuntimeDependencies
         if (pending) {
           const answer = context.execution.input?.answer
           const approved = context.events.some((event) => event.type === 'approval_approved' && event.data.executionId === context.execution.id)
-          if (pending.request.kind === 'question' ? typeof answer !== 'string' : !approved) throw new Error('当前 Runtime 请求尚未收到有效回答。')
+          if (pending.request.kind === 'question' ? typeof answer !== 'string' : !approved) throw new Error(zhCNMain.codexRuntime.requestUnanswered)
           pendingRequests.delete(context.execution.id)
           result = await session.respondToApproval(pending.request, pending.request.kind === 'question' ? { answer } : { approved })
         } else result = await session.runTurn({
@@ -590,12 +590,9 @@ export function createCodexRuntimeAdapter(dependencies: CodexRuntimeDependencies
     async rejectApproval(context) {
       const pending = pendingRequests.get(context.executionId)
       if (!pending) return
+      await session.respondToApproval(pending.request, { approved: false }, true)
       pendingRequests.delete(context.executionId)
-      try {
-        await session.respondToApproval(pending.request, { approved: false })
-      } finally {
-        await pending.guard?.cleanup().catch(() => undefined)
-      }
+      await pending.guard?.cleanup().catch(() => undefined)
     }
   }
 }

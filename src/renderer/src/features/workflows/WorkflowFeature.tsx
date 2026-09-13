@@ -251,78 +251,6 @@ export function WorkflowFeature({
             <AlertDescription>{error}</AlertDescription>
           </Alert>
         ) : null}
-        <Card className="mt-7" aria-labelledby="run-launcher-title">
-          <CardHeader>
-            <p className="text-[11px] font-semibold text-muted-foreground">
-              {copy.workflow.preflightEyebrow}
-            </p>
-            <CardTitle>
-              <h2 id="run-launcher-title">{copy.workflow.launchTitle}</h2>
-            </CardTitle>
-            <CardDescription>{copy.workflow.launchDescription}</CardDescription>
-            {workflow.source === 'built-in' ? (
-              <p className="text-xs text-muted-foreground">
-                {copy.workflow.directRunDescription}
-              </p>
-            ) : null}
-          </CardHeader>
-          <CardContent className="grid gap-3">
-            <label className="text-sm font-medium" htmlFor="workflow-idea">
-              {copy.workflow.ideaLabel}
-            </label>
-            <Textarea
-              id="workflow-idea"
-              value={idea}
-              onChange={(event) => {
-                setIdea(event.target.value)
-                setPreflight(null)
-              }}
-              placeholder={copy.workflow.ideaPlaceholder}
-            />
-            <div className="flex flex-wrap gap-2">
-              <Button
-                variant="outline"
-                type="button"
-                onClick={() => {
-                  void runPreflight()
-                }}
-                disabled={!workflow.canStart || !idea.trim()}
-              >
-                <ShieldAlert aria-hidden="true" />
-                {copy.workflow.preflightAction}
-              </Button>
-              <Button
-                type="button"
-                onClick={() => {
-                  void startWorkflowRun()
-                }}
-                disabled={!preflight?.passed}
-              >
-                <ArrowRight aria-hidden="true" />
-                {copy.workflow.startAction}
-              </Button>
-            </div>
-            {preflight ? (
-              <Alert
-                variant={preflight.passed ? 'default' : 'destructive'}
-                role={preflight.passed ? 'status' : 'alert'}
-              >
-                <AlertDescription>
-                  {preflight.checks.map((check) => (
-                    <span className="block" key={check}>
-                      {check}
-                    </span>
-                  ))}
-                  {preflight.errors.map((message) => (
-                    <span className="block" key={message}>
-                      {message}
-                    </span>
-                  ))}
-                </AlertDescription>
-              </Alert>
-            ) : null}
-          </CardContent>
-        </Card>
         <div className="mt-8 grid gap-5" aria-label={copy.workflow.phaseList}>
           {definition.phases.map((phase, phaseIndex) => (
             <Card key={phase.id} aria-labelledby={`phase-${phase.id}`}>
@@ -340,7 +268,7 @@ export function WorkflowFeature({
                 </div>
               </CardHeader>
               <CardContent className="grid gap-3">
-                {phase.steps.map((step) => (
+                {phase.steps.map((step, stepIndex) => (
                   <div
                     className="rounded-lg border border-border p-4"
                     key={step.id}
@@ -385,6 +313,74 @@ export function WorkflowFeature({
                         </span>
                       ) : null}
                     </div>
+                    {phaseIndex === 0 && stepIndex === 0 ? (
+                      <div className="mt-5 grid gap-3 border-t border-border pt-5">
+                        <p
+                          id="workflow-idea-description"
+                          className="text-sm text-muted-foreground"
+                        >
+                          {copy.workflow.launchDescription}
+                        </p>
+                        <label
+                          className="text-sm font-medium"
+                          htmlFor="workflow-idea"
+                        >
+                          {copy.workflow.ideaLabel}
+                        </label>
+                        <Textarea
+                          id="workflow-idea"
+                          aria-describedby="workflow-idea-description"
+                          value={idea}
+                          onChange={(event) => {
+                            setIdea(event.target.value)
+                            setPreflight(null)
+                          }}
+                          placeholder={copy.workflow.ideaPlaceholder}
+                        />
+                        <div className="flex flex-wrap gap-2">
+                          <Button
+                            variant="outline"
+                            type="button"
+                            onClick={() => {
+                              void runPreflight()
+                            }}
+                            disabled={!workflow.canStart || !idea.trim()}
+                          >
+                            <ShieldAlert aria-hidden="true" />
+                            {copy.workflow.preflightAction}
+                          </Button>
+                          <Button
+                            type="button"
+                            onClick={() => {
+                              void startWorkflowRun()
+                            }}
+                            disabled={!preflight?.passed}
+                          >
+                            <ArrowRight aria-hidden="true" />
+                            {copy.workflow.startAction}
+                          </Button>
+                        </div>
+                        {preflight ? (
+                          <Alert
+                            variant={preflight.passed ? 'default' : 'destructive'}
+                            role={preflight.passed ? 'status' : 'alert'}
+                          >
+                            <AlertDescription>
+                              {preflight.checks.map((check) => (
+                                <span className="block" key={check}>
+                                  {check}
+                                </span>
+                              ))}
+                              {preflight.errors.map((message) => (
+                                <span className="block" key={message}>
+                                  {message}
+                                </span>
+                              ))}
+                            </AlertDescription>
+                          </Alert>
+                        ) : null}
+                      </div>
+                    ) : null}
                   </div>
                 ))}
               </CardContent>

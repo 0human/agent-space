@@ -10,8 +10,6 @@ export const workflowCopy = {
     version: (version: string) => `版本 ${version}`,
     origin: (version: string) => `来源：Development Workflow@${version}`,
     directRunAction: '直接运行内置 Workflow',
-    directRunDescription:
-      '无需复制即可运行当前内置版本；创建 Run 时会保存完整 Definition 快照。',
     copyAction: '复制为 Project Workflow',
     copyError: '复制 Workflow 失败。',
     editAction: '在外部 IDE 中编辑',
@@ -19,10 +17,8 @@ export const workflowCopy = {
     reloadAction: '重新加载并校验',
     reloadError: '重新加载 Workflow 失败。',
     startAction: '启动新 Run',
-    preflightEyebrow: 'Run Preflight',
-    launchTitle: '输入 Idea，启动 Workflow Run',
     launchDescription:
-      '启动前检查 Workspace 和 Project Workflow；检查结果会随 Run 保存。',
+      '从这里描述你想推进的想法，完成启动检查后开始第一步。',
     ideaLabel: 'Idea',
     ideaPlaceholder: '描述你想推进的 Idea',
     preflightAction: '运行 Preflight',

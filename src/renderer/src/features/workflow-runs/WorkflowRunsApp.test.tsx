@@ -142,9 +142,9 @@ describe('Workflow Run through the App seam', () => {
       screen.getByText('Human Step：确认冲突解决结果后继续 Run'),
     ).toBeVisible()
     expect(screen.getByRole('contentinfo', { name: '可用操作' })).toBeVisible()
-    expect(screen.getAllByRole('button', { name: '继续' }).at(-1)).toBeEnabled()
+    expect(screen.getByRole('button', { name: '重试' })).toBeEnabled()
     expect(
-      screen.getAllByRole('button', { name: '取消 Run' }).at(-1),
+      screen.getByRole('button', { name: '更多 Run 操作' }),
     ).toBeEnabled()
   })
 
@@ -660,7 +660,7 @@ describe('Workflow Run through the App seam', () => {
 
     expect(
       screen
-        .getAllByRole('button', { name: '继续' })
+        .queryAllByRole('button', { name: '继续' })
         .every((button) => (button as HTMLButtonElement).disabled),
     ).toBe(true)
   })

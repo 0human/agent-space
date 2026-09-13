@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import type { Project } from '../../../../shared/project'
 import type { RuntimeItem, WorkflowRun } from '../../../../shared/workflow-run'
@@ -24,12 +24,17 @@ export function WorkflowRunFeature({
   const [runtimeItemsUnavailable, setRuntimeItemsUnavailable] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  const revision = useRef(0)
+
   useEffect(() => {
     let disposed = false
+    let latestRequest = 0
     const refresh = async (): Promise<void> => {
+      const request = ++latestRequest
       try {
+        const requestRevision = revision.current
         const current = await api.getWorkflowRun(run.id)
-        if (!disposed && current) setRun(current)
+        if (!disposed && current && requestRevision === revision.current && request === latestRequest) setRun(current)
       } catch {
         // Polling retains the most recent durable projection.
       }
@@ -81,12 +86,16 @@ export function WorkflowRunFeature({
 
   const updateRun = async (
     operation: () => Promise<WorkflowRun>,
-  ): Promise<void> => {
+  ): Promise<boolean> => {
+    revision.current += 1
     try {
       setRun(await operation())
+      revision.current += 1
       setError(null)
+      return true
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason))
+      return false
     }
   }
 
@@ -103,27 +112,13 @@ export function WorkflowRunFeature({
         }).catch(() => setError(copy.run.openInIdeError))
       }}
       onBack={() => onNavigate({ name: 'projectDetail', project })}
-      onPause={() => {
-        void updateRun(() => api.pauseWorkflowRun(run.id))
-      }}
-      onResume={() => {
-        void updateRun(() => api.resumeWorkflowRun(run.id))
-      }}
-      onRetry={() => {
-        void updateRun(() => api.retryWorkflowStep(run.id))
-      }}
-      onCancel={() => {
-        void updateRun(() => api.cancelWorkflowRun(run.id))
-      }}
-      onAnswer={(answer) => {
-        void updateRun(() => api.answerWorkflowQuestion(run.id, answer))
-      }}
-      onApprove={() => {
-        void updateRun(() => api.approveWorkflowApproval(run.id))
-      }}
-      onReject={() => {
-        void updateRun(() => api.rejectWorkflowApproval(run.id))
-      }}
+      onPause={() => updateRun(() => api.pauseWorkflowRun(run.id))}
+      onResume={(guidance) => updateRun(() => api.resumeWorkflowRun(run.id, guidance))}
+      onRetry={(guidance) => updateRun(() => api.retryWorkflowStep(run.id, guidance))}
+      onCancel={() => updateRun(() => api.cancelWorkflowRun(run.id))}
+      onAnswer={(answer) => updateRun(() => api.answerWorkflowQuestion(run.id, answer))}
+      onApprove={() => updateRun(() => api.approveWorkflowApproval(run.id))}
+      onReject={() => updateRun(() => api.rejectWorkflowApproval(run.id))}
     />
   )
 }

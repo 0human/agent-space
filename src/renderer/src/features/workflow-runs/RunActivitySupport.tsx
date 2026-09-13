@@ -1,24 +1,5 @@
-import {
-  ArrowRight,
-  Pause,
-  RotateCcw,
-  Square,
-} from 'lucide-react'
-
 import type { WorkflowRunStatus } from '../../../../shared/workflow-run'
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from '@renderer/components/ui/alert-dialog'
 import { Badge } from '@renderer/components/ui/badge'
-import { Button } from '@renderer/components/ui/button'
 import {
   Card,
   CardContent,
@@ -28,88 +9,6 @@ import {
 import { zhCN as copy } from '@renderer/i18n/zh-CN'
 
 import type { DeliveryProjection } from './run-activity-model'
-
-export function RunActionButtons({
-  canPause,
-  canResume,
-  canRetry,
-  canCancel,
-  onPause,
-  onResume,
-  onRetry,
-  onCancel,
-}: {
-  canPause: boolean
-  canResume: boolean
-  canRetry: boolean
-  canCancel: boolean
-  onPause: () => void
-  onResume: () => void
-  onRetry: () => void
-  onCancel: () => void
-}): React.JSX.Element {
-  return (
-    <div className="flex flex-wrap gap-2">
-      <Button
-        size="sm"
-        variant="outline"
-        type="button"
-        onClick={onPause}
-        disabled={!canPause}
-      >
-        <Pause aria-hidden="true" />
-        {copy.run.pause}
-      </Button>
-      <Button
-        size="sm"
-        variant="outline"
-        type="button"
-        onClick={onResume}
-        disabled={!canResume}
-      >
-        <ArrowRight aria-hidden="true" />
-        {copy.run.resume}
-      </Button>
-      <Button
-        size="sm"
-        variant="outline"
-        type="button"
-        onClick={onRetry}
-        disabled={!canRetry}
-      >
-        <RotateCcw aria-hidden="true" />
-        {copy.run.retry}
-      </Button>
-      <AlertDialog>
-        <AlertDialogTrigger asChild>
-          <Button
-            size="sm"
-            variant="outline"
-            type="button"
-            disabled={!canCancel}
-          >
-            <Square aria-hidden="true" />
-            {copy.run.cancel}
-          </Button>
-        </AlertDialogTrigger>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>{copy.run.cancelConfirmTitle}</AlertDialogTitle>
-            <AlertDialogDescription>
-              {copy.run.cancelConfirmDescription}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>{copy.run.cancelConfirmBack}</AlertDialogCancel>
-            <AlertDialogAction variant="destructive" onClick={onCancel}>
-              {copy.run.cancelConfirmAction}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-    </div>
-  )
-}
 
 export function DeliveryCard({
   delivery,
@@ -189,7 +88,7 @@ export function DeliveryCard({
 export function StatusBadge({ status }: { status: string }): React.JSX.Element {
   const label =
     copy.run.status[status as WorkflowRunStatus] ??
-    (status === 'pending' ? copy.run.pending : status)
+    (status === 'interrupting' ? copy.run.pausing : status === 'pending' ? copy.run.pending : status)
   return (
     <Badge
       variant={

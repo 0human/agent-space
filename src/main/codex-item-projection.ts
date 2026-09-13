@@ -1,7 +1,8 @@
+import { fileChanges } from './runtime-file-changes'
 import type { PermissionPolicy } from '../shared/project'
 import { runtimeItemIdentity, type RuntimeApprovalDecision, type RuntimeApprovalItem, type RuntimeErrorItem, type RuntimeFileChange, type RuntimeItem, type RuntimeItemStatus, type RuntimeLocator, type RuntimeQuestion, type RuntimeQuestionItem } from '../shared/workflow-run'
 import type { JsonRpcNotification, JsonRpcServerRequest } from './codex-app-server-transport'
-import { sanitizePermissionPolicy, sanitizeSensitivePath, sanitizeSensitiveText } from './sensitive-text'
+import { sanitizePermissionPolicy, sanitizeSensitiveText } from './sensitive-text'
 
 const recognizedItemTypes = new Set(['agentMessage', 'commandExecution', 'fileChange', 'plan', 'mcpToolCall', 'dynamicToolCall', 'reasoning'])
 
@@ -78,30 +79,6 @@ function errorCode(value: unknown): string {
   if (typeof value !== 'string' && typeof value !== 'number') return 'unknown'
   const safe = sanitizeSensitiveText(String(value))
   return /^[A-Za-z0-9._-]{1,64}$/.test(safe) && !/(?:token|secret|password|authorization|credential|key)/i.test(safe) ? safe : 'unknown'
-}
-
-function lineCounts(diff: string): { additions: number; deletions: number } {
-  let additions = 0
-  let deletions = 0
-  for (const line of diff.split(/\r?\n/)) {
-    if (line.startsWith('+++') || line.startsWith('---')) continue
-    if (line.startsWith('+')) additions += 1
-    if (line.startsWith('-')) deletions += 1
-  }
-  return { additions, deletions }
-}
-
-function fileChanges(value: unknown): RuntimeFileChange[] {
-  if (!Array.isArray(value)) return []
-  return value.flatMap((entry) => {
-    const change = record(entry)
-    const path = typeof change?.path === 'string' ? change.path : null
-    const diff = typeof change?.diff === 'string' ? change.diff : ''
-    const kindValue = typeof change?.kind === 'string' ? change.kind : record(change?.kind)?.type
-    if (!path || !['add', 'update', 'delete'].includes(String(kindValue))) return []
-    const counts = lineCounts(diff)
-    return [{ path: sanitizeSensitivePath(sanitizeSensitiveText(path)), kind: kindValue as RuntimeFileChange['kind'], ...counts }]
-  })
 }
 
 function toolOutput(item: Record<string, unknown>): string | null {

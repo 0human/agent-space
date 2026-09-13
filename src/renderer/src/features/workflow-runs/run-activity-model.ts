@@ -15,9 +15,7 @@ export interface DeliveryProjection {
   } | null
 }
 
-export function createRunActivityModel(run: WorkflowRun) {
-  const pullRequest = run.pullRequest
-
+export function runControlAvailability(run: WorkflowRun) {
   return {
     canPause: run.status === 'running',
     canResume:
@@ -25,9 +23,17 @@ export function createRunActivityModel(run: WorkflowRun) {
       (run.status === 'blocked' &&
         run.snapshot.blockedBy?.recoveryAction === 'resume'),
     canRetry: run.status === 'failed',
+    canAnswer: run.status === 'waiting' && run.snapshot.pendingQuestionDetails?.answer === null,
     canCancel: ['running', 'paused', 'waiting', 'blocked', 'failed'].includes(
       run.status,
     ),
+  }
+}
+
+export function createRunActivityModel(run: WorkflowRun) {
+  const pullRequest = run.pullRequest
+  return {
+    ...runControlAvailability(run),
     delivery: {
       baseCommit: run.baseCommit,
       branch: run.branch,

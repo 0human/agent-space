@@ -145,7 +145,17 @@ export interface RuntimeErrorItem extends RuntimeItemBase {
   error: string
 }
 
-export type RuntimeItem = RuntimeAgentMessageItem | RuntimeFinalResponseItem | RuntimeReasoningItem | RuntimeCommandItem | RuntimeFileChangeItem | RuntimePlanItem | RuntimeQuestionItem | RuntimeApprovalItem | RuntimeInterruptItem | RuntimeToolItem | RuntimeErrorItem
+/** Observational Turn lifecycle; never persisted as a Workflow execution fact. */
+export interface RuntimeTurnItem extends RuntimeItemBase {
+  type: 'turn'
+  startedAt: string | null
+  finishedAt: string | null
+  elapsedMs: number | null
+  activeSince: string | null
+  waitingFor: 'question' | 'approval' | null
+}
+
+export type RuntimeItem = RuntimeAgentMessageItem | RuntimeFinalResponseItem | RuntimeReasoningItem | RuntimeCommandItem | RuntimeFileChangeItem | RuntimePlanItem | RuntimeQuestionItem | RuntimeApprovalItem | RuntimeInterruptItem | RuntimeToolItem | RuntimeErrorItem | RuntimeTurnItem
 
 export function runtimeItemIdentity(item: Pick<RuntimeItemBase, 'id' | 'provider' | 'runtimeLocator'>): string {
   return JSON.stringify([

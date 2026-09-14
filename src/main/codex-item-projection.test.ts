@@ -476,9 +476,9 @@ describe('Codex Item Projection', () => {
     projection.restore(history, scope)
     projection.handle({ method: 'item/agentMessage/delta', params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'active', delta: ' answer' } }, scope)
     projection.restore(history, scope)
-    expect(projection.list(scope.executionId)[0]).toMatchObject({ text: 'Draft answer', status: 'in_progress' })
+    expect(projection.list(scope.executionId).filter((item) => item.type !== 'turn')[0]).toMatchObject({ text: 'Draft answer', status: 'in_progress' })
     projection.handle({ method: 'item/completed', params: { threadId: 'thread-1', turnId: 'turn-1', item: { type: 'agentMessage', id: 'active', text: 'Final answer' } } }, scope)
-    expect(projection.list(scope.executionId)[0]).toMatchObject({ text: 'Final answer', status: 'completed' })
+    expect(projection.list(scope.executionId).filter((item) => item.type !== 'turn')[0]).toMatchObject({ text: 'Final answer', status: 'completed' })
   })
 
   it('rebuilds completed history through the same safe Item contract without replaying deltas', () => {
@@ -499,7 +499,7 @@ describe('Codex Item Projection', () => {
       }
     }, scope)
 
-    expect(projection.list(scope.executionId)).toEqual([
+    expect(projection.list(scope.executionId).filter((item) => item.type !== 'turn')).toEqual([
       expect.objectContaining({ id: 'history-final', type: 'final_response', status: 'completed', text: 'Recovered final' }),
       expect.objectContaining({ id: 'history-command', type: 'command', status: 'completed', output: 'passed', exitCode: 0 }),
       expect.objectContaining({ id: 'history-reasoning', type: 'reasoning', status: 'completed', summary: ['Recovered summary'], content: ['Recovered detail'] })
@@ -507,7 +507,7 @@ describe('Codex Item Projection', () => {
     expect(projection.listIgnoredItems(scope.executionId)).toEqual([
       expect.objectContaining({ itemId: 'history-unknown', itemType: 'futureItem', reason: 'unsupported_item_type' })
     ])
-    expect(JSON.stringify(projection.list(scope.executionId))).not.toMatch(/hidden-secret|unknown-secret/)
+    expect(JSON.stringify(projection.list(scope.executionId).filter((item) => item.type !== 'turn'))).not.toMatch(/hidden-secret|unknown-secret/)
   })
 
   it('restores failed and interrupted Turn outcomes as safe terminal Items', () => {
@@ -526,10 +526,10 @@ describe('Codex Item Projection', () => {
       }
     }, { ...scope, runtimeLocator: { ...scope.runtimeLocator, turnId: 'turn-2' } })
 
-    expect(projection.list(scope.executionId)).toEqual([
+    expect(projection.list(scope.executionId).filter((item) => item.type !== 'turn')).toEqual([
       expect.objectContaining({ id: 'error:turn-1', type: 'error', status: 'failed', error: 'authorization=<redacted> failed' }),
       expect.objectContaining({ id: 'interrupt:turn-2', type: 'interrupt', status: 'completed' })
     ])
-    expect(JSON.stringify(projection.list(scope.executionId))).not.toContain('history-secret')
+    expect(JSON.stringify(projection.list(scope.executionId).filter((item) => item.type !== 'turn'))).not.toContain('history-secret')
   })
 })

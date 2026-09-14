@@ -18,7 +18,7 @@ import {
 } from './RunActivitySupport'
 import { RunComposer, RunEndMenu, type RunControlAction } from './RunControls'
 import { RunSummaryMessage } from './RunSummaryMessage'
-import { RuntimeItemList } from './RuntimeItemList'
+import { RuntimeTurnList } from './RuntimeTurnList'
 import { useRunActivityScroll } from './use-run-activity-scroll'
 import { currentRunPosition, RunProgress } from './RunProgress'
 
@@ -202,7 +202,8 @@ export function RunActivityView(
                   <span>{copy.run.attempt(execution.attempt)}</span>
                   <StatusBadge status={execution.status} />
                 </div>
-                <RuntimeItemList
+                <RuntimeTurnList
+                  executionStatus={execution.status}
                   items={itemsByExecution.get(execution.id) ?? []}
                   onOpenInIde={props.onOpenInIde}
                 />

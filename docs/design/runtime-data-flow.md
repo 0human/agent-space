@@ -55,6 +55,16 @@ Renderer 可以用不同视觉样式呈现 Item，但必须保留稳定 Item ide
 6. Display Projection / IPC / Renderer 失败是观察性故障，不得中断 Codex Turn。
 7. 历史重建使用同一投影契约，但不承诺重放实时 delta 的原始动画和到达时间。
 
+## Turn 展示生命周期
+
+Display Projection 增加 `type: 'turn'` 的生命周期标记，复用 Runtime Item IPC 和按 Turn 的稳定身份；它是过程块的展示元数据，不是模型输出或 Workflow Event。标记包含 `startedAt`、`finishedAt`、`elapsedMs`、`activeSince`、`waitingFor` 及 Item status，不增加 SQLite transcript 或独立执行事实。
+
+Session Module 在 `turn/start` 返回定位后、消费 Item 通知前发布标记；开始时间取发出请求时的主进程时间。每个 Runtime Question / Approval 请求暂停活动计时，全部响应后恢复。`turn/completed`、中断和失败固定累计耗时，并清理尚未结束的 Item 状态。重复开始、终态通知和历史读取不重置实时计时。
+
+Renderer 按 provider、Thread、Turn 分组，把生命周期标记呈现为计时标题；运行中根据 `elapsedMs + (当前时间 - activeSince)` 每秒刷新，等待与终态不启动计时器。最终回复及问题、审批、错误、中断放在折叠过程外。UI 计时刷新仅发生在本地组件，不发布 Runtime Item，也不影响 Workflow Engine 或新活动计数。
+
+历史恢复继续采用同一显示契约。没有实时计时缓存时，时间字段为 `null`；既不假定历史到达时间是开始时间，也不把含用户等待的总时长当作活动耗时。历史缺少内容和仅缺少计时分别降级。
+
 ## Runtime Event 契约
 
 MVP 的 provider-neutral Runtime Event 至少包含：

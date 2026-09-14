@@ -18,8 +18,12 @@ import { ReasoningItem } from './ReasoningItem'
 export function RuntimeItemList({
   items,
   onOpenInIde,
+  compact = false,
+  active = true,
 }: {
   items: RuntimeItem[]
+  compact?: boolean
+  active?: boolean
   onOpenInIde?: () => void
 }): React.JSX.Element {
   if (items.length === 0)
@@ -29,7 +33,7 @@ export function RuntimeItemList({
   return (
     <div className="grid gap-3">
       {items.map((item) => (
-        <MemoRuntimeItemCard item={item} key={runtimeItemIdentity(item)} onOpenInIde={onOpenInIde} />
+        <MemoRuntimeItemCard active={active} compact={compact} item={item} key={runtimeItemIdentity(item)} onOpenInIde={onOpenInIde} />
       ))}
     </div>
   )
@@ -40,8 +44,29 @@ function outputSummary(output: string): string {
   return line.length > 160 ? `${line.slice(0, 157)}...` : line
 }
 
-function RuntimeItemCard({ item, onOpenInIde }: { item: RuntimeItem; onOpenInIde?: () => void }): React.JSX.Element {
-  if (item.type === 'reasoning') return <ReasoningItem item={item} />
+function RuntimeItemCard({ item, onOpenInIde, compact = false, active: activityRunning = true }: { item: RuntimeItem; onOpenInIde?: () => void; compact?: boolean; active?: boolean }): React.JSX.Element | null {
+  if (item.type === 'turn') return null
+  if (compact && (item.type === 'agent_message' || item.type === 'final_response')) return (
+    <article aria-label={item.type === 'final_response' ? copy.run.finalResponseItem : copy.run.agentMessageItem} className="min-w-0 whitespace-pre-wrap break-words text-sm leading-7 [overflow-wrap:anywhere]">
+      {item.text || copy.run.noOutput}
+    </article>
+  )
+  if (compact && (item.type === 'command' || item.type === 'tool' || item.type === 'file_change' || item.type === 'plan')) {
+    const active = activityRunning && item.status === 'in_progress'
+    const Icon = item.type === 'command' ? Terminal : item.type === 'tool' ? Wrench : item.type === 'file_change' ? FileDiff : ListChecks
+    const label = item.type === 'command' ? (active ? copy.run.runningCommand(item.command) : item.command)
+      : item.type === 'tool' ? (active ? copy.run.runningTool(item.name) : item.name)
+        : item.type === 'file_change' ? copy.run.fileChangeItem : copy.run.planItem
+    return <details className="min-w-0 text-sm text-muted-foreground">
+      <summary className="flex cursor-pointer list-none items-start gap-2 rounded-sm focus-visible:outline-2 focus-visible:outline-ring [&::-webkit-details-marker]:hidden">
+        <Icon aria-hidden="true" className="mt-0.5 size-4 shrink-0" />
+        <span className="min-w-0 break-words [overflow-wrap:anywhere]">{label}</span>
+        {!active ? <span className="shrink-0">· {item.status === 'in_progress' ? copy.run.turnActivityPaused : copy.run.runtimeItemStatus[item.status]}</span> : null}
+      </summary>
+      <div className="mt-3 pl-6"><RuntimeItemCard item={item} onOpenInIde={onOpenInIde} /></div>
+    </details>
+  }
+  if (item.type === 'reasoning') return <ReasoningItem item={item} compact={compact} paused={!activityRunning} />
   if (item.type === 'agent_message' || item.type === 'final_response')
     return (
       <ItemShell

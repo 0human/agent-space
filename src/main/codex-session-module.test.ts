@@ -84,7 +84,8 @@ describe('Codex Session Module', () => {
     expect(settled).not.toHaveBeenCalled()
     finish(completedTurn())
     expect((await turn).events).toEqual([])
-    expect(projection.list('execution-1')).toEqual([expect.objectContaining({ type: 'reasoning', status: 'completed' })])
+    expect(projection.list('execution-1').find((item) => item.type === 'turn')).toMatchObject({ status: 'completed', elapsedMs: expect.any(Number), activeSince: null })
+    expect(projection.list('execution-1').filter((item) => item.type !== 'turn')).toEqual([expect.objectContaining({ type: 'reasoning', status: 'completed' })])
   })
 
   it('ends reasoning when the transport fails before Turn completion', async () => {
@@ -94,7 +95,7 @@ describe('Codex Session Module', () => {
     const projection = createCodexItemProjection()
     const session = createCodexSessionModule({ createTransport: () => transport, itemProjection: projection })
     await expect(session.runTurn({ cwd: '/work/demo', command: 'codex', executionId: 'execution-1', workUnit: { kind: 'phase', runId: 'run-1', phaseId: 'discovery' }, input: '检查文件' })).rejects.toThrow()
-    expect(projection.list('execution-1')).toEqual(expect.arrayContaining([expect.objectContaining({ type: 'reasoning', status: 'failed' })]))
+    expect(projection.list('execution-1').filter((item) => item.type !== 'turn')).toEqual(expect.arrayContaining([expect.objectContaining({ type: 'reasoning', status: 'failed' })]))
   })
 
   it('reports explicit missing capabilities during negotiation', async () => {
@@ -205,14 +206,14 @@ describe('Codex Session Module', () => {
 
     await vi.waitFor(() => expect(transport.requests.map(({ method }) => method)).toContain('turn/start'))
     await session.interrupt({ threadId: 'thread-1', turnId: 'turn-1' })
-    expect(projection.list('execution-interrupt')).toEqual([
+    expect(projection.list('execution-interrupt').filter((item) => item.type !== 'turn')).toEqual([
       expect.objectContaining({ type: 'interrupt', status: 'in_progress' })
     ])
 
     resolveMessage?.({ method: 'turn/completed', params: { threadId: 'thread-1', turn: { id: 'turn-1', status: 'interrupted', error: null } } })
     await run
 
-    expect(projection.list('execution-interrupt')).toEqual([
+    expect(projection.list('execution-interrupt').filter((item) => item.type !== 'turn')).toEqual([
       expect.objectContaining({ type: 'interrupt', status: 'completed' })
     ])
   })
@@ -290,7 +291,7 @@ describe('Codex Session Module', () => {
     })
 
     expect(result.events).toContainEqual({ type: 'question', question: 'Choose one' })
-    expect(projection.list('execution-question')).toEqual([
+    expect(projection.list('execution-question').filter((item) => item.type !== 'turn')).toEqual([
       expect.objectContaining({ id: 'question:question-item', type: 'question', status: 'completed', answers: { choice: ['A'] } })
     ])
   })
@@ -395,7 +396,7 @@ describe('Codex Session Module', () => {
       projectionScope: { runId: 'run-history', executionId: 'execution-history', permissionPolicy: { grantedPermissions: ['workspace.read'] }, source: 'codex app-server' }
     })
 
-    expect(projection.list('execution-history')).toEqual([
+    expect(projection.list('execution-history').filter((item) => item.type !== 'turn')).toEqual([
       expect.objectContaining({ id: 'historical-final', type: 'final_response', status: 'completed', text: 'Recovered', runtimeLocator: locator })
     ])
   })

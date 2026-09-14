@@ -53,7 +53,7 @@ export interface CodexSessionModuleDependencies {
   resolveCommand?: (command: string) => Promise<string | null>
   inspectCapabilities?: CodexCapabilityInspector
   requiredCapabilities?: string[]
-  itemProjection?: Pick<CodexItemProjection, 'handle' | 'handleRequest' | 'completeRequest' | 'completeTurn' | 'setInterrupt' | 'restore'>
+  itemProjection?: Pick<CodexItemProjection, 'startTurn' | 'handle' | 'handleRequest' | 'completeRequest' | 'completeTurn' | 'setInterrupt' | 'restore'>
 }
 
 export interface CodexSessionTurnInput extends CodexSessionPreflightInput {
@@ -597,6 +597,7 @@ export function createCodexSessionModule(dependencies: CodexSessionModuleDepende
           : { cwd: input.cwd, approvalPolicy, sandbox, serviceName: 'agent_space' })
         const threadId = asString(asRecord(asRecord(threadResponse)?.thread)?.id)
         if (!threadId) throw new Error(zhCNMain.codexSession.missingThreadId)
+        const turnStartedAt = Date.now()
         const turnResponse = await transport.request('turn/start', {
           threadId,
           input: [{ type: 'text', text: input.input, text_elements: [] }],
@@ -616,6 +617,7 @@ export function createCodexSessionModule(dependencies: CodexSessionModuleDepende
         await input.onLocator?.(locator)
         const state: TurnState = { transport, activeKey, locator, events: [], input, waitingRequest: null, waitingRawRequest: null, processing: null }
         turnStates.set(activeKey, state)
+        if (input.executionId) observeProjection(() => itemProjection?.startTurn(projectionScope(state), turnStartedAt))
         state.processing = consumeTurn(state)
         return await state.processing
       } finally {

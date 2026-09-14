@@ -1,6 +1,7 @@
+import { advanceTurnTiming } from './runtime-turn-timing'
 import { fileChanges } from './runtime-file-changes'
 import type { PermissionPolicy } from '../shared/project'
-import { runtimeItemIdentity, type RuntimeApprovalDecision, type RuntimeApprovalItem, type RuntimeErrorItem, type RuntimeFileChange, type RuntimeItem, type RuntimeItemStatus, type RuntimeLocator, type RuntimeQuestion, type RuntimeQuestionItem } from '../shared/workflow-run'
+import { runtimeItemIdentity, type RuntimeApprovalDecision, type RuntimeApprovalItem, type RuntimeErrorItem, type RuntimeFileChange, type RuntimeItem, type RuntimeItemStatus, type RuntimeLocator, type RuntimeQuestion, type RuntimeQuestionItem, type RuntimeTurnItem } from '../shared/workflow-run'
 import type { JsonRpcNotification, JsonRpcServerRequest } from './codex-app-server-transport'
 import { sanitizePermissionPolicy, sanitizeSensitiveText } from './sensitive-text'
 
@@ -26,11 +27,13 @@ export interface CodexIgnoredItem {
 }
 
 export interface CodexItemProjectionDependencies {
+  now?: () => number
   publish?: (item: RuntimeItem) => void | Promise<void>
   onIgnoredItem?: (item: CodexIgnoredItem) => void | Promise<void>
 }
 
 export interface CodexItemProjection {
+  startTurn(scope: CodexItemProjectionScope, startedAt?: number): void
   handle(notification: JsonRpcNotification, scope: CodexItemProjectionScope): void
   handleRequest(request: JsonRpcServerRequest, scope: CodexItemProjectionScope): void
   completeRequest(request: JsonRpcServerRequest, response: unknown, scope: CodexItemProjectionScope): void
@@ -271,6 +274,21 @@ export function createCodexItemProjection(dependencies: CodexItemProjectionDepen
     }
   }
 
+  const turnItem = (scope: CodexItemProjectionScope): RuntimeTurnItem | undefined => {
+    const item = itemsByExecution.get(scope.executionId)?.get(scopedIdentity(scope, `turn:${scope.runtimeLocator.turnId}`))
+    return item?.type === 'turn' ? item : undefined
+  }
+  const advanceTurn = (scope: CodexItemProjectionScope, status: RuntimeItemStatus, waitingFor: RuntimeTurnItem['waitingFor']): void => {
+    const turn = turnItem(scope)
+    if (turn) update(scope, advanceTurnTiming(turn, status, waitingFor, dependencies.now?.() ?? Date.now()))
+  }
+  const refreshWaiting = (scope: CodexItemProjectionScope): void => {
+    const pending = [...(itemsByExecution.get(scope.executionId)?.values() ?? [])].find((item) =>
+      item.runtimeLocator.threadId === scope.runtimeLocator.threadId && item.runtimeLocator.turnId === scope.runtimeLocator.turnId &&
+      item.status === 'in_progress' && (item.type === 'question' || item.type === 'approval'))
+    advanceTurn(scope, 'in_progress', pending?.type === 'question' ? 'question' : pending?.type === 'approval' ? 'approval' : null)
+  }
+
   const observeIgnored = (
     scope: CodexItemProjectionScope,
     method: 'item/started' | 'item/completed',
@@ -304,6 +322,17 @@ export function createCodexItemProjection(dependencies: CodexItemProjectionDepen
   }
 
   const projection: CodexItemProjection = {
+    startTurn(scope, startedAt = dependencies.now?.() ?? Date.now()) {
+      const existing = turnItem(scope)
+      // History can arrive through onLocator before the live start is published.
+      if (existing && (existing.status !== 'in_progress' || existing.startedAt !== null)) return
+      update(scope, {
+        id: `turn:${sanitizeSensitiveText(scope.runtimeLocator.turnId)}`,
+        ...projectionMetadata(scope), type: 'turn', status: 'in_progress',
+        startedAt: new Date(startedAt).toISOString(), finishedAt: null,
+        elapsedMs: 0, activeSince: new Date(startedAt).toISOString(), waitingFor: null,
+      })
+    },
     handle(notification, scope) {
       if (notification.params?.threadId !== scope.runtimeLocator.threadId || notification.params?.turnId !== scope.runtimeLocator.turnId) return
       if (!notification.params) return
@@ -528,6 +557,7 @@ export function createCodexItemProjection(dependencies: CodexItemProjectionDepen
           summary: sanitizeSensitiveText(command ?? reason ?? request.method),
           decision: null
         })
+        refreshWaiting(scope)
         return
       }
       const questions = userInputQuestions(request.params.questions)
@@ -540,8 +570,10 @@ export function createCodexItemProjection(dependencies: CodexItemProjectionDepen
         questions,
         answers: {}
       })
+      refreshWaiting(scope)
     },
     completeRequest(request, response, scope) {
+      if (request.params?.threadId !== scope.runtimeLocator.threadId || request.params?.turnId !== scope.runtimeLocator.turnId) return
       const itemId = nonEmptyString(request.params?.itemId)
       if (!itemId) return
       const projectedId = requestItemId(request, itemId)
@@ -552,6 +584,7 @@ export function createCodexItemProjection(dependencies: CodexItemProjectionDepen
         const decision = approvalDecision(response)
         update(scope, { ...current, status: decision === 'decline' || decision === 'cancel' ? 'declined' : 'completed', decision })
         markCompleted(scope.executionId, identity)
+        refreshWaiting(scope)
         return
       }
       if (request.method !== 'item/tool/requestUserInput') return
@@ -568,10 +601,12 @@ export function createCodexItemProjection(dependencies: CodexItemProjectionDepen
       const item: RuntimeQuestionItem = { ...current, status: 'completed', answers }
       update(scope, item)
       markCompleted(scope.executionId, identity)
+      refreshWaiting(scope)
     },
     completeTurn(status, error, scope) {
+      advanceTurn(scope, status === 'interrupted' ? 'declined' : status, null)
       for (const item of itemsByExecution.get(scope.executionId)?.values() ?? []) {
-        if (item.type !== 'reasoning' || item.status !== 'in_progress' ||
+        if (item.type === 'turn' || item.status !== 'in_progress' ||
           item.runtimeLocator.threadId !== scope.runtimeLocator.threadId ||
           item.runtimeLocator.turnId !== scope.runtimeLocator.turnId) continue
         update(scope, { ...item, status: status === 'interrupted' ? 'declined' : status })
@@ -620,6 +655,14 @@ export function createCodexItemProjection(dependencies: CodexItemProjectionDepen
       if (thread?.id !== scope.runtimeLocator.threadId || !Array.isArray(thread.turns)) return
       const turn = thread.turns.map(record).find((candidate) => candidate?.id === scope.runtimeLocator.turnId)
       if (!turn || !Array.isArray(turn.items)) return
+      if (!turnItem(scope)) {
+        update(scope, {
+          id: `turn:${sanitizeSensitiveText(scope.runtimeLocator.turnId)}`,
+          ...projectionMetadata(scope), type: 'turn',
+          status: turn.status === 'completed' ? 'completed' : turn.status === 'failed' ? 'failed' : turn.status === 'interrupted' ? 'declined' : 'in_progress',
+          startedAt: null, finishedAt: null, elapsedMs: null, activeSince: null, waitingFor: null,
+        })
+      }
       for (const item of turn.items) {
         const status = record(item)?.status
         const active = turn.status === 'inProgress' && status !== 'completed' && status !== 'failed' && status !== 'declined'

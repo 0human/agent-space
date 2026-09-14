@@ -70,6 +70,12 @@ export interface RuntimeFinalResponseItem extends RuntimeItemBase {
   text: string
 }
 
+export interface RuntimeReasoningItem extends RuntimeItemBase {
+  type: 'reasoning'
+  summary: string[]
+  content: string[]
+}
+
 export interface RuntimeCommandItem extends RuntimeItemBase {
   type: 'command'
   command: string
@@ -139,7 +145,7 @@ export interface RuntimeErrorItem extends RuntimeItemBase {
   error: string
 }
 
-export type RuntimeItem = RuntimeAgentMessageItem | RuntimeFinalResponseItem | RuntimeCommandItem | RuntimeFileChangeItem | RuntimePlanItem | RuntimeQuestionItem | RuntimeApprovalItem | RuntimeInterruptItem | RuntimeToolItem | RuntimeErrorItem
+export type RuntimeItem = RuntimeAgentMessageItem | RuntimeFinalResponseItem | RuntimeReasoningItem | RuntimeCommandItem | RuntimeFileChangeItem | RuntimePlanItem | RuntimeQuestionItem | RuntimeApprovalItem | RuntimeInterruptItem | RuntimeToolItem | RuntimeErrorItem
 
 export function runtimeItemIdentity(item: Pick<RuntimeItemBase, 'id' | 'provider' | 'runtimeLocator'>): string {
   return JSON.stringify([
@@ -442,7 +448,8 @@ export interface RuntimePreflightResult {
 export interface WorkflowPreflightInput {
   project: Project
   workflow: WorkflowView
-  idea: string
+  /** Omit for environment checks before the user enters an Idea. */
+  idea?: string
 }
 
 export interface WorkflowPreflightResult {
@@ -452,6 +459,7 @@ export interface WorkflowPreflightResult {
 }
 
 export interface StartWorkflowRunInput extends WorkflowPreflightInput {
+  idea: string
   preflight?: WorkflowPreflightResult
 }
 

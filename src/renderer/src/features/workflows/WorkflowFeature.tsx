@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   ArrowLeft,
   ArrowRight,
@@ -29,7 +29,7 @@ import {
   CardTitle,
 } from '@renderer/components/ui/card'
 import { Separator } from '@renderer/components/ui/separator'
-import { Textarea } from '@renderer/components/ui/textarea'
+import { PreflightResult } from './PreflightResult'
 import { zhCN as copy } from '@renderer/i18n/zh-CN'
 
 export function WorkflowFeature({
@@ -43,7 +43,8 @@ export function WorkflowFeature({
   const [workflow, setWorkflow] = useState<WorkflowView | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [idea, setIdea] = useState('')
+  const [checking, setChecking] = useState(false)
+  const checkingRef = useRef(false)
   const [preflight, setPreflight] = useState<WorkflowPreflightResult | null>(
     null,
   )
@@ -68,6 +69,7 @@ export function WorkflowFeature({
   }, [api, project.id])
 
   const copyWorkflow = async (): Promise<void> => {
+    setPreflight(null)
     setError(null)
     try {
       const result = await api.copyWorkflow(project.id)
@@ -78,6 +80,7 @@ export function WorkflowFeature({
   }
 
   const reloadWorkflow = async (): Promise<void> => {
+    setPreflight(null)
     setError(null)
     try {
       const result = await api.reloadWorkflow(project.id)
@@ -88,20 +91,19 @@ export function WorkflowFeature({
   }
 
   const runPreflight = async (): Promise<void> => {
+    if (checkingRef.current) return
+    checkingRef.current = true
+    setChecking(true)
+    setPreflight(null)
     try {
-      setPreflight(await api.preflightWorkflowRun(project.id, idea))
+      setPreflight(await api.preflightWorkflowRun(project.id))
       setError(null)
     } catch {
       setError(copy.workflow.startError)
+    } finally {
+      checkingRef.current = false
+      setChecking(false)
     }
-  }
-
-  const startWorkflowRun = async (): Promise<void> => {
-    if (!workflow?.canStart || !preflight?.passed) return
-    const result = await api.startWorkflowRun(project.id, idea)
-    if (result.ok && result.run)
-      onNavigate({ name: 'run', project, run: result.run })
-    else setError(result.error ?? copy.workflow.startError)
   }
 
   const editWorkflow = async (): Promise<void> => {
@@ -175,20 +177,20 @@ export function WorkflowFeature({
             ) : null}
           </div>
           <div className="flex flex-wrap gap-2">
+            <Button variant="outline" type="button" disabled={checking} onClick={() => { void runPreflight() }}>
+              <ShieldAlert aria-hidden="true" />
+              {checking ? copy.workflow.checking : copy.workflow.preflightAction}
+            </Button>
+            <Button type="button" disabled={!workflow.canStart || checking} onClick={() => onNavigate({ name: 'newRun', project, workflow })}>
+              <ArrowRight aria-hidden="true" />
+              {copy.workflow.directRunAction}
+            </Button>
             {workflow.source === 'built-in' ? (
               <>
                 <Button
-                  type="button"
-                  onClick={() =>
-                    document.getElementById('workflow-idea')?.focus()
-                  }
-                >
-                  <ArrowRight aria-hidden="true" />
-                  {copy.workflow.directRunAction}
-                </Button>
-                <Button
                   variant="outline"
                   type="button"
+                  disabled={checking}
                   onClick={() => {
                     void copyWorkflow()
                   }}
@@ -212,6 +214,7 @@ export function WorkflowFeature({
                 <Button
                   variant="outline"
                   type="button"
+                  disabled={checking}
                   onClick={() => {
                     void reloadWorkflow()
                   }}
@@ -246,6 +249,12 @@ export function WorkflowFeature({
             ))}
           </AlertDescription>
         </Alert>
+        {preflight ? (
+          <div className="mt-5 grid gap-2">
+            <PreflightResult result={preflight} />
+            <p className="text-xs text-muted-foreground">{copy.workflow.environmentCheckHint}</p>
+          </div>
+        ) : null}
         {error ? (
           <Alert variant="destructive" className="mt-5" role="alert">
             <AlertDescription>{error}</AlertDescription>
@@ -268,7 +277,7 @@ export function WorkflowFeature({
                 </div>
               </CardHeader>
               <CardContent className="grid gap-3">
-                {phase.steps.map((step, stepIndex) => (
+                {phase.steps.map((step) => (
                   <div
                     className="rounded-lg border border-border p-4"
                     key={step.id}
@@ -313,74 +322,6 @@ export function WorkflowFeature({
                         </span>
                       ) : null}
                     </div>
-                    {phaseIndex === 0 && stepIndex === 0 ? (
-                      <div className="mt-5 grid gap-3 border-t border-border pt-5">
-                        <p
-                          id="workflow-idea-description"
-                          className="text-sm text-muted-foreground"
-                        >
-                          {copy.workflow.launchDescription}
-                        </p>
-                        <label
-                          className="text-sm font-medium"
-                          htmlFor="workflow-idea"
-                        >
-                          {copy.workflow.ideaLabel}
-                        </label>
-                        <Textarea
-                          id="workflow-idea"
-                          aria-describedby="workflow-idea-description"
-                          value={idea}
-                          onChange={(event) => {
-                            setIdea(event.target.value)
-                            setPreflight(null)
-                          }}
-                          placeholder={copy.workflow.ideaPlaceholder}
-                        />
-                        <div className="flex flex-wrap gap-2">
-                          <Button
-                            variant="outline"
-                            type="button"
-                            onClick={() => {
-                              void runPreflight()
-                            }}
-                            disabled={!workflow.canStart || !idea.trim()}
-                          >
-                            <ShieldAlert aria-hidden="true" />
-                            {copy.workflow.preflightAction}
-                          </Button>
-                          <Button
-                            type="button"
-                            onClick={() => {
-                              void startWorkflowRun()
-                            }}
-                            disabled={!preflight?.passed}
-                          >
-                            <ArrowRight aria-hidden="true" />
-                            {copy.workflow.startAction}
-                          </Button>
-                        </div>
-                        {preflight ? (
-                          <Alert
-                            variant={preflight.passed ? 'default' : 'destructive'}
-                            role={preflight.passed ? 'status' : 'alert'}
-                          >
-                            <AlertDescription>
-                              {preflight.checks.map((check) => (
-                                <span className="block" key={check}>
-                                  {check}
-                                </span>
-                              ))}
-                              {preflight.errors.map((message) => (
-                                <span className="block" key={message}>
-                                  {message}
-                                </span>
-                              ))}
-                            </AlertDescription>
-                          </Alert>
-                        ) : null}
-                      </div>
-                    ) : null}
                   </div>
                 ))}
               </CardContent>

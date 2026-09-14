@@ -116,6 +116,48 @@ function fixture(): RunActivityViewProps {
 }
 
 describe('Run Activity View', () => {
+  it('shows a pending question only once in the activity stream and falls back there when history is missing', () => {
+    const props = fixture()
+    const question = '请选择目标用户。\n然后确认首版范围。'
+    const run: WorkflowRun = { ...props.run, status: 'waiting', snapshot: { ...props.run.snapshot,
+      pendingQuestion: question,
+      pendingQuestionDetails: { question, answer: null, continuation: { phaseIndex: 3, stepIndex: 0, executionId: 'execution-5' } },
+    } }
+    const message: RuntimeItem = { ...props.runtimeItems[4], type: 'final_response', status: 'completed', text: question }
+    const { rerender } = render(<RunActivityView {...props} run={run} runtimeItems={[message]} />)
+    const activity = screen.getByRole('region', { name: 'Run Activity View' })
+    const footer = screen.getByRole('contentinfo', { name: '可用操作' })
+    expect(within(activity).getAllByText(/请选择目标用户/)).toHaveLength(1)
+    expect(footer).not.toHaveTextContent('请选择目标用户')
+    rerender(<RunActivityView {...props} run={run} runtimeItems={[]} runtimeItemsUnavailable />)
+    expect(within(activity).getAllByText(/请选择目标用户/)).toHaveLength(1)
+    expect(footer).not.toHaveTextContent('请选择目标用户')
+    expect(screen.getByRole('textbox')).toBeEnabled()
+  })
+
+  it('returns to live after sending an answer and follows the next reasoning deltas', async () => {
+    const user = userEvent.setup()
+    const props = fixture()
+    const run: WorkflowRun = { ...props.run, status: 'waiting', snapshot: { ...props.run.snapshot,
+      pendingQuestion: '目标是什么？',
+      pendingQuestionDetails: { question: '目标是什么？', answer: null, continuation: { phaseIndex: 3, stepIndex: 0, executionId: 'execution-5' } },
+    } }
+    const { rerender } = render(<RunActivityView {...props} run={run} />)
+    await user.click(screen.getByRole('button', { name: 'Ticket 2/12 · 功能 2' }))
+    expect(screen.getByRole('status', { name: '查看模式' })).toHaveTextContent('Inspection Mode')
+    await user.type(screen.getByRole('textbox'), '验证实时输出')
+    await user.click(screen.getByRole('button', { name: '发送' }))
+    expect(props.onAnswer).toHaveBeenCalledWith('验证实时输出')
+    expect(screen.getByRole('status', { name: '查看模式' })).toHaveTextContent('Live Mode')
+    const viewport = screen.getByRole('region', { name: 'Run Activity View' })
+    Object.defineProperties(viewport, { clientHeight: { value: 400 }, scrollHeight: { value: 1200 } })
+    const reasoning: RuntimeItem = { ...props.runtimeItems[4], id: 'thinking', type: 'reasoning', status: 'in_progress', summary: ['正在检查'], content: [] }
+    rerender(<RunActivityView {...props} runtimeItems={[...props.runtimeItems, reasoning]} />)
+    expect(screen.getByText('正在思考')).toBeVisible()
+    expect(screen.getByText('正在检查')).toBeVisible()
+    expect(viewport.scrollTop).toBe(800)
+  })
+
   it('keeps the composer visible while running and locks repeated pause clicks until interruption finishes', async () => {
     const props = fixture()
     let finish!: () => void

@@ -13,6 +13,7 @@ import { runtimeItemIdentity, type RuntimeItem } from '../../../../shared/workfl
 import { Button } from '@renderer/components/ui/button'
 import { Badge } from '@renderer/components/ui/badge'
 import { zhCN as copy } from '@renderer/i18n/zh-CN'
+import { ReasoningItem } from './ReasoningItem'
 
 export function RuntimeItemList({
   items,
@@ -40,6 +41,7 @@ function outputSummary(output: string): string {
 }
 
 function RuntimeItemCard({ item, onOpenInIde }: { item: RuntimeItem; onOpenInIde?: () => void }): React.JSX.Element {
+  if (item.type === 'reasoning') return <ReasoningItem item={item} />
   if (item.type === 'agent_message' || item.type === 'final_response')
     return (
       <ItemShell

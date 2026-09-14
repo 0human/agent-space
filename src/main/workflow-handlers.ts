@@ -71,7 +71,7 @@ export function registerWorkflowHandlers({ handle, projectService, workflowServi
     const project = await findActiveProject(projectId)
     if (!project) return { passed: false, checks: [], errors: [zhCNMain.projectDelete.notFound] }
     const workflow = await loadForProject(project)
-    return workflowEngine.preflight({ project, workflow, idea: typeof idea === 'string' ? idea : '' })
+    return workflowEngine.preflight({ project, workflow, idea: idea === undefined ? undefined : typeof idea === 'string' ? idea : '' })
   })
   handle(APP_SHELL_CHANNELS.startWorkflowRun, async (_event: unknown, projectId: unknown, idea: unknown): Promise<WorkflowRunActionResult> => {
     if (typeof projectId !== 'string' || !projectId) return { ok: false, error: zhCNMain.projectDelete.notFound, run: null }

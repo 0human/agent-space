@@ -193,6 +193,7 @@ export function createCodexItemProjection(dependencies: CodexItemProjectionDepen
   const rawTextStreams = new Map<string, string>()
   const pendingTextDeltas = new Map<string, string>()
   const pendingFileChanges = new Map<string, RuntimeFileChange[]>()
+  const reasoningStreams = new Map<string, { summary: Map<number, string>; content: Map<number, string> }>()
 
   const scopedIdentity = (scope: CodexItemProjectionScope, itemId: string): string => runtimeItemIdentity({
     id: sanitizeSensitiveText(itemId),
@@ -212,6 +213,23 @@ export function createCodexItemProjection(dependencies: CodexItemProjectionDepen
   const streamKey = (scope: CodexItemProjectionScope, itemId: string, method: string): string =>
     `${scope.executionId}:${scopedIdentity(scope, itemId)}:${method}`
 
+  const reasoningText = (scope: CodexItemProjectionScope, itemId: string) => {
+    const key = streamKey(scope, itemId, 'reasoning')
+    let sections = reasoningStreams.get(key)
+    if (!sections) {
+      sections = { summary: new Map(), content: new Map() }
+      reasoningStreams.set(key, sections)
+    }
+    return sections
+  }
+
+  const safeReasoningText = (sections: { summary: Map<number, string>; content: Map<number, string> }) => {
+    const safe = (parts: Map<number, string>): string[] => [...parts]
+      .sort(([left], [right]) => left - right)
+      .map(([, text]) => sanitizeStreamingText(text))
+    return { summary: safe(sections.summary), content: safe(sections.content) }
+  }
+
   const startText = (scope: CodexItemProjectionScope, itemId: string, method: string, initial: string): string => {
     const key = streamKey(scope, itemId, method)
     const pending = pendingTextDeltas.get(key) ?? ''
@@ -222,6 +240,7 @@ export function createCodexItemProjection(dependencies: CodexItemProjectionDepen
   }
 
   const clearPending = (scope: CodexItemProjectionScope, itemId: string): void => {
+    reasoningStreams.delete(streamKey(scope, itemId, 'reasoning'))
     for (const method of ['item/agentMessage/delta', 'item/plan/delta', 'item/commandExecution/outputDelta']) {
       pendingTextDeltas.delete(streamKey(scope, itemId, method))
       rawTextStreams.delete(streamKey(scope, itemId, method))
@@ -325,7 +344,22 @@ export function createCodexItemProjection(dependencies: CodexItemProjectionDepen
           clearPending(scope, itemId)
           markCompleted(scope.executionId, identity)
         }
-        if (item.type === 'agentMessage' && typeof item.text === 'string') {
+        if (item.type === 'reasoning') {
+          const sections = reasoningText(scope, itemId)
+          for (const field of ['summary', 'content'] as const) {
+            const values = item[field]
+            if (Array.isArray(values)) {
+              sections[field].clear()
+              values.forEach((value, index) => {
+                if (typeof value === 'string') sections[field].set(index, value)
+              })
+            }
+          }
+          project({
+            id: sanitizeSensitiveText(itemId), ...metadata, type: 'reasoning',
+            status: itemStatus(method, item.status), ...safeReasoningText(sections),
+          })
+        } else if (item.type === 'agentMessage' && typeof item.text === 'string') {
           const text = method === 'item/started' ? startText(scope, itemId, 'item/agentMessage/delta', item.text) : item.text
           project({
             id: sanitizeSensitiveText(itemId),
@@ -399,7 +433,7 @@ export function createCodexItemProjection(dependencies: CodexItemProjectionDepen
             durationMs: typeof item.durationMs === 'number' ? item.durationMs : null,
             output: toolOutput(item)
           })
-        } else if (itemType !== 'reasoning') {
+        } else {
           observeIgnored(scope, method, itemId, itemType, itemType && recognizedItemTypes.has(itemType) ? 'malformed_item' : itemType ? 'unsupported_item_type' : 'malformed_item')
         }
         return
@@ -422,6 +456,22 @@ export function createCodexItemProjection(dependencies: CodexItemProjectionDepen
       const identity = scopedIdentity(scope, itemId)
       if (completedItemsByExecution.get(scope.executionId)?.has(identity)) return
       const current = itemsByExecution.get(scope.executionId)?.get(identity)
+      if (['item/reasoning/summaryTextDelta', 'item/reasoning/summaryPartAdded', 'item/reasoning/textDelta'].includes(notification.method)) {
+        if (current && current.type !== 'reasoning') return
+        const field = notification.method === 'item/reasoning/textDelta' ? 'content' : 'summary'
+        const index = notification.params[field === 'summary' ? 'summaryIndex' : 'contentIndex']
+        if (typeof index !== 'number' || !Number.isSafeInteger(index) || index < 0) return
+        const boundary = notification.method === 'item/reasoning/summaryPartAdded'
+        if (!boundary && typeof notification.params.delta !== 'string') return
+        const sections = reasoningText(scope, itemId)
+        const previous = sections[field].get(index) ?? ''
+        sections[field].set(index, previous + (boundary ? '' : notification.params.delta as string))
+        update(scope, {
+          id: sanitizeSensitiveText(itemId), ...metadata, type: 'reasoning',
+          status: 'in_progress', ...safeReasoningText(sections),
+        })
+        return
+      }
       if (notification.method === 'item/fileChange/patchUpdated') {
         const changes = fileChanges(notification.params.changes)
         const fingerprint = `${streamKey(scope, itemId, notification.method)}:${stableJson(changes)}`
@@ -520,6 +570,14 @@ export function createCodexItemProjection(dependencies: CodexItemProjectionDepen
       markCompleted(scope.executionId, identity)
     },
     completeTurn(status, error, scope) {
+      for (const item of itemsByExecution.get(scope.executionId)?.values() ?? []) {
+        if (item.type !== 'reasoning' || item.status !== 'in_progress' ||
+          item.runtimeLocator.threadId !== scope.runtimeLocator.threadId ||
+          item.runtimeLocator.turnId !== scope.runtimeLocator.turnId) continue
+        update(scope, { ...item, status: status === 'interrupted' ? 'declined' : status })
+        clearPending(scope, item.id)
+        markCompleted(scope.executionId, runtimeItemIdentity(item))
+      }
       const planId = `plan:${scope.runtimeLocator.turnId}`
       const planIdentity = scopedIdentity(scope, planId)
       const plan = itemsByExecution.get(scope.executionId)?.get(planIdentity)

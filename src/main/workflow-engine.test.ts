@@ -110,6 +110,17 @@ describe('WorkflowEngine public API', () => {
     })
   })
 
+  it('checks the environment without an Idea but always requires an Idea to start', async () => {
+    directory = await mkdtemp(join(tmpdir(), 'agent-space-run-'))
+    engine = createWorkflowEngine({ databasePath: join(directory, 'runs.sqlite'), runtime: new FakeRuntime() })
+    await expect(engine.preflight({ project, workflow })).resolves.toMatchObject({ passed: true, errors: [] })
+    await expect(engine.preflight({ project, workflow, idea: ' ' })).resolves.toMatchObject({ passed: false })
+    await expect(engine.startRun({ project, workflow, idea: '' })).rejects.toThrow()
+    await expect(engine.startRun({ project, workflow } as never)).rejects.toThrow()
+    await expect(engine.listRuns(project.id)).resolves.toEqual([])
+    await expect(engine.preflight({ project: { ...project, workspaceAvailable: false }, workflow })).resolves.toMatchObject({ passed: false })
+  })
+
   it('preflights, persists a completed Run, and restores it after restart', async () => {
     directory = await mkdtemp(join(tmpdir(), 'agent-space-run-'))
     const runtime = new FakeRuntime()

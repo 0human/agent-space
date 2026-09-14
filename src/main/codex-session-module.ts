@@ -542,6 +542,11 @@ export function createCodexSessionModule(dependencies: CodexSessionModuleDepende
         await state.input.onTurnCompleted?.(result)
         return result
       }
+    } catch (error) {
+      if (!state.waitingRequest && state.input.executionId) {
+        observeProjection(() => itemProjection?.completeTurn('failed', error instanceof Error ? error.message : String(error), projectionScope(state)))
+      }
+      throw error
     } finally {
       // A waiting Turn remains addressable through turnStates until the user
       // responds. Completed or failed Turns release the transport here.
@@ -595,6 +600,7 @@ export function createCodexSessionModule(dependencies: CodexSessionModuleDepende
         const turnResponse = await transport.request('turn/start', {
           threadId,
           input: [{ type: 'text', text: input.input, text_elements: [] }],
+          summary: 'concise',
           cwd: input.cwd,
           approvalPolicy,
           sandboxPolicy: policyParams.sandboxPolicy ?? { type: sandbox === 'read-only' ? 'readOnly' : 'workspaceWrite' },

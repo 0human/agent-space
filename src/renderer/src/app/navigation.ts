@@ -1,5 +1,6 @@
 import type { Project } from '../../../shared/project'
 import type { WorkflowRun } from '../../../shared/workflow-run'
+import type { WorkflowView } from '../../../shared/workflow'
 
 export type ProjectPage =
   | { name: 'projectOverview' }
@@ -10,6 +11,7 @@ export type ProjectPage =
 export type AppPage =
   | ProjectPage
   | { name: 'workflow'; project: Project }
+  | { name: 'newRun'; project: Project; workflow: WorkflowView }
   | { name: 'run'; project: Project; run: WorkflowRun }
   | { name: 'settings' }
 

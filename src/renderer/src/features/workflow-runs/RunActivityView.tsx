@@ -53,7 +53,9 @@ export function RunActivityView(
     setPending(action)
     setControlError(null)
     try {
-      return await operation() !== false
+      const success = await operation() !== false
+      if (success && (action === 'send' || action === 'approve')) scroll.returnToLive()
+      return success
     } catch (reason) {
       setControlError(reason instanceof Error ? reason.message : String(reason))
       return false
@@ -69,6 +71,15 @@ export function RunActivityView(
     items.push(item)
     itemsByExecution.set(item.executionId, items)
   }
+  const pendingQuestion = run.status === 'waiting' && run.snapshot.pendingQuestionDetails?.answer === null
+    ? run.snapshot.pendingQuestionDetails : null
+  const questionText = pendingQuestion?.question ?? (run.status === 'waiting' && !run.snapshot.pendingQuestionDetails ? run.snapshot.pendingQuestion : null)
+  const questionExecutionId = pendingQuestion?.continuation.executionId ?? run.snapshot.currentStepExecutionId
+  const normalize = (value: string): string => value.replace(/\s+/g, ' ').trim()
+  const questionAlreadyVisible = questionText && (itemsByExecution.get(questionExecutionId ?? '') ?? []).some((item) =>
+    item.type === 'question' ? item.status === 'in_progress'
+      : (item.type === 'agent_message' || item.type === 'final_response') && normalize(item.text).includes(normalize(questionText)),
+  )
 
   return (
     <main
@@ -213,6 +224,11 @@ export function RunActivityView(
               </section>
             )
           })}
+          {questionText && !questionAlreadyVisible ? (
+            <article className="my-4 rounded-lg border p-4" aria-label={copy.run.questionItem}>
+              <p className="whitespace-pre-wrap break-words text-sm">{questionText}</p>
+            </article>
+          ) : null}
           <details
             className="mt-5 text-sm"
             open={Boolean(

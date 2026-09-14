@@ -62,6 +62,41 @@ function completedTurn(threadId = 'thread-1') {
 }
 
 describe('Codex Session Module', () => {
+  it('publishes reasoning deltas while the Turn is still running without adding business events', async () => {
+    const params = { threadId: 'thread-1', turnId: 'turn-1' }
+    const messages: CodexAppServerMessage[] = [
+      { method: 'item/started', params: { ...params, item: { id: 'thinking', type: 'reasoning', summary: [], content: [] } } },
+      { method: 'item/reasoning/summaryTextDelta', params: { ...params, itemId: 'thinking', summaryIndex: 0, delta: '检查' } },
+      { method: 'item/reasoning/summaryTextDelta', params: { ...params, itemId: 'thinking', summaryIndex: 0, delta: '文件' } },
+      { method: 'item/reasoning/textDelta', params: { ...params, itemId: 'thinking', contentIndex: 0, delta: 'Runtime 提供的详情' } },
+    ]
+    let finish!: (message: CodexAppServerMessage) => void
+    const completion = new Promise<CodexAppServerMessage>((resolve) => { finish = resolve })
+    const transport = new ControlledTransport()
+    transport.nextMessage = async () => messages.shift() ?? completion
+    const publish = vi.fn()
+    const projection = createCodexItemProjection({ publish })
+    const session = createCodexSessionModule({ createTransport: () => transport, itemProjection: projection })
+    const settled = vi.fn()
+    const turn = session.runTurn({ cwd: '/work/demo', command: 'codex', executionId: 'execution-1', workUnit: { kind: 'phase', runId: 'run-1', phaseId: 'discovery' }, input: '检查文件' }).then((result) => { settled(); return result })
+    await vi.waitFor(() => expect(publish).toHaveBeenLastCalledWith(expect.objectContaining({ type: 'reasoning', status: 'in_progress', summary: ['检查文件'], content: ['Runtime 提供的详情'] })))
+    expect(transport.requests).toContainEqual(expect.objectContaining({ method: 'turn/start', params: expect.objectContaining({ summary: 'concise' }) }))
+    expect(settled).not.toHaveBeenCalled()
+    finish(completedTurn())
+    expect((await turn).events).toEqual([])
+    expect(projection.list('execution-1')).toEqual([expect.objectContaining({ type: 'reasoning', status: 'completed' })])
+  })
+
+  it('ends reasoning when the transport fails before Turn completion', async () => {
+    const transport = new ControlledTransport([
+      { method: 'item/started', params: { threadId: 'thread-1', turnId: 'turn-1', item: { id: 'thinking', type: 'reasoning', summary: [], content: [] } } },
+    ])
+    const projection = createCodexItemProjection()
+    const session = createCodexSessionModule({ createTransport: () => transport, itemProjection: projection })
+    await expect(session.runTurn({ cwd: '/work/demo', command: 'codex', executionId: 'execution-1', workUnit: { kind: 'phase', runId: 'run-1', phaseId: 'discovery' }, input: '检查文件' })).rejects.toThrow()
+    expect(projection.list('execution-1')).toEqual(expect.arrayContaining([expect.objectContaining({ type: 'reasoning', status: 'failed' })]))
+  })
+
   it('reports explicit missing capabilities during negotiation', async () => {
     const transport = new ControlledTransport([], 'thread-1', { methods: ['thread/start'], events: [] })
     const session = createCodexSessionModule({ createTransport: async () => transport })

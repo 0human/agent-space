@@ -387,8 +387,10 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
       if (!workspaceAllowed(input.project)) errors.push('Permission Policy 阻止访问 Project Workspace 目录。')
       if (!input.workflow.canStart || !input.workflow.validation.valid) errors.push(zhCNMain.workflowRun.workflowInvalid(input.workflow.validation.errors.join(' ')))
       else checks.push(zhCNMain.workflowRun.workflowValid)
-      if (!input.idea.trim()) errors.push(zhCNMain.workflowRun.ideaRequired)
-      else checks.push(zhCNMain.workflowRun.ideaFilled)
+      if (input.idea !== undefined) {
+        if (!input.idea.trim()) errors.push(zhCNMain.workflowRun.ideaRequired)
+        else checks.push(zhCNMain.workflowRun.ideaFilled)
+      }
       errors.push(...releaseConfigErrors(input.project))
       for (const phase of input.workflow.definition.phases) {
         for (const step of phase.steps) {
@@ -444,7 +446,7 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
     },
 
     async startRun(input): Promise<WorkflowRun> {
-      const preflight = await this.preflight(input)
+      const preflight = await this.preflight({ ...input, idea: input.idea ?? '' })
       if (!preflight.passed) throw new Error(preflight.errors.join(' '))
       const missingDeliveryGate = deliveryGateError(input)
       if (missingDeliveryGate) throw new Error(missingDeliveryGate)

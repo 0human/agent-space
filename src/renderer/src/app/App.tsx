@@ -9,6 +9,7 @@ import { Toaster } from '@renderer/components/ui/sonner'
 import { ProjectFeature } from '@renderer/features/projects/ProjectFeature'
 import { SettingsFeature } from '@renderer/features/settings/SettingsFeature'
 import { WorkflowRunFeature } from '@renderer/features/workflow-runs/WorkflowRunFeature'
+import { RunSetupFeature } from '@renderer/features/workflow-runs/RunSetupFeature'
 import { WorkflowFeature } from '@renderer/features/workflows/WorkflowFeature'
 import { zhCN } from '@renderer/i18n/zh-CN'
 
@@ -30,10 +31,13 @@ export default function App(): React.JSX.Element {
     <WorkflowFeature project={page.project} onNavigate={setPage} />
   ) : page.name === 'run' ? (
     <WorkflowRunFeature
+      key={page.run.id}
       project={page.project}
       initialRun={page.run}
       onNavigate={setPage}
     />
+  ) : page.name === 'newRun' ? (
+    <RunSetupFeature key={page.project.id} project={page.project} workflow={page.workflow} onNavigate={setPage} />
   ) : (
     <SettingsFeature />
   )

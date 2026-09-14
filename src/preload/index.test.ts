@@ -46,6 +46,8 @@ describe('App Shell preload contract', () => {
     await api.copyWorkflow('project-1')
     await api.reloadWorkflow('project-1')
     await api.preflightWorkflowRun('project-1', 'idea')
+    await api.preflightWorkflowRun('project-1')
+    expect(invoke).toHaveBeenLastCalledWith('workflow-run:preflight', 'project-1', undefined)
     await api.startWorkflowRun('project-1', 'idea')
     await api.listWorkflowRuns('project-1')
     await api.getWorkflowRun('run-1')

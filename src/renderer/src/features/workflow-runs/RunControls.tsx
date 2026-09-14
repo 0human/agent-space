@@ -21,7 +21,6 @@ export function RunComposer({ run, pending, onPause, onSubmit }: {
   onSubmit: (guidance?: string) => Promise<boolean>
 }): React.JSX.Element {
   const [input, setInput] = useState('')
-  const question = run.status === 'waiting' ? run.snapshot.pendingQuestionDetails : null
   const { canResume, canRetry, canAnswer } = runControlAvailability(run)
   const canSend = canRetry || canAnswer
   const enabled = pending === null && (canResume || canSend)
@@ -36,7 +35,6 @@ export function RunComposer({ run, pending, onPause, onSubmit }: {
       if (!enabled || (!canResume && !input.trim())) return
       if (await onSubmit(input.trim() || undefined)) setInput('')
     }}>
-      {question?.answer === null ? <p className="text-sm">{question.question}</p> : null}
       {run.status === 'waiting' && run.snapshot.pendingApprovalDetails?.decision === null
         ? <p className="text-sm">{copy.run.approvalComposerHint}</p> : null}
       <label className="text-xs" htmlFor="run-input">{copy.run.composerLabel}</label>

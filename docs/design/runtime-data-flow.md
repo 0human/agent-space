@@ -95,7 +95,7 @@ Runtime Approval 是 Codex App Server 的执行协议请求，必须响应原 se
 
 禁止进入 Display Projection 或持久 Runtime Event 的内容：
 
-- hidden chain-of-thought 或原始 reasoning；
+- Runtime 未公开的 hidden chain-of-thought、加密 reasoning 及未知字段；
 - token、password、authorization header、credential 和 secret；
 - 未经脱敏的绝对敏感路径与环境变量；
 - 原始 JSON-RPC payload；
@@ -103,13 +103,15 @@ Runtime Approval 是 Codex App Server 的执行协议请求，必须响应原 se
 
 命令、Tool 和 File Change 只展示用户理解执行所需的最小信息。完整 Codex 历史由本地 Codex 持有，Agent Space SQLite 不复制 Agent Message、Command Output、Diff、Plan、Tool 结果或 provider transcript。
 
+Reasoning 作为 Runtime Item 展示：每次 `turn/start` 请求 `summary: "concise"`；`item/started` 立即显示思考状态，`summaryTextDelta` 按 `summaryIndex` 累积可读摘要，`textDelta` 按 `contentIndex` 累积 Runtime 显式提供的原始文本。摘要默认可见，原始文本默认折叠并可展开；两者均在进入 IPC 前脱敏，保持段落顺序与 Item 身份，完成事件收敛为最终文本。Turn 完成、中断或失败时清理尚未完成的思考状态。历史通过同一投影恢复，不将 reasoning 复制到 SQLite、业务 Runtime Event 或 Phase Context。
+
 ## 验收与测试 Seam
 
 - Codex Session Module Interface：使用可控 transport 验证通知、delta、完成、中断、审批和未知 Item。
 - Workflow Engine Interface：使用 fake Runtime Adapter 验证 Runtime Event 到 Run/Step 状态的映射。
 - Run Activity View：验证 Item 原位更新、折叠、Live/Inspection Mode、历史合并和不可用状态。
 - 恢复测试：验证多 Thread、多 Turn、多 attempt 的 Runtime Locator 顺序和幂等历史重建。
-- 数据边界测试：验证 SQLite 不新增 Codex transcript 副本，reasoning 和 secret 不进入 IPC 或 UI。
+- 数据边界测试：验证 SQLite 不新增 Codex transcript 副本；只有脱敏后的 reasoning `summary` / `content` 进入 IPC 与 UI，加密内容、未知字段和 secret 不进入。
 
 ## 官方能力依据
 

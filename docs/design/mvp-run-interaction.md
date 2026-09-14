@@ -27,6 +27,10 @@ APP 自动初始化 Git、本地 Project 配置和默认 Development Workflow。
 
 Workflow 启动后默认连续执行，不在每个 Phase 设置固定确认。只有 Agent 问题、Runtime 审批、Approval Gate、失败或阻塞才暂停自动推进。
 
+查看 Workflow 时只展示流程结构，右上角提供「启动检查」和「运行」。此处的启动检查只验证环境与依赖，不要求输入想法。「运行」进入尚未开始的运行页；用户输入想法，点击「开始运行」后执行完整检查，通过后才创建 Workflow Run。检查或启动失败时保留输入并显示原因，重复提交不会创建多个 Run。
+
+待回答的问题在活动流里只显示一次，不在底部输入区重复全文。Runtime 历史缺失时，在活动流里补显 Run Snapshot 中的待回答问题。回答、继续、重试或批准成功后恢复 Live Mode；用户主动检查历史时仍保留阅读位置。
+
 ## 页面结构
 
 ```text
@@ -63,13 +67,14 @@ Workflow 启动后默认连续执行，不在每个 Phase 设置固定确认。�
 默认展示密度：
 
 - Agent 面向用户的消息和进度说明；
+- Reasoning 开始时显示“正在思考”，可读摘要流式显示；Runtime 显式提供的原始推理文本可展开查看，默认折叠；
 - Plan 及状态变化；
 - Command 名称、运行状态和结果摘要，完整输出默认折叠；
 - Tool 调用和结果摘要；
 - File Change 的进行中状态、完成状态、路径及 `+x -y`；
 - Question、Approval、Error、Interrupt 和最终回复。
 
-不展示隐藏 chain-of-thought、原始 reasoning、凭据或未脱敏环境信息。
+Reasoning 只读取 Runtime 显式提供的 `summary`、`content` 文本及对应增量，进入 IPC 前脱敏；不读取加密推理、隐藏字段、凭据或未脱敏环境信息。Runtime 未提供原始文本时显示缺失说明，不将摘要冒充原始文本。完成、中断或失败后结束“正在思考”状态，流式更新不重置用户的展开状态。
 
 ## Live Mode 与 Inspection Mode
 

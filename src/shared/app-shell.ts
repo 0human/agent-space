@@ -48,7 +48,7 @@ export interface AppShellApi {
   getWorkflow: (projectId: string) => Promise<WorkflowView>
   copyWorkflow: (projectId: string) => Promise<WorkflowView | null>
   reloadWorkflow: (projectId: string) => Promise<WorkflowView | null>
-  preflightWorkflowRun: (projectId: string, idea: string) => Promise<WorkflowPreflightResult>
+  preflightWorkflowRun: (projectId: string, idea?: string) => Promise<WorkflowPreflightResult>
   startWorkflowRun: (projectId: string, idea: string) => Promise<WorkflowRunActionResult>
   listWorkflowRuns: (projectId: string) => Promise<WorkflowRun[]>
   getWorkflowRun: (runId: string) => Promise<WorkflowRun | null>

@@ -53,9 +53,22 @@ describe('Workflow through the App seam', () => {
       screen.getByRole('button', { name: '复制为 Project Workflow' }),
     ).toBeEnabled()
     expect(
-      screen.getByRole('button', { name: '直接运行内置 Workflow' }),
+      screen.getByRole('button', { name: '运行' }),
     ).toBeEnabled()
-    expect(screen.getByRole('button', { name: '启动新 Run' })).toBeDisabled()
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '开始运行' })).not.toBeInTheDocument()
+    window.appShell.preflightWorkflowRun = vi.fn().mockResolvedValue({ passed: true, checks: ['运行环境可用。'], errors: [] })
+    await user.click(screen.getByRole('button', { name: '启动检查' }))
+    expect(await screen.findByText('运行环境可用。')).toBeVisible()
+    expect(window.appShell.preflightWorkflowRun).toHaveBeenCalledWith('project-1')
+    expect(window.appShell.startWorkflowRun).not.toHaveBeenCalled()
+    await user.click(screen.getByRole('button', { name: '运行' }))
+    expect(await screen.findByRole('heading', { name: '新运行' })).toBeVisible()
+    expect(screen.getByRole('textbox', { name: '想法' })).toBeVisible()
+    expect(screen.getByRole('button', { name: '开始运行' })).toBeDisabled()
+    expect(window.appShell.startWorkflowRun).not.toHaveBeenCalled()
+    await user.click(screen.getByRole('button', { name: '返回 Workflow' }))
+    expect(await screen.findByRole('heading', { name: '软件交付 Workflow' })).toBeVisible()
   })
 
   it('copies, reloads, validates, and blocks an invalid Project Workflow', async () => {
@@ -117,10 +130,10 @@ describe('Workflow through the App seam', () => {
       await screen.findByRole('heading', { name: 'Edited Workflow' }),
     ).toBeVisible()
     expect(screen.getByRole('alert')).toHaveTextContent('缺少 Skill research。')
-    expect(screen.getByRole('button', { name: '启动新 Run' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '运行' })).toBeDisabled()
   })
 
-  it('requires a successful Preflight before creating a Run Board', async () => {
+  it('starts from the Run page only after successful checks and preserves the Idea on failure', async () => {
     const user = userEvent.setup()
     const project = {
       id: 'project-1',
@@ -199,11 +212,15 @@ describe('Workflow through the App seam', () => {
     render(<App />)
     await user.click(await screen.findByRole('button', { name: /demo/ }))
     await user.click(screen.getByRole('button', { name: '查看 Workflow' }))
-    await user.type(await screen.findByLabelText('Idea'), 'Build durable runs')
-    expect(screen.getByRole('button', { name: '启动新 Run' })).toBeDisabled()
-    await user.click(screen.getByRole('button', { name: '运行 Preflight' }))
-    expect(await screen.findByText('Idea 已填写。')).toBeVisible()
-    await user.click(screen.getByRole('button', { name: '启动新 Run' }))
+    await user.click(await screen.findByRole('button', { name: '运行' }))
+    expect(await screen.findByRole('heading', { name: '新运行' })).toBeVisible()
+    await user.type(screen.getByLabelText('想法'), 'Build durable runs')
+    vi.mocked(window.appShell.preflightWorkflowRun).mockResolvedValueOnce({ passed: false, checks: [], errors: ['缺少运行依赖。'] })
+    await user.click(screen.getByRole('button', { name: '开始运行' }))
+    expect(await screen.findByText('缺少运行依赖。')).toBeVisible()
+    expect(screen.getByLabelText('想法')).toHaveValue('Build durable runs')
+    expect(window.appShell.startWorkflowRun).not.toHaveBeenCalled()
+    await user.click(screen.getByRole('button', { name: '开始运行' }))
     expect(
       await screen.findByRole('heading', { name: 'Build durable runs' }),
     ).toBeVisible()
@@ -288,9 +305,9 @@ describe('Workflow through the App seam', () => {
     render(<App />)
     await user.click(await screen.findByRole('button', { name: /demo/ }))
     await user.click(screen.getByRole('button', { name: '查看 Workflow' }))
-    await user.type(await screen.findByLabelText('Idea'), 'Run built-in')
-    await user.click(screen.getByRole('button', { name: '运行 Preflight' }))
-    await user.click(await screen.findByRole('button', { name: '启动新 Run' }))
+    await user.click(await screen.findByRole('button', { name: '运行' }))
+    await user.type(await screen.findByLabelText('想法'), 'Run built-in')
+    await user.click(screen.getByRole('button', { name: '开始运行' }))
 
     expect(window.appShell.copyWorkflow).not.toHaveBeenCalled()
     expect(window.appShell.startWorkflowRun).toHaveBeenCalledWith(

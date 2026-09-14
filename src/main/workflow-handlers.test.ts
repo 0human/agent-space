@@ -138,6 +138,8 @@ describe('Workflow IPC handlers', () => {
 
     await expect(handlers.get(APP_SHELL_CHANNELS.preflightWorkflowRun)?.({}, 'project-1', 'An idea')).resolves.toEqual({ passed: true, checks: ['Idea 已填写。'], errors: [] })
     expect(engine.preflight).toHaveBeenCalledWith(expect.objectContaining({ idea: 'An idea', project: expect.objectContaining({ id: 'project-1' }), workflow }))
+    await handlers.get(APP_SHELL_CHANNELS.preflightWorkflowRun)?.({}, 'project-1')
+    expect(engine.preflight).toHaveBeenLastCalledWith(expect.objectContaining({ idea: undefined, workflow }))
     await expect(handlers.get(APP_SHELL_CHANNELS.startWorkflowRun)?.({}, 'project-1', 'An idea')).resolves.toEqual({ ok: true, error: null, run: { id: 'run-1' } })
     expect(engine.startRun).toHaveBeenCalledWith(expect.objectContaining({ idea: 'An idea', workflow }))
   })

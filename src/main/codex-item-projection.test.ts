@@ -157,9 +157,9 @@ describe('Codex Item Projection', () => {
     ])
   })
 
-  it('projects safe file, plan, supported tool and error items while ignoring reasoning and unknown items', () => {
+  it('projects allowlisted reasoning, file, plan, tool and error fields while ignoring unknown items', () => {
     const projection = createCodexItemProjection()
-    projection.handle({ method: 'item/started', params: { threadId: 'thread-1', turnId: 'turn-1', item: { type: 'reasoning', id: 'reasoning-1', content: ['secret'] } } }, scope)
+    projection.handle({ method: 'item/started', params: { threadId: 'thread-1', turnId: 'turn-1', item: { type: 'reasoning', id: 'reasoning-1', content: ['authorization=reasoning-secret'], encryptedContent: 'secret' } } }, scope)
     projection.handle({ method: 'item/started', params: { threadId: 'thread-1', turnId: 'turn-1', item: { type: 'fileChange', id: 'file-1', status: 'inProgress', changes: [{ path: 'src/a.ts', kind: { type: 'update' }, diff: '@@\n+one\n-two' }, { path: 'secrets/config.json', kind: 'add', diff: '+TOKEN=abc' }] } } }, scope)
     projection.handle({ method: 'item/completed', params: { threadId: 'thread-1', turnId: 'turn-1', item: { type: 'plan', id: 'plan-1', status: 'failed', text: 'Implement and verify', extra: 'do not expose' } } }, scope)
     projection.handle({ method: 'item/completed', params: { threadId: 'thread-1', turnId: 'turn-1', item: { type: 'mcpToolCall', id: 'tool-1', server: 'github', tool: 'list_issues', status: 'completed', arguments: { token: 'secret' }, durationMs: 42, result: { content: [{ text: '2 issues' }] } } } }, scope)
@@ -167,6 +167,7 @@ describe('Codex Item Projection', () => {
     projection.handle({ method: 'error', params: { threadId: 'thread-1', turnId: 'turn-1', code: 'authorization=code-secret', error: { message: 'authorization=secret failed' }, rawJsonRpc: { secret: true } } }, scope)
 
     expect(projection.list(scope.executionId)).toEqual([
+      expect.objectContaining({ type: 'reasoning', summary: [], content: ['authorization=<redacted>'] }),
       expect.objectContaining({ type: 'file_change', changes: [{ path: 'src/a.ts', kind: 'update', additions: 1, deletions: 1 }, { path: '<redacted path>', kind: 'add', additions: 1, deletions: 0 }], additions: 2, deletions: 1 }),
       expect.objectContaining({ type: 'plan', status: 'failed', text: 'Implement and verify' }),
       expect.objectContaining({ type: 'tool', name: 'github.list_issues', status: 'completed', durationMs: 42, output: '2 issues' }),
@@ -491,7 +492,7 @@ describe('Codex Item Projection', () => {
           items: [
             { type: 'agentMessage', id: 'history-final', phase: 'final_answer', text: 'Recovered final' },
             { type: 'commandExecution', id: 'history-command', command: 'pnpm test', status: 'completed', aggregatedOutput: 'passed', exitCode: 0, durationMs: 80 },
-            { type: 'reasoning', id: 'history-reasoning', content: ['hidden-secret'] },
+            { type: 'reasoning', id: 'history-reasoning', summary: ['Recovered summary'], content: ['Recovered detail'], encryptedContent: 'hidden-secret' },
             { type: 'futureItem', id: 'history-unknown', token: 'unknown-secret' }
           ]
         }]
@@ -500,7 +501,8 @@ describe('Codex Item Projection', () => {
 
     expect(projection.list(scope.executionId)).toEqual([
       expect.objectContaining({ id: 'history-final', type: 'final_response', status: 'completed', text: 'Recovered final' }),
-      expect.objectContaining({ id: 'history-command', type: 'command', status: 'completed', output: 'passed', exitCode: 0 })
+      expect.objectContaining({ id: 'history-command', type: 'command', status: 'completed', output: 'passed', exitCode: 0 }),
+      expect.objectContaining({ id: 'history-reasoning', type: 'reasoning', status: 'completed', summary: ['Recovered summary'], content: ['Recovered detail'] })
     ])
     expect(projection.listIgnoredItems(scope.executionId)).toEqual([
       expect.objectContaining({ itemId: 'history-unknown', itemType: 'futureItem', reason: 'unsupported_item_type' })

@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 
 import type { Project } from '../../../../shared/project'
@@ -28,6 +28,7 @@ describe('Preparing a new Run', () => {
     const onNavigate = vi.fn()
     render(<AppShellProvider api={api}><RunSetupFeature project={project} workflow={workflow} onNavigate={onNavigate} /></AppShellProvider>)
     const input = screen.getByLabelText('想法')
+    await waitFor(() => expect(input).toBeEnabled())
     fireEvent.change(input, { target: { value: '  做一个计算器  ' } })
     fireEvent.submit(input.closest('form')!)
     fireEvent.submit(input.closest('form')!)
@@ -49,6 +50,7 @@ describe('Preparing a new Run', () => {
     api.preflightWorkflowRun = vi.fn(() => new Promise<WorkflowPreflightResult>((resolve) => { finish = resolve }))
     const { unmount } = render(<AppShellProvider api={api}><RunSetupFeature project={project} workflow={workflow} onNavigate={vi.fn()} /></AppShellProvider>)
     const input = screen.getByLabelText('想法')
+    await waitFor(() => expect(input).toBeEnabled())
     fireEvent.change(input, { target: { value: '做一个计算器' } })
     fireEvent.submit(input.closest('form')!)
     unmount()

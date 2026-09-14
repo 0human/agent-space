@@ -117,7 +117,7 @@ describe('WorkflowEngine public API', () => {
     await expect(engine.preflight({ project, workflow, idea: ' ' })).resolves.toMatchObject({ passed: false })
     await expect(engine.startRun({ project, workflow, idea: '' })).rejects.toThrow()
     await expect(engine.startRun({ project, workflow } as never)).rejects.toThrow()
-    await expect(engine.listRuns(project.id)).resolves.toEqual([])
+    await expect(engine.getProjectRun(project.id)).resolves.toBeNull()
     await expect(engine.preflight({ project: { ...project, workspaceAvailable: false }, workflow })).resolves.toMatchObject({ passed: false })
   })
 
@@ -753,7 +753,7 @@ describe('WorkflowEngine public API', () => {
     })
   })
 
-  it('runs multiple Runs for one Project in isolated workspaces', async () => {
+  it('creates only one Run and Workspace for concurrent starts of one Project', async () => {
     directory = await mkdtemp(join(tmpdir(), 'agent-space-run-'))
     const runtime = new FakeRuntime()
     const runWorkspaceManager = {
@@ -764,27 +764,26 @@ describe('WorkflowEngine public API', () => {
       }))
     }
     engine = createWorkflowEngine({ databasePath: join(directory, 'runs.sqlite'), runtime, runWorkspaceManager })
+    const results = await Promise.allSettled([
+      engine.startRun({ project, workflow, idea: 'First submission' }),
+      engine.startRun({ project, workflow, idea: 'Second submission' })
+    ])
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1)
+    expect(results.filter((result) => result.status === 'rejected')).toEqual([
+      expect.objectContaining({ reason: expect.objectContaining({ message: '该工程已有运行实例，每个工程仅允许创建一个 Run。' }) })
+    ])
+    expect(runWorkspaceManager.prepare).toHaveBeenCalledTimes(1)
+    const run = (await engine.getProjectRun(project.id))!
+    await vi.waitFor(() => expect(runtime.contexts).toHaveLength(1))
+    runtime.finish([{ type: 'status_changed', status: 'completed' }])
+    await engine.waitForIdle(run.id)
+    await expect(engine.startRun({ project, workflow, idea: 'After completion' })).rejects.toThrow('每个工程仅允许创建一个 Run')
 
-    const first = await engine.startRun({ project, workflow, idea: 'First parallel change #11' })
-    const second = await engine.startRun({ project, workflow, idea: 'Second parallel change #11' })
-
+    const other = await engine.startRun({ project: { ...project, id: 'project-2' }, workflow, idea: 'Another Project' })
     await vi.waitFor(() => expect(runtime.contexts).toHaveLength(2))
-    expect(first.id).not.toBe(second.id)
-    expect(first.workspacePath).not.toBe(second.workspacePath)
-    expect(first.branch).not.toBe(second.branch)
-    expect(runtime.contexts.map((context) => context.workspace.path)).toEqual(expect.arrayContaining([
-      `/work/demo-agent-space-${first.id}`,
-      `/work/demo-agent-space-${second.id}`
-    ]))
-
+    expect(other.workspacePath).not.toBe(run.workspacePath)
     runtime.finish([{ type: 'status_changed', status: 'completed' }])
-    runtime.finish([{ type: 'status_changed', status: 'completed' }])
-    await Promise.all([engine.waitForIdle(first.id), engine.waitForIdle(second.id)])
-
-    await expect(engine.listRuns(project.id)).resolves.toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: first.id, projectId: project.id, baseCommit: 'abc123', branch: `main/agent-space/${first.id}` }),
-      expect.objectContaining({ id: second.id, projectId: project.id, baseCommit: 'abc123', branch: `main/agent-space/${second.id}` })
-    ]))
+    await engine.waitForIdle(other.id)
   })
 
   it('blocks a Run when Runtime reports a merge conflict', async () => {
@@ -1119,12 +1118,12 @@ describe('WorkflowEngine public API', () => {
     recoveredRuntime.finish([{ type: 'status_changed', status: 'completed' }])
     await expect(engine.waitForIdle(waitingRun.id)).resolves.toMatchObject({ status: 'completed' })
 
-    const blockedRun = await engine.startRun({ project, workflow, idea: 'Wait for a dependency' })
+    const blockedRun = await engine.startRun({ project: { ...project, id: 'blockedRun-project' }, workflow, idea: 'Wait for a dependency' })
     await vi.waitFor(() => expect(recoveredRuntime.calls).toHaveLength(2))
     recoveredRuntime.finish([{ type: 'status_changed', status: 'blocked' }])
     await expect(engine.waitForIdle(blockedRun.id)).resolves.toMatchObject({ status: 'blocked' })
 
-    const failedRun = await engine.startRun({ project, workflow, idea: 'Retry this Step' })
+    const failedRun = await engine.startRun({ project: { ...project, id: 'failedRun-project' }, workflow, idea: 'Retry this Step' })
     await vi.waitFor(() => expect(recoveredRuntime.calls).toHaveLength(3))
     recoveredRuntime.finish([{ type: 'error', error: 'Transient runtime error' }])
     await expect(engine.waitForIdle(failedRun.id)).resolves.toMatchObject({ status: 'failed', stepExecutions: [expect.objectContaining({ attempt: 1, status: 'failed' })] })
@@ -1136,7 +1135,7 @@ describe('WorkflowEngine public API', () => {
       stepExecutions: [expect.objectContaining({ attempt: 1, status: 'failed' }), expect.objectContaining({ attempt: 2, status: 'completed' })]
     })
 
-    const cancelledRun = await engine.startRun({ project, workflow, idea: 'Cancel this Run' })
+    const cancelledRun = await engine.startRun({ project: { ...project, id: 'cancelledRun-project' }, workflow, idea: 'Cancel this Run' })
     await vi.waitFor(() => expect(recoveredRuntime.calls).toHaveLength(5))
     await recoveredRuntime.contexts[4]?.persistRuntimeLocator?.({
       runtimeProvider: 'fake',

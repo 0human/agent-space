@@ -13,7 +13,7 @@ _Avoid_：Workflow template、prompt chain
 _Avoid_：Database-only workflow、prompt script
 
 **Workflow Run**：
-一个 Project 按某个确定版本的 Workflow Definition 进行的一次实际执行。
+一个 Project 按某个确定版本的 Workflow Definition 进行的唯一一次实际执行；创建后始终属于该 Project，不因完成或结束而释放关联。
 _Avoid_：Session、job
 
 **Phase**：
@@ -138,23 +138,19 @@ V1 内置的 software delivery Workflow，从 Idea / Discovery 经 Requirements�
 _Avoid_：Coding task、implementation-only workflow
 
 **Project Workflow**：
-Project 选定的 Workflow Definition 版本及其显式定制，是该 Project 后续 Workflow Run 的依据。
+Project 选定的 Workflow Definition 版本及其显式定制，是该 Project 创建唯一 Workflow Run 的依据。
 _Avoid_：Global template、workflow run
 
 **Base Commit**：
 一个 Workflow Run 开始代码修改时固定的版本控制基点，后续 branch、worktree 和 PR 都以此作为变更上下文。
 _Avoid_：Latest HEAD、shared state
 
-**Parallel Workflow Run**：
-同一个 Project 中同时进行、各自拥有独立 Workspace/branch 的多个 Workflow Run；它们通过 PR 或合并流程汇合，不直接共享可写目录。
-_Avoid_：Concurrent edit、shared run
-
 **Merge Conflict**：
-多个 Parallel Workflow Run 的变更无法直接合并时产生的阻塞状态，必须由 Skill 或用户解决后才能继续。
+Workflow Run 的变更与目标分支无法直接合并时产生的阻塞状态，必须由 Skill 或用户解决后才能继续。
 _Avoid_：Overwrite、automatic resolution
 
 **Project Overview**：
-汇总一个 Project 下多个 Parallel Workflow Run 的当前 Phase、阻塞状态和最近 Artifact 的视图，不直接改变各 Run 的 Workflow 状态。
+展示 Project 及其唯一 Workflow Run 的当前 Phase、阻塞状态和最近 Artifact 的视图，不直接改变 Run 的 Workflow 状态。
 _Avoid_：Run Board、global kanban
 
 **Repository Connector**：

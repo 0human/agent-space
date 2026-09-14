@@ -12,6 +12,7 @@ import { Button } from '@renderer/components/ui/button'
 import { Textarea } from '@renderer/components/ui/textarea'
 import { PreflightResult } from '../workflows/PreflightResult'
 import { zhCN as copy } from '@renderer/i18n/zh-CN'
+import { useProjectRun } from './use-project-run'
 
 export function RunSetupFeature({ project, workflow, onNavigate }: {
   project: Project
@@ -19,6 +20,10 @@ export function RunSetupFeature({ project, workflow, onNavigate }: {
   onNavigate: (page: AppPage) => void
 }): React.JSX.Element {
   const api = useAppShell()
+  const projectRun = useProjectRun(project.id)
+  useEffect(() => {
+    if (projectRun.run) onNavigate({ name: 'run', project, run: projectRun.run })
+  }, [projectRun.run, project, onNavigate])
   const [idea, setIdea] = useState('')
   const [pending, setPending] = useState<'checking' | 'starting' | null>(null)
   const inFlight = useRef(false)
@@ -33,7 +38,7 @@ export function RunSetupFeature({ project, workflow, onNavigate }: {
   const firstStep = firstPhase?.steps[0]
 
   async function start(): Promise<void> {
-    if (inFlight.current || !idea.trim() || !workflow.canStart) return
+    if (inFlight.current || projectRun.loading || projectRun.error || projectRun.run || !idea.trim() || !workflow.canStart) return
     inFlight.current = true
     setPending('checking')
     setError(null)
@@ -46,7 +51,7 @@ export function RunSetupFeature({ project, workflow, onNavigate }: {
       setPending('starting')
       const result = await api.startWorkflowRun(project.id, idea.trim())
       if (!active.current) return
-      if (result.ok && result.run) onNavigate({ name: 'run', project, run: result.run })
+      if (result.run) onNavigate({ name: 'run', project, run: result.run })
       else setError(result.error ?? copy.workflow.startError)
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : copy.workflow.startError)
@@ -85,13 +90,14 @@ export function RunSetupFeature({ project, workflow, onNavigate }: {
         ) : null}
         <p className="text-xs text-muted-foreground">{copy.run.startCheckHint}</p>
         {preflight ? <PreflightResult result={preflight} /> : null}
+        {projectRun.error ? <Alert variant="destructive" role="alert"><AlertDescription>{projectRun.error}</AlertDescription></Alert> : null}
         {error ? <Alert variant="destructive" role="alert"><AlertDescription>{error}</AlertDescription></Alert> : null}
       </section>
       <footer className="shrink-0 border-t px-4 py-4 sm:px-8">
         <form className="grid gap-3" onSubmit={(event) => { event.preventDefault(); void start() }}>
           <label className="text-sm" htmlFor="new-run-idea">{copy.workflow.ideaLabel}</label>
-          <Textarea id="new-run-idea" autoFocus value={idea} disabled={pending !== null} placeholder={copy.workflow.ideaPlaceholder} onChange={(event) => { setIdea(event.target.value); setPreflight(null); setError(null) }} />
-          <Button className="w-fit" type="submit" disabled={pending !== null || !idea.trim() || !workflow.canStart}>
+          <Textarea id="new-run-idea" autoFocus value={idea} disabled={pending !== null || projectRun.loading || Boolean(projectRun.error) || Boolean(projectRun.run)} placeholder={copy.workflow.ideaPlaceholder} onChange={(event) => { setIdea(event.target.value); setPreflight(null); setError(null) }} />
+          <Button className="w-fit" type="submit" disabled={pending !== null || projectRun.loading || Boolean(projectRun.error) || Boolean(projectRun.run) || !idea.trim() || !workflow.canStart}>
             <ArrowRight aria-hidden="true" />
             {pending === 'checking' ? copy.workflow.checking : pending === 'starting' ? copy.workflow.starting : copy.workflow.startAction}
           </Button>

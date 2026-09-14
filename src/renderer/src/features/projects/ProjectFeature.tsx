@@ -30,6 +30,7 @@ import {
 import { Input } from '@renderer/components/ui/input'
 import { Separator } from '@renderer/components/ui/separator'
 import { zhCN as copy } from '@renderer/i18n/zh-CN'
+import { useProjectRun } from '../workflow-runs/use-project-run'
 
 interface ProjectFeatureProps {
   page: ProjectPage
@@ -50,8 +51,8 @@ export function ProjectFeature({
   const [transferNotice, setTransferNotice] =
     useState<DataTransferNotice | null>(null)
   const [cloneBlocked, setCloneBlocked] = useState<string | null>(null)
-  const [runs, setRuns] = useState<WorkflowRun[]>([])
   const selectedProject = page.name === 'projectDetail' ? page.project : null
+  const projectRun = useProjectRun(selectedProject?.id ?? null)
 
   useEffect(() => {
     void api
@@ -59,27 +60,6 @@ export function ProjectFeature({
       .then(setProjects)
       .catch(() => setError(copy.projectOverview.loadError))
   }, [api])
-
-  useEffect(() => {
-    if (!selectedProject) return
-    let disposed = false
-    const refresh = async (): Promise<void> => {
-      try {
-        const current = await api.listWorkflowRuns(selectedProject.id)
-        if (!disposed) setRuns(current)
-      } catch {
-        if (!disposed) setRuns([])
-      }
-    }
-    const timer = window.setInterval(() => {
-      void refresh()
-    }, 500)
-    void refresh()
-    return () => {
-      disposed = true
-      window.clearInterval(timer)
-    }
-  }, [api, selectedProject?.id])
 
   const openImportedProject = (
     project: Project,
@@ -206,7 +186,9 @@ export function ProjectFeature({
   return (
     <ProjectDetail
       project={page.project}
-      runs={runs}
+      run={projectRun.run}
+      runLoading={projectRun.loading}
+      runError={projectRun.error}
       openError={openError}
       importWarning={importWarning}
       importNotice={importNotice}
@@ -494,7 +476,9 @@ function ProjectEntry({
 
 function ProjectDetail({
   project,
-  runs,
+  run,
+  runLoading,
+  runError,
   openError,
   importWarning,
   importNotice,
@@ -506,7 +490,9 @@ function ProjectDetail({
   onOpenRun,
 }: {
   project: Project
-  runs: WorkflowRun[]
+  run: WorkflowRun | null
+  runLoading: boolean
+  runError: string | null
   openError: string | null
   importWarning: string | null
   importNotice: string | null
@@ -547,6 +533,10 @@ function ProjectDetail({
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
+            <Button type="button" disabled={!run} onClick={() => { if (run) onOpenRun(run) }}>
+              <ArrowRight aria-hidden="true" />
+              {copy.run.viewAction}
+            </Button>
             <Button
               variant="outline"
               type="button"
@@ -687,73 +677,69 @@ function ProjectDetail({
           </Card>
         ) : null}
         <Separator className="my-8" />
-        <section aria-labelledby="run-list-title">
+        <section aria-labelledby="run-instance-title">
           <div className="flex items-end justify-between gap-4">
             <div>
-              <h2 id="run-list-title" className="text-xl font-semibold">
-                {copy.run.listTitle}
+              <h2 id="run-instance-title" className="text-xl font-semibold">
+                {copy.run.instanceTitle}
               </h2>
               <p className="mt-1 text-sm text-muted-foreground">
-                {copy.run.listDescription}
+                {copy.run.instanceDescription}
               </p>
             </div>
-            <Badge variant="secondary">{copy.run.count(runs.length)}</Badge>
           </div>
-          {runs.length > 0 ? (
-            <div className="mt-5 grid gap-3">
-              {runs.map((run) => (
-                <Card key={run.id} className="py-0">
-                  <button
-                    className="flex w-full items-center gap-4 p-5 text-left"
-                    type="button"
-                    onClick={() => onOpenRun(run)}
-                  >
-                    <span className="min-w-0 flex-1">
-                      <strong className="block">{run.idea}</strong>
-                      <small className="mt-1 block text-muted-foreground">
-                        {run.workflowId}@{run.workflowVersion}
-                      </small>
-                      <small className="block text-muted-foreground">
-                        {copy.run.runId(run.id)}
-                      </small>
-                      <small className="block text-muted-foreground">
-                        {copy.run.currentPhase(
-                          run.definition.phases[run.snapshot.phaseIndex]
-                            ?.name ??
-                            copy.run.phase(run.snapshot.phaseIndex + 1),
-                        )}
-                      </small>
-                      {run.snapshot.blockedBy ? (
-                        <small className="block text-destructive">
-                          {copy.run.blockedReason(
-                            run.snapshot.blockedBy.reason,
-                          )}
-                        </small>
-                      ) : null}
-                      {run.artifacts.length > 0 ? (
-                        <small className="block text-muted-foreground">
-                          {copy.run.recentArtifact(run.artifacts.at(-1)!.name)}
-                        </small>
-                      ) : null}
-                    </span>
-                    <Badge
-                      variant={
-                        run.status === 'failed' || run.status === 'blocked'
-                          ? 'destructive'
-                          : 'secondary'
-                      }
-                    >
-                      {copy.run.status[run.status]}
-                    </Badge>
-                    <ArrowRight
-                      className="size-4 text-muted-foreground"
-                      aria-hidden="true"
-                    />
-                  </button>
-                </Card>
-              ))}
-            </div>
-          ) : (
+          {runError ? <Alert variant="destructive" className="mt-5" role="alert"><AlertDescription>{runError}</AlertDescription></Alert> : null}
+          {runLoading ? <p className="mt-5 text-sm text-muted-foreground">{copy.run.loading}</p> : run ? (
+            <Card className="mt-5 py-0">
+              <button
+                className="flex w-full items-center gap-4 p-5 text-left"
+                type="button"
+                onClick={() => onOpenRun(run)}
+              >
+                <span className="min-w-0 flex-1">
+                  <strong className="block">{run.idea}</strong>
+                  <small className="mt-1 block text-muted-foreground">
+                    {run.workflowId}@{run.workflowVersion}
+                  </small>
+                  <small className="block text-muted-foreground">
+                    {copy.run.runId(run.id)}
+                  </small>
+                  <small className="block text-muted-foreground">
+                    {copy.run.currentPhase(
+                      run.definition.phases[run.snapshot.phaseIndex]
+                        ?.name ??
+                        copy.run.phase(run.snapshot.phaseIndex + 1),
+                    )}
+                  </small>
+                  {run.snapshot.blockedBy ? (
+                    <small className="block text-destructive">
+                      {copy.run.blockedReason(
+                        run.snapshot.blockedBy.reason,
+                      )}
+                    </small>
+                  ) : null}
+                  {run.artifacts.length > 0 ? (
+                    <small className="block text-muted-foreground">
+                      {copy.run.recentArtifact(run.artifacts.at(-1)!.name)}
+                    </small>
+                  ) : null}
+                </span>
+                <Badge
+                  variant={
+                    run.status === 'failed' || run.status === 'blocked'
+                      ? 'destructive'
+                      : 'secondary'
+                  }
+                >
+                  {copy.run.status[run.status]}
+                </Badge>
+                <ArrowRight
+                  className="size-4 text-muted-foreground"
+                  aria-hidden="true"
+                />
+              </button>
+            </Card>
+          ) : runError ? null : (
             <p className="mt-5 text-sm text-muted-foreground">
               {copy.run.empty}
             </p>

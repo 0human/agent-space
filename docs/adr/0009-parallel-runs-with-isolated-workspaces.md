@@ -4,7 +4,7 @@
 
 ## Status
 
-accepted
+superseded by [ADR-0020](./0020-single-workflow-run-per-project.md)
 
 ## Consequences
 

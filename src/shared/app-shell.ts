@@ -20,7 +20,7 @@ export const APP_SHELL_CHANNELS = {
   reloadWorkflow: 'workflow:reload',
   preflightWorkflowRun: 'workflow-run:preflight',
   startWorkflowRun: 'workflow:start-run',
-  listWorkflowRuns: 'workflow-run:list',
+  getProjectWorkflowRun: 'workflow-run:get-for-project',
   getWorkflowRun: 'workflow-run:get',
   openWorkflowRunInIde: 'workflow-run:open-in-ide',
   listRuntimeItems: 'runtime-item:list',
@@ -50,7 +50,7 @@ export interface AppShellApi {
   reloadWorkflow: (projectId: string) => Promise<WorkflowView | null>
   preflightWorkflowRun: (projectId: string, idea?: string) => Promise<WorkflowPreflightResult>
   startWorkflowRun: (projectId: string, idea: string) => Promise<WorkflowRunActionResult>
-  listWorkflowRuns: (projectId: string) => Promise<WorkflowRun[]>
+  getProjectWorkflowRun: (projectId: string) => Promise<WorkflowRun | null>
   getWorkflowRun: (runId: string) => Promise<WorkflowRun | null>
   openWorkflowRunInIde: (runId: string) => Promise<OpenProjectResult>
   listRuntimeItems: (runId: string, executionId: string) => Promise<RuntimeItem[]>

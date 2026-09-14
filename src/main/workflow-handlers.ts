@@ -82,18 +82,20 @@ export function registerWorkflowHandlers({ handle, projectService, workflowServi
         const result = await workflowService.startProjectRun(project.workspacePath, permissionsFor(project))
         return { ...result, run: null }
       }
+      const existing = await workflowEngine.getProjectRun(projectId)
+      if (existing) return { ok: false, error: zhCNMain.workflowRun.alreadyExists, run: existing }
       const workflow = await loadForProject(project)
       try {
         const run = await workflowEngine.startRun({ project, workflow, idea: typeof idea === 'string' ? idea : '' })
         return { ok: true, error: null, run }
       } catch (reason) {
-        return { ok: false, error: reason instanceof Error ? reason.message : String(reason), run: null }
+        return { ok: false, error: reason instanceof Error ? reason.message : String(reason), run: await workflowEngine.getProjectRun(projectId) }
       }
     })
   })
-  handle(APP_SHELL_CHANNELS.listWorkflowRuns, async (_event: unknown, projectId: unknown) => {
-    if (!workflowEngine || typeof projectId !== 'string') return []
-    return workflowEngine.listRuns(projectId)
+  handle(APP_SHELL_CHANNELS.getProjectWorkflowRun, async (_event: unknown, projectId: unknown) => {
+    if (!workflowEngine || typeof projectId !== 'string') return null
+    return workflowEngine.getProjectRun(projectId)
   })
   handle(APP_SHELL_CHANNELS.getWorkflowRun, async (_event: unknown, runId: unknown) => {
     if (!workflowEngine || typeof runId !== 'string') return null

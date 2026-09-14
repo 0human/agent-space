@@ -490,6 +490,9 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
         created_at TEXT NOT NULL
       )
     `)
+    // Old multi-Run projects are reset; their Workspace files remain untouched.
+    await run(db, 'DELETE FROM runs WHERE project_id IN (SELECT project_id FROM runs GROUP BY project_id HAVING COUNT(*) > 1)')
+    await run(db, 'CREATE UNIQUE INDEX IF NOT EXISTS runs_project_id_unique ON runs(project_id)')
     await persistDatabase(db, dependencies.databasePath)
   })
 
@@ -841,6 +844,8 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
     async createRun(input: CreateRunInput): Promise<StoredRun> {
       return locked(async () => transaction(async () => {
         const { id, project, workflow, idea, now: createdAt } = input
+        const existing = await get<{ id: string }>(db, 'SELECT id FROM runs WHERE project_id = ?', [project.id])
+        if (existing) throw new Error(zhCNMain.workflowRun.alreadyExists)
         const workspace = dependencies.runWorkspaceManager
           ? await dependencies.runWorkspaceManager.prepare(project, id)
           : { workspacePath: project.workspacePath, baseCommit: null, branch: null }
@@ -861,15 +866,10 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
       return locked(() => load(id))
     },
 
-    async listRuns(projectId: string): Promise<StoredRun[]> {
+    async getProjectRun(projectId: string): Promise<StoredRun | null> {
       return locked(async () => {
-        const rows = await all<{ id: string }>(db, 'SELECT id FROM runs WHERE project_id = ? ORDER BY updated_at DESC', [projectId])
-        const runs: StoredRun[] = []
-        for (const row of rows) {
-          const stored = await load(row.id)
-          if (stored) runs.push(stored)
-        }
-        return runs
+        const row = await get<{ id: string }>(db, 'SELECT id FROM runs WHERE project_id = ?', [projectId])
+        return row ? load(row.id) : null
       })
     },
 

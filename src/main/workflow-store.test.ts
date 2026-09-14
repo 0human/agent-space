@@ -1,14 +1,14 @@
 // @vitest-environment node
 
 import { createRequire } from 'node:module'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import initSqlJs from 'sql.js'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { createSqliteRunStore } from './workflow-store'
 import type { Project } from '../shared/project'
-import type { RuntimeEventInput } from '../shared/workflow-run'
+import type { RuntimeEventInput, WorkflowRunStatus } from '../shared/workflow-run'
 
 const require = createRequire(import.meta.url)
 const temporaryDirectories: string[] = []
@@ -41,6 +41,64 @@ afterEach(async () => {
 })
 
 describe('Workflow Store forward migrations', () => {
+  it.each<WorkflowRunStatus>(['running', 'paused', 'waiting', 'blocked', 'failed', 'completed', 'cancelled'])('keeps the Project occupied by a %s Run after reopening', async (status) => {
+    const directory = await mkdtemp(join(process.cwd(), '.tmp-workflow-store-'))
+    temporaryDirectories.push(directory)
+    const databasePath = join(directory, 'runs.sqlite')
+    const input = { id: 'only-run', project, workflow, workflowSource: { source: 'project' as const, path: null }, idea: 'Only Run', now: project.updatedAt }
+    const store = createSqliteRunStore({ databasePath })
+    const created = await store.createRun(input)
+    if (status === 'paused' || status === 'cancelled') await store.setStatus(input.id, status)
+    else if (status !== 'running') {
+      const event: RuntimeEventInput = status === 'waiting'
+        ? { type: 'question', question: 'Continue?' }
+        : status === 'failed'
+          ? { type: 'error', error: 'Failed' }
+          : { type: 'status_changed', status }
+      await store.recordRuntimeResult(input.id, created.snapshot.currentStepExecutionId!, [event])
+    }
+    await store.close()
+
+    const prepare = vi.fn()
+    const reopened = createSqliteRunStore({ databasePath, runWorkspaceManager: { prepare } })
+    await expect(reopened.createRun({ ...input, id: 'second-run' })).rejects.toThrow('每个工程仅允许创建一个 Run')
+    expect(prepare).not.toHaveBeenCalled()
+    await expect(reopened.getProjectRun(project.id)).resolves.toMatchObject({ id: input.id, status })
+    await reopened.close()
+  })
+
+  it('clears legacy multi-Run projects and their child records before enforcing uniqueness', async () => {
+    const directory = await mkdtemp(join(process.cwd(), '.tmp-workflow-store-'))
+    temporaryDirectories.push(directory)
+    const databasePath = join(directory, 'runs.sqlite')
+    const input = { id: 'legacy-first', project, workflow, workflowSource: { source: 'project' as const, path: null }, idea: 'Legacy', now: project.updatedAt }
+    const store = createSqliteRunStore({ databasePath })
+    await store.createRun(input)
+    await store.createRun({ ...input, id: 'legacy-second', project: { ...project, id: 'project-2' } })
+    await store.createRun({ ...input, id: 'unaffected', project: { ...project, id: 'project-3' } })
+    await store.close()
+    const SQL = await initSqlJs({ locateFile: (file) => require.resolve(join('sql.js', 'dist', file)) })
+    const database = new SQL.Database(await readFile(databasePath))
+    database.run('DROP INDEX runs_project_id_unique')
+    database.run("UPDATE runs SET project_id = 'project-1' WHERE id = 'legacy-second'")
+    await writeFile(databasePath, Buffer.from(database.export()))
+    database.close()
+
+    const migrated = createSqliteRunStore({ databasePath })
+    await expect(migrated.getProjectRun(project.id)).resolves.toBeNull()
+    await expect(migrated.getRun('legacy-second')).resolves.toBeNull()
+    await expect(migrated.getProjectRun('project-3')).resolves.toMatchObject({ id: 'unaffected' })
+    await migrated.createRun({ ...input, id: 'new-only-run' })
+    await migrated.close()
+
+    const persisted = new SQL.Database(await readFile(databasePath))
+    for (const table of ['step_executions', 'run_snapshots', 'workflow_events']) {
+      expect(persisted.exec(`SELECT COUNT(*) FROM ${table} WHERE run_id IN ('legacy-first', 'legacy-second')`)[0].values[0][0]).toBe(0)
+    }
+    expect(() => persisted.run("UPDATE runs SET project_id = 'project-1' WHERE id = 'unaffected'")).toThrow(/UNIQUE/)
+    persisted.close()
+  })
+
   it('persists adaptive Ticket and Run summaries across failed attempts, interruptions and reopening', async () => {
     const directory = await mkdtemp(join(process.cwd(), '.tmp-workflow-store-'))
     temporaryDirectories.push(directory)
@@ -123,7 +181,7 @@ describe('Workflow Store forward migrations', () => {
     database.close()
 
     const store = createSqliteRunStore({ databasePath })
-    await expect(store.listRuns('missing-project')).resolves.toEqual([])
+    await expect(store.getProjectRun('missing-project')).resolves.toBeNull()
     await expect(store.close()).resolves.toBeUndefined()
   })
 
@@ -241,7 +299,7 @@ describe('Workflow Store forward migrations', () => {
     })
     await store.setStatus(paused.id, 'paused')
     const failed = await store.createRun({
-      id: 'run-failed', project, workflow,
+      id: 'run-failed', project: { ...project, id: 'failed-project' }, workflow,
       workflowSource: { source: 'project', path: '/work/demo/.agent-space/workflow.json' },
       idea: 'Fail me', now: '2026-09-02T00:00:01.000Z'
     })

@@ -36,6 +36,7 @@ export const zhCNMain = {
     ideUnavailable: '没有找到可用的外部 IDE。'
   },
   workflowRun: {
+    alreadyExists: '该工程已有运行实例，每个工程仅允许创建一个 Run。',
     controlInProgress: 'Run 正在处理另一个操作。',
     fileChangesSummary: '文件修改累计数据',
     runtimeBlocked: 'Runtime 报告当前 Step blocked。',

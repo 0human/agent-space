@@ -28,7 +28,7 @@ export function createAppShellApi(): AppShellApi {
     reloadWorkflow: vi.fn(),
     preflightWorkflowRun: vi.fn(),
     startWorkflowRun: vi.fn(),
-    listWorkflowRuns: vi.fn().mockResolvedValue([]),
+    getProjectWorkflowRun: vi.fn().mockResolvedValue(null),
     getWorkflowRun: vi.fn(),
     openWorkflowRunInIde: vi.fn().mockResolvedValue({ ok: true, error: null }),
     listRuntimeItems: vi.fn().mockResolvedValue([]),

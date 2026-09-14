@@ -105,13 +105,13 @@ describe('RunWorkspaceManager', () => {
     ])
   })
 
-  it('keeps parallel Runs on distinct workspaces and branches', async () => {
+  it('keeps Runs from different Projects on distinct workspaces and branches', async () => {
     const execGit = vi.fn(async () => '')
     const mkdir = vi.fn(async () => undefined)
     const manager = createRunWorkspaceManager({ execGit, mkdir })
 
     const first = await manager.prepare(project, 'run-1')
-    const second = await manager.prepare(project, 'run-2')
+    const second = await manager.prepare({ ...project, id: 'project-2', workspacePath: '/work/other' }, 'run-2')
 
     expect(first.workspacePath).not.toBe(second.workspacePath)
     expect(first.branch).not.toBe(second.branch)

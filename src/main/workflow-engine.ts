@@ -142,7 +142,7 @@ export interface WorkflowEngine {
   preflight(input: WorkflowPreflightInput): Promise<WorkflowPreflightResult>
   startRun(input: StartWorkflowRunInput): Promise<WorkflowRun>
   getRun(runId: string): Promise<WorkflowRun | null>
-  listRuns(projectId: string): Promise<WorkflowRun[]>
+  getProjectRun(projectId: string): Promise<WorkflowRun | null>
   hasActiveRuns(projectId: string): Promise<boolean>
   pauseRun(runId: string): Promise<WorkflowRun>
   resumeRun(runId: string, guidance?: string): Promise<WorkflowRun>
@@ -336,10 +336,8 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
     }
   }
 
-  async function listRuns(projectId: string): Promise<WorkflowRun[]> {
-    const runs = await store.listRuns(projectId)
-    const refreshed = await Promise.all(runs.map((run) => refreshPullRequest(run)))
-    return refreshed.filter((run): run is NonNullable<typeof run> => Boolean(run))
+  async function getProjectRun(projectId: string): Promise<WorkflowRun | null> {
+    return refreshPullRequest(await store.getProjectRun(projectId))
   }
 
   function ensureRunning(runId: string): void {
@@ -446,6 +444,7 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
     },
 
     async startRun(input): Promise<WorkflowRun> {
+      if (await store.getProjectRun(input.project.id)) throw new Error(zhCNMain.workflowRun.alreadyExists)
       const preflight = await this.preflight({ ...input, idea: input.idea ?? '' })
       if (!preflight.passed) throw new Error(preflight.errors.join(' '))
       const missingDeliveryGate = deliveryGateError(input)
@@ -466,11 +465,11 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
       return refreshPullRequest(await store.getRun(runId))
     },
 
-    listRuns,
+    getProjectRun,
 
     async hasActiveRuns(projectId) {
-      const runs = await listRuns(projectId)
-      return runs.some((run) => isWorkflowRunInProgress(run.status))
+      const run = await store.getProjectRun(projectId)
+      return run !== null && isWorkflowRunInProgress(run.status)
     },
 
     async pauseRun(runId) {

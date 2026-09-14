@@ -11,4 +11,4 @@ accepted
 - Phase、Step 和 Implementation Ticket 仍是 Workflow 结构，不因连续活动流而退化为一条全局聊天。
 - Workflow / Phase / Ticket 导航位于 Runtime 数据流之外；Phase 和 Ticket 切换在流中使用轻量分隔符。
 - V1 不实现源文件查看器；文件修改只展示路径、状态和行数摘要，并可交给外部 IDE 打开。
-- Project Overview 继续负责多个 Workflow Run 的汇总；本 ADR 只改变单个 Run 的操作视图。
+- Project Overview 展示 Project 及其运行摘要；[ADR-0020](./0020-single-workflow-run-per-project.md) 将每个 Project 限定为一个 Workflow Run，本 ADR 的单个 Run 操作视图保持不变。

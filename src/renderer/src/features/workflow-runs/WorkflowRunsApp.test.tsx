@@ -115,7 +115,7 @@ describe('Workflow Run through the App seam', () => {
       updatedAt: '2026-08-18T00:00:00.000Z',
     }
     window.appShell.listProjects = vi.fn().mockResolvedValue([project])
-    window.appShell.listWorkflowRuns = vi.fn().mockResolvedValue([run])
+    window.appShell.getProjectWorkflowRun = vi.fn().mockResolvedValue(run)
     window.appShell.getWorkflowRun = vi.fn().mockResolvedValue(run)
     window.appShell.subscribeRuntimeItemUpdates = vi.fn(() => {
       throw new Error('Runtime Item IPC unavailable')
@@ -235,7 +235,7 @@ describe('Workflow Run through the App seam', () => {
     let emitUpdate: ((item: RuntimeItem) => void) | undefined
     const unsubscribe = vi.fn()
     window.appShell.listProjects = vi.fn().mockResolvedValue([project])
-    window.appShell.listWorkflowRuns = vi.fn().mockResolvedValue([run])
+    window.appShell.getProjectWorkflowRun = vi.fn().mockResolvedValue(run)
     window.appShell.getWorkflowRun = vi.fn().mockResolvedValue(run)
     window.appShell.listRuntimeItems = vi.fn().mockResolvedValue([
       {
@@ -423,7 +423,7 @@ describe('Workflow Run through the App seam', () => {
       updatedAt: '2026-08-18T00:00:00.000Z',
     }
     window.appShell.listProjects = vi.fn().mockResolvedValue([project])
-    window.appShell.listWorkflowRuns = vi.fn().mockResolvedValue([run])
+    window.appShell.getProjectWorkflowRun = vi.fn().mockResolvedValue(run)
     window.appShell.getWorkflowRun = vi.fn().mockResolvedValue(run)
 
     render(<App />)
@@ -561,7 +561,7 @@ describe('Workflow Run through the App seam', () => {
       updatedAt: '2026-08-24T00:00:00.000Z',
     }
     window.appShell.listProjects = vi.fn().mockResolvedValue([project])
-    window.appShell.listWorkflowRuns = vi.fn().mockResolvedValue([run])
+    window.appShell.getProjectWorkflowRun = vi.fn().mockResolvedValue(run)
     window.appShell.getWorkflowRun = vi.fn().mockResolvedValue(run)
 
     render(<App />)
@@ -649,7 +649,7 @@ describe('Workflow Run through the App seam', () => {
       updatedAt: '2026-08-18T00:00:00.000Z',
     }
     window.appShell.listProjects = vi.fn().mockResolvedValue([project])
-    window.appShell.listWorkflowRuns = vi.fn().mockResolvedValue([run])
+    window.appShell.getProjectWorkflowRun = vi.fn().mockResolvedValue(run)
     window.appShell.getWorkflowRun = vi.fn().mockResolvedValue(run)
 
     render(<App />)

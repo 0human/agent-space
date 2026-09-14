@@ -369,7 +369,7 @@ describe('Project through the App seam', () => {
     )
   })
 
-  it('shows parallel Run phase, blocker, recent Artifact, and Run ID in Project Overview', async () => {
+  it('shows the sole Run summary and a direct entry in Project Detail', async () => {
     const user = userEvent.setup()
     const project = {
       id: 'project-1',
@@ -386,15 +386,15 @@ describe('Project through the App seam', () => {
       updatedAt: '2026-08-18T00:00:00.000Z',
     }
     const run = {
-      id: 'run-parallel-1',
+      id: 'run-only-1',
       projectId: project.id,
-      workspacePath: '/work/demo-agent-space-run-parallel-1',
+      workspacePath: '/work/demo-agent-space-run-only-1',
       remote: null,
       idea: 'Parallel implementation',
       workflowId: BUILT_IN_DEVELOPMENT_WORKFLOW.id,
       workflowVersion: BUILT_IN_DEVELOPMENT_WORKFLOW.version,
       baseCommit: 'abc123',
-      branch: 'main/agent-space/run-parallel-1',
+      branch: 'main/agent-space/run-only-1',
       definition: BUILT_IN_DEVELOPMENT_WORKFLOW,
       status: 'blocked' as const,
       error: 'Merge conflict detected.',
@@ -422,11 +422,11 @@ describe('Project through the App seam', () => {
       artifacts: [
         {
           id: 'artifact-1',
-          runId: 'run-parallel-1',
+          runId: 'run-only-1',
           stepExecutionId: 'execution-1',
           type: 'review-report',
           name: 'review.md',
-          location: '/work/demo-agent-space-run-parallel-1/review.md',
+          location: '/work/demo-agent-space-run-only-1/review.md',
           versionHash: null,
           status: 'available',
           createdAt: '2026-08-18T00:00:00.000Z',
@@ -436,12 +436,12 @@ describe('Project through the App seam', () => {
       updatedAt: '2026-08-18T00:00:00.000Z',
     }
     window.appShell.listProjects = vi.fn().mockResolvedValue([project])
-    window.appShell.listWorkflowRuns = vi.fn().mockResolvedValue([run])
+    window.appShell.getProjectWorkflowRun = vi.fn().mockResolvedValue(run)
 
     render(<App />)
     await user.click(await screen.findByRole('button', { name: /demo/ }))
 
-    expect(screen.getByText('Run ID: run-parallel-1')).toBeVisible()
+    expect(screen.getByText('Run ID: run-only-1')).toBeVisible()
     expect(screen.getByText('当前 Phase：实现')).toBeVisible()
     expect(screen.getByText('阻塞：Merge conflict detected.')).toBeVisible()
     expect(screen.getByText('最近 Artifact：review.md')).toBeVisible()

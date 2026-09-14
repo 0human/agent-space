@@ -30,6 +30,7 @@ import {
 } from '@renderer/components/ui/card'
 import { Separator } from '@renderer/components/ui/separator'
 import { PreflightResult } from './PreflightResult'
+import { useProjectRun } from '../workflow-runs/use-project-run'
 import { zhCN as copy } from '@renderer/i18n/zh-CN'
 
 export function WorkflowFeature({
@@ -40,6 +41,7 @@ export function WorkflowFeature({
   onNavigate: (page: AppPage) => void
 }): React.JSX.Element {
   const api = useAppShell()
+  const projectRun = useProjectRun(project.id)
   const [workflow, setWorkflow] = useState<WorkflowView | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -118,6 +120,13 @@ export function WorkflowFeature({
         aria-busy="true"
       >
         <PageHeader project={project} />
+        {projectRun.run ? (
+          <Button className="mt-5 w-fit self-end" onClick={() => {
+            if (projectRun.run) onNavigate({ name: 'run', project, run: projectRun.run })
+          }}>
+            <ArrowRight aria-hidden="true" />{copy.run.viewAction}
+          </Button>
+        ) : null}
         <p className="py-12 text-sm text-muted-foreground">
           {error ?? copy.workflow.loading}
         </p>
@@ -181,9 +190,12 @@ export function WorkflowFeature({
               <ShieldAlert aria-hidden="true" />
               {checking ? copy.workflow.checking : copy.workflow.preflightAction}
             </Button>
-            <Button type="button" disabled={!workflow.canStart || checking} onClick={() => onNavigate({ name: 'newRun', project, workflow })}>
+            <Button type="button" disabled={!projectRun.run && (!workflow.canStart || checking || projectRun.loading || Boolean(projectRun.error))} onClick={() => {
+              if (projectRun.run) onNavigate({ name: 'run', project, run: projectRun.run })
+              else onNavigate({ name: 'newRun', project, workflow })
+            }}>
               <ArrowRight aria-hidden="true" />
-              {copy.workflow.directRunAction}
+              {projectRun.run ? copy.run.viewAction : copy.workflow.directRunAction}
             </Button>
             {workflow.source === 'built-in' ? (
               <>
@@ -249,6 +261,7 @@ export function WorkflowFeature({
             ))}
           </AlertDescription>
         </Alert>
+        {projectRun.error ? <Alert variant="destructive" className="mt-5" role="alert"><AlertDescription>{projectRun.error}</AlertDescription></Alert> : null}
         {preflight ? (
           <div className="mt-5 grid gap-2">
             <PreflightResult result={preflight} />

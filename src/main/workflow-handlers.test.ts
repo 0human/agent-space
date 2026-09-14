@@ -124,7 +124,8 @@ describe('Workflow IPC handlers', () => {
     const handlers = new Map<string, (...args: unknown[]) => unknown>()
     const engine = {
       preflight: vi.fn().mockResolvedValue({ passed: true, checks: ['Idea 已填写。'], errors: [] }),
-      startRun: vi.fn().mockResolvedValue({ id: 'run-1' })
+      startRun: vi.fn().mockResolvedValue({ id: 'run-1' }),
+      getProjectRun: vi.fn().mockResolvedValue(null)
     }
     const workflow = { ...view, source: 'project' as const, canStart: true, validation: { valid: true, errors: [], warnings: [] } }
     registerWorkflowHandlers({
@@ -142,6 +143,14 @@ describe('Workflow IPC handlers', () => {
     expect(engine.preflight).toHaveBeenLastCalledWith(expect.objectContaining({ idea: undefined, workflow }))
     await expect(handlers.get(APP_SHELL_CHANNELS.startWorkflowRun)?.({}, 'project-1', 'An idea')).resolves.toEqual({ ok: true, error: null, run: { id: 'run-1' } })
     expect(engine.startRun).toHaveBeenCalledWith(expect.objectContaining({ idea: 'An idea', workflow }))
+
+    const existing = { id: 'run-1', status: 'completed' }
+    engine.getProjectRun.mockResolvedValue(existing)
+    await expect(handlers.get(APP_SHELL_CHANNELS.getProjectWorkflowRun)?.({}, 'project-1')).resolves.toEqual(existing)
+    await expect(handlers.get(APP_SHELL_CHANNELS.startWorkflowRun)?.({}, 'project-1', 'Another idea')).resolves.toEqual({
+      ok: false, error: '该工程已有运行实例，每个工程仅允许创建一个 Run。', run: existing
+    })
+    expect(engine.startRun).toHaveBeenCalledTimes(1)
   })
 
   it('does not start new Workflow Runs for a soft-deleted Project', async () => {
@@ -227,7 +236,7 @@ describe('Workflow IPC handlers', () => {
     }
     await store.createRun({ id: 'run-ide', project, workflow: BUILT_IN_DEVELOPMENT_WORKFLOW,
       workflowSource: { source: 'built-in', path: null }, idea: 'IDE', now: '2026-09-09T00:00:00Z' })
-    await store.createRun({ id: 'missing-workspace', project: { ...project, workspacePath: join(directory, 'missing') },
+    await store.createRun({ id: 'missing-workspace', project: { ...project, id: 'missing-project', workspacePath: join(directory, 'missing') },
       workflow: BUILT_IN_DEVELOPMENT_WORKFLOW, workflowSource: { source: 'built-in', path: null }, idea: 'IDE', now: '2026-09-09T00:00:00Z' })
     await store.close()
     const engine = createWorkflowEngine({ databasePath, runtime: createFakeRuntimeAdapter() })

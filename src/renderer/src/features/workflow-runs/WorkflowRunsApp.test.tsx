@@ -12,7 +12,7 @@ describe('Workflow Run through the App seam', () => {
     window.appShell = createAppShellApi()
   })
 
-  it('keeps persisted context, decisions, logs, blockers, and allowed operations accessible inline', async () => {
+  it('keeps decisions, blockers, and allowed operations accessible without repeating persisted context and logs', async () => {
     const user = userEvent.setup()
     const project = {
       id: 'project-1',
@@ -126,14 +126,13 @@ describe('Workflow Run through the App seam', () => {
     await user.click(
       await screen.findByRole('button', { name: /这是一个用于验证窄窗口/ }),
     )
-    await user.click(screen.getByText('Step 详情'))
-
+    expect(screen.queryByText('Step 详情')).not.toBeInTheDocument()
     expect(
-      screen.getByText('用户确认目标是建立可恢复的 Run Board。'),
-    ).toBeVisible()
+      screen.queryByText('用户确认目标是建立可恢复的 Run Board。'),
+    ).not.toBeInTheDocument()
     expect(screen.getByText('优先保证什么？')).toBeVisible()
     expect(screen.getByText('优先保证可恢复性。')).toBeVisible()
-    expect(screen.getByText('已读取当前领域文档。')).toBeVisible()
+    expect(screen.queryByText('已读取当前领域文档。')).not.toBeInTheDocument()
     expect(
       screen.getAllByText('Merge conflict detected.').length,
     ).toBeGreaterThan(0)
@@ -144,7 +143,7 @@ describe('Workflow Run through the App seam', () => {
     expect(screen.getByRole('contentinfo', { name: '可用操作' })).toBeVisible()
     expect(screen.getByRole('button', { name: '重试' })).toBeEnabled()
     expect(
-      screen.getByRole('button', { name: '更多 Run 操作' }),
+      screen.getByRole('button', { name: '结束 Run' }),
     ).toBeEnabled()
   })
 

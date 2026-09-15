@@ -1,4 +1,4 @@
-import { memo } from 'react'
+import { Fragment, memo } from 'react'
 import {
   FileDiff,
   HelpCircle,
@@ -9,19 +9,22 @@ import {
   Wrench,
 } from 'lucide-react'
 
-import { runtimeItemIdentity, type RuntimeItem } from '../../../../shared/workflow-run'
+import { runtimeItemIdentity, type DecisionRecord, type RuntimeItem } from '../../../../shared/workflow-run'
 import { Button } from '@renderer/components/ui/button'
 import { Badge } from '@renderer/components/ui/badge'
 import { zhCN as copy } from '@renderer/i18n/zh-CN'
 import { ReasoningItem } from './ReasoningItem'
+import { UserAnswer } from './DecisionMessages'
 
 export function RuntimeItemList({
   items,
   onOpenInIde,
   compact = false,
   active = true,
+  answers,
 }: {
   items: RuntimeItem[]
+  answers?: Map<string, DecisionRecord>
   compact?: boolean
   active?: boolean
   onOpenInIde?: () => void
@@ -32,9 +35,14 @@ export function RuntimeItemList({
     )
   return (
     <div className="grid gap-3">
-      {items.map((item) => (
-        <MemoRuntimeItemCard active={active} compact={compact} item={item} key={runtimeItemIdentity(item)} onOpenInIde={onOpenInIde} />
-      ))}
+      {items.map((item) => {
+        const identity = runtimeItemIdentity(item)
+        const answer = answers?.get(identity)
+        return <Fragment key={identity}>
+          <MemoRuntimeItemCard active={active} compact={compact} item={item} hideAnswers={Boolean(answer)} onOpenInIde={onOpenInIde} />
+          {answer ? <UserAnswer decision={answer} /> : null}
+        </Fragment>
+      })}
     </div>
   )
 }
@@ -44,7 +52,7 @@ function outputSummary(output: string): string {
   return line.length > 160 ? `${line.slice(0, 157)}...` : line
 }
 
-function RuntimeItemCard({ item, onOpenInIde, compact = false, active: activityRunning = true }: { item: RuntimeItem; onOpenInIde?: () => void; compact?: boolean; active?: boolean }): React.JSX.Element | null {
+function RuntimeItemCard({ item, onOpenInIde, compact = false, active: activityRunning = true, hideAnswers = false }: { item: RuntimeItem; onOpenInIde?: () => void; compact?: boolean; active?: boolean; hideAnswers?: boolean }): React.JSX.Element | null {
   if (item.type === 'turn') return null
   if (compact && (item.type === 'agent_message' || item.type === 'final_response')) return (
     <article aria-label={item.type === 'final_response' ? copy.run.finalResponseItem : copy.run.agentMessageItem} className="min-w-0 whitespace-pre-wrap break-words text-sm leading-7 [overflow-wrap:anywhere]">
@@ -200,7 +208,7 @@ function RuntimeItemCard({ item, onOpenInIde, compact = false, active: activityR
                   {question.options.map((option) => option.label).join(' / ')}
                 </p>
               ) : null}
-              {item.answers[question.id]?.length ? (
+              {!hideAnswers && item.answers[question.id]?.length ? (
                 <p className="text-muted-foreground">
                   {copy.run.questionAnswer(item.answers[question.id].join(', '))}
                 </p>

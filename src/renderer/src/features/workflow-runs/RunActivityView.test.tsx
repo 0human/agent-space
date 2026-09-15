@@ -116,6 +116,24 @@ function fixture(): RunActivityViewProps {
 }
 
 describe('Run Activity View', () => {
+  it('shows the saved answer once after its original question and before the next Turn', () => {
+    const props = fixture()
+    const question = '首个里程碑要证明什么？\n推荐先完成模拟执行。'
+    props.run.decisionRecords = [{
+      id: 'decision-1', runId: props.run.id, phaseId: 'implementation', stepId: 'implement', executionId: 'execution-5',
+      source: 'runtime-question', question, answer: '按推荐方向',
+      continuation: { phaseIndex: 3, stepIndex: 0, executionId: 'execution-5' }, createdAt: '2026-09-15T00:00:00Z',
+    }]
+    const original: RuntimeItem = { ...props.runtimeItems[4], type: 'final_response', status: 'completed', text: `QUESTION: ${question}` }
+    const next: RuntimeItem = { ...props.runtimeItems[4], type: 'agent_message', runtimeLocator: { ...original.runtimeLocator, turnId: 'turn-2' }, text: '继续推进，先验证模拟执行。' }
+    render(<RunActivityView {...props} runtimeItems={[original, next]} />)
+    expect(screen.getAllByText(/首个里程碑要证明什么/)).toHaveLength(1)
+    expect(screen.getAllByText('按推荐方向')).toHaveLength(1)
+    const messages = screen.getAllByRole('article')
+    expect(messages.map((message) => message.getAttribute('aria-label'))).toEqual(['最终回复', '用户消息', 'Agent 消息'])
+    expect(messages[1]).toHaveTextContent('按推荐方向')
+  })
+
   it('shows a pending question only once in the activity stream and falls back there when history is missing', () => {
     const props = fixture()
     const question = '请选择目标用户。\n然后确认首版范围。'
@@ -191,7 +209,7 @@ describe('Run Activity View', () => {
     const input = screen.getByRole('textbox')
     fireEvent.change(input, { target: { value: '修复测试后继续' } })
     const form = input.closest('form')!
-    fireEvent.submit(form)
+    fireEvent.keyDown(input, { key: 'Enter' })
     fireEvent.submit(form)
     expect(operation).toHaveBeenCalledTimes(1)
     expect(operation).toHaveBeenCalledWith('修复测试后继续')
@@ -214,20 +232,37 @@ describe('Run Activity View', () => {
     expect(screen.queryByRole('button', { name: '重试' })).not.toBeInTheDocument()
   })
 
-  it('requires confirmation from the header menu before ending a Run', async () => {
+  it('supports multiline input and IME composition without submitting until Enter', async () => {
+    const props = fixture()
+    const user = userEvent.setup()
+    render(<RunActivityView {...props} run={{ ...props.run, status: 'paused' }} />)
+    const input = screen.getByRole('textbox')
+    await user.click(input)
+    await user.keyboard('{Enter}')
+    expect(props.onResume).not.toHaveBeenCalled()
+    await user.type(input, '第一行{Shift>}{Enter}{/Shift}第二行')
+    expect(input).toHaveValue('第一行\n第二行')
+    fireEvent.keyDown(input, { key: 'Enter', isComposing: true })
+    fireEvent.keyDown(input, { key: 'Enter', keyCode: 229 })
+    fireEvent.keyDown(input, { key: 'Enter', repeat: true })
+    expect(props.onResume).not.toHaveBeenCalled()
+    await user.keyboard('{Enter}')
+    expect(props.onResume).toHaveBeenCalledTimes(1)
+    expect(props.onResume).toHaveBeenCalledWith('第一行\n第二行')
+    expect(input).toHaveValue('')
+  })
+
+  it('requires confirmation from the visible header button before ending a Run', async () => {
     const props = fixture()
     render(<RunActivityView {...props} />)
     const user = userEvent.setup()
-    expect(screen.queryByRole('menuitem', { name: '结束 Run' })).not.toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: '更多 Run 操作' }))
-    await user.click(screen.getByRole('menuitem', { name: '结束 Run' }))
+    await user.click(screen.getByRole('button', { name: '结束 Run' }))
     expect(props.onCancel).not.toHaveBeenCalled()
     const dialog = screen.getByRole('alertdialog')
     expect(dialog).toHaveTextContent('Workspace 修改、历史和 Artifact 均保留')
     await user.click(within(dialog).getByRole('button', { name: '返回' }))
     expect(props.onCancel).not.toHaveBeenCalled()
-    await user.click(screen.getByRole('button', { name: '更多 Run 操作' }))
-    await user.click(screen.getByRole('menuitem', { name: '结束 Run' }))
+    await user.click(screen.getByRole('button', { name: '结束 Run' }))
     await user.click(screen.getByRole('button', { name: '确认结束' }))
     expect(props.onCancel).toHaveBeenCalledTimes(1)
   })

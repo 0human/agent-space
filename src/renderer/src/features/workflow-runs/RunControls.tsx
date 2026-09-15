@@ -1,7 +1,5 @@
 import { useState } from 'react'
 import { runControlAvailability } from './run-activity-model'
-import { MoreHorizontal } from 'lucide-react'
-import { DropdownMenu } from 'radix-ui'
 
 import type { WorkflowRun } from '../../../../shared/workflow-run'
 import { Button } from '@renderer/components/ui/button'
@@ -38,7 +36,19 @@ export function RunComposer({ run, pending, onPause, onSubmit }: {
       {run.status === 'waiting' && run.snapshot.pendingApprovalDetails?.decision === null
         ? <p className="text-sm">{copy.run.approvalComposerHint}</p> : null}
       <label className="text-xs" htmlFor="run-input">{copy.run.composerLabel}</label>
-      <Textarea id="run-input" value={input} disabled={!enabled} onChange={(event) => setInput(event.target.value)} />
+      <Textarea
+        id="run-input"
+        value={input}
+        disabled={!enabled}
+        aria-describedby="run-input-hint"
+        onChange={(event) => setInput(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return
+          event.preventDefault()
+          if (enabled && input.trim() && !event.repeat) event.currentTarget.form?.requestSubmit()
+        }}
+      />
+      <p id="run-input-hint" className="text-xs text-muted-foreground">{copy.run.composerHint}</p>
       {run.status === 'running' || pending === 'pause' ? (
         <Button className="w-fit" type="button" disabled={pending !== null} onClick={() => { void onPause() }}>{label}</Button>
       ) : canResume || canSend ? (
@@ -48,22 +58,13 @@ export function RunComposer({ run, pending, onPause, onSubmit }: {
   )
 }
 
-export function RunEndMenu({ disabled, onEnd }: { disabled: boolean; onEnd: () => void }): React.JSX.Element {
+export function RunEndButton({ disabled, onEnd }: { disabled: boolean; onEnd: () => void }): React.JSX.Element {
   const [confirm, setConfirm] = useState(false)
   return (
     <>
-      <DropdownMenu.Root>
-        <DropdownMenu.Trigger asChild>
-          <Button variant="ghost" size="icon" aria-label={copy.run.moreActions} disabled={disabled}><MoreHorizontal aria-hidden="true" /></Button>
-        </DropdownMenu.Trigger>
-        <DropdownMenu.Portal>
-          <DropdownMenu.Content align="end" className="z-50 rounded-md border bg-popover p-1 shadow-md">
-            <DropdownMenu.Item className="cursor-pointer rounded px-3 py-2 text-sm text-destructive outline-none focus:bg-accent" disabled={disabled} onSelect={() => setConfirm(true)}>
-              {copy.run.cancel}
-            </DropdownMenu.Item>
-          </DropdownMenu.Content>
-        </DropdownMenu.Portal>
-      </DropdownMenu.Root>
+      <Button variant="destructive" size="sm" disabled={disabled} onClick={() => setConfirm(true)}>
+        {copy.run.cancel}
+      </Button>
       <AlertDialog open={confirm} onOpenChange={setConfirm}>
         <AlertDialogContent>
           <AlertDialogHeader>

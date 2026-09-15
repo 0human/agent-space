@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'react'
 import { ChevronRight } from 'lucide-react'
 
-import type { RuntimeItem, RuntimeTurnItem, StepExecutionStatus } from '../../../../shared/workflow-run'
+import { runtimeItemIdentity, type DecisionRecord, type RuntimeItem, type RuntimeTurnItem, type StepExecutionStatus } from '../../../../shared/workflow-run'
 import { zhCN as copy } from '@renderer/i18n/zh-CN'
 import { RuntimeItemList } from './RuntimeItemList'
+import { locateDecisionMessages, MissingDecisionMessages } from './DecisionMessages'
 
-export function RuntimeTurnList({ items, executionStatus, onOpenInIde }: {
+export function RuntimeTurnList({ items, decisions = [], executionStatus, onOpenInIde }: {
   items: RuntimeItem[]
+  decisions?: DecisionRecord[]
   executionStatus: StepExecutionStatus
   onOpenInIde?: () => void
 }): React.JSX.Element {
@@ -17,13 +19,14 @@ export function RuntimeTurnList({ items, executionStatus, onOpenInIde }: {
     group.push(item)
     groups.set(key, group)
   }
-  if (!items.length) return <RuntimeItemList items={[]} />
+  const messages = locateDecisionMessages(items, decisions)
+  if (!items.length && !messages.unmatched.length) return <RuntimeItemList items={[]} />
   return <div className="space-y-6">{[...groups].map(([key, group]) => {
     const turn = group.find((item): item is RuntimeTurnItem => item.type === 'turn')
     return turn
-      ? <RuntimeTurn key={key} turn={turn} items={group.filter((item) => item.type !== 'turn')} executionStatus={executionStatus} onOpenInIde={onOpenInIde} />
-      : <RuntimeItemList key={key} items={group} onOpenInIde={onOpenInIde} />
-  })}</div>
+      ? <RuntimeTurn key={key} turn={turn} items={group.filter((item) => item.type !== 'turn')} answers={messages.afterItem} executionStatus={executionStatus} onOpenInIde={onOpenInIde} />
+      : <RuntimeItemList key={key} items={group} answers={messages.afterItem} onOpenInIde={onOpenInIde} />
+  })}<MissingDecisionMessages decisions={messages.unmatched} /></div>
 }
 
 function TurnDuration({ turn, running }: { turn: RuntimeTurnItem; running: boolean }): React.JSX.Element {
@@ -42,9 +45,10 @@ function TurnDuration({ turn, running }: { turn: RuntimeTurnItem; running: boole
     : (turn.status === 'in_progress' ? copy.run.turnElapsed(elapsed) : copy.run.turnDuration(elapsed))}</span>
 }
 
-function RuntimeTurn({ turn, items, executionStatus, onOpenInIde }: {
+function RuntimeTurn({ turn, items, answers, executionStatus, onOpenInIde }: {
   turn: RuntimeTurnItem
   items: RuntimeItem[]
+  answers: Map<string, DecisionRecord>
   executionStatus: StepExecutionStatus
   onOpenInIde?: () => void
 }): React.JSX.Element {
@@ -56,7 +60,7 @@ function RuntimeTurn({ turn, items, executionStatus, onOpenInIde }: {
   const finalItems = items.filter((item) => item.type === 'final_response')
   // Older providers may omit the final_answer phase. Preserve the last reply.
   const fallback = turn.status === 'completed' && !finalItems.length ? [...items].reverse().find((item) => item.type === 'agent_message') : undefined
-  const outside = items.filter((item) => item.type === 'final_response' || item === fallback ||
+  const outside = items.filter((item) => answers.has(runtimeItemIdentity(item)) || item.type === 'final_response' || item === fallback ||
     item.type === 'question' || item.type === 'approval' || item.type === 'error' || item.type === 'interrupt')
   const process = items.filter((item) => !outside.includes(item))
   const activity = process.some((item) => item.status === 'in_progress') || finalItems.some((item) => item.status === 'in_progress')
@@ -78,7 +82,7 @@ function RuntimeTurn({ turn, items, executionStatus, onOpenInIde }: {
           {running && !activity ? <p role="status" className="text-sm text-muted-foreground">{copy.run.processing}</p> : null}
         </div>
       </details>
-      {outside.length ? <div className="pt-4"><RuntimeItemList items={outside} compact onOpenInIde={onOpenInIde} /></div> : null}
+      {outside.length ? <div className="pt-4"><RuntimeItemList items={outside} answers={answers} compact onOpenInIde={onOpenInIde} /></div> : null}
     </section>
   )
 }

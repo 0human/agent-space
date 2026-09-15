@@ -16,7 +16,7 @@ import {
   DeliveryCard,
   StatusBadge,
 } from './RunActivitySupport'
-import { RunComposer, RunEndMenu, type RunControlAction } from './RunControls'
+import { RunComposer, RunEndButton, type RunControlAction } from './RunControls'
 import { RunSummaryMessage } from './RunSummaryMessage'
 import { RuntimeTurnList } from './RuntimeTurnList'
 import { useRunActivityScroll } from './use-run-activity-scroll'
@@ -100,7 +100,7 @@ export function RunActivityView(
             {run.idea}
           </h1>
           <StatusBadge status={pending === 'pause' ? 'interrupting' : run.status} />
-          <RunEndMenu disabled={!model.canCancel || pending !== null} onEnd={() => { void perform('end', props.onCancel) }} />
+          <RunEndButton disabled={!model.canCancel || pending !== null} onEnd={() => { void perform('end', props.onCancel) }} />
         </div>
         <p className="mt-1 text-xs text-muted-foreground">
           {copy.run.sourceSnapshot(
@@ -205,6 +205,7 @@ export function RunActivityView(
                 <RuntimeTurnList
                   executionStatus={execution.status}
                   items={itemsByExecution.get(execution.id) ?? []}
+                  decisions={(run.decisionRecords ?? []).filter((decision) => decision.executionId === execution.id && decision.source === 'runtime-question')}
                   onOpenInIde={props.onOpenInIde}
                 />
                 <ExecutionDetails run={run} execution={execution} />
@@ -274,14 +275,8 @@ function ExecutionDetails({
   run: WorkflowRun
   execution: StepExecution
 }): React.JSX.Element {
-  const context = (run.phaseContexts ?? []).find(
-    (entry) => entry.phaseId === execution.phaseId,
-  )
   const decisions = (run.decisionRecords ?? []).filter(
-    (entry) => entry.executionId === execution.id,
-  )
-  const logs = (run.logs ?? []).filter(
-    (entry) => entry.executionId === execution.id,
+    (entry) => entry.executionId === execution.id && entry.source === 'approval-gate',
   )
   const blocker =
     run.snapshot.blockedBy?.executionId === execution.id
@@ -315,17 +310,6 @@ function ExecutionDetails({
         .map((artifact) => (
           <Artifact key={artifact.id} {...artifact} />
         ))}
-      <details className="mt-3 text-sm">
-        <summary className="cursor-pointer text-muted-foreground">
-          {copy.run.detailsTitle}
-        </summary>
-        <p className="mt-2">{context?.content ?? copy.run.noContext}</p>
-        {logs.map((log) => (
-          <p className="mt-2" key={log.id}>
-            {log.message}
-          </p>
-        ))}
-      </details>
     </>
   )
 }

@@ -21,7 +21,7 @@ export const projectCopy = {
     resumeEyebrow: '恢复工作',
     resumeTitle: '恢复工作',
     backAction: '返回 Project 概览',
-    description: '选择已有 Git 目录、普通本地目录或空目录作为 Project Workspace。',
+    description: '选择已有 Git 目录、普通本地目录或空目录作为 Project Workspace，目录无需为空。创建 Project 只登记和读取目录，保留现有文件和配置，不代表批准后续修改。',
     chooseAction: '选择 Workspace 目录',
     githubAction: '从 GitHub clone Project',
     githubUrlLabel: 'GitHub 仓库地址',

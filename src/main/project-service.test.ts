@@ -27,7 +27,7 @@ describe('Workspace inspection', () => {
         if (command === 'config --get remote.origin.url') return 'https://github.com/example/demo.git\n'
         if (command === 'branch --show-current') return 'main\n'
         if (command === 'rev-parse HEAD') return 'abc123\n'
-        if (command === 'status --porcelain=v1 --untracked-files=all') return ''
+        if (command === '--no-optional-locks status --porcelain=v1 --untracked-files=all') return ''
         return ''
       }
     })
@@ -72,7 +72,7 @@ describe('Workspace inspection', () => {
         if (command === 'config --get remote.origin.url') return 'git@0humanbuilder:example/demo.git\n'
         if (command === 'branch --show-current') return 'main\n'
         if (command === 'rev-parse HEAD') return 'abc123\n'
-        if (command === 'status --porcelain=v1 --untracked-files=all') return ''
+        if (command === '--no-optional-locks status --porcelain=v1 --untracked-files=all') return ''
         return ''
       }
     })
@@ -95,7 +95,7 @@ describe('Workspace inspection', () => {
         }
         if (args.join(' ') === 'remote') return 'origin\n'
         if (args.join(' ') === 'config --get remote.origin.url') return 'https://github.com/example/demo.git\n'
-        if (args.join(' ') === 'status --porcelain=v1 --untracked-files=all') return ''
+        if (args.join(' ') === '--no-optional-locks status --porcelain=v1 --untracked-files=all') return ''
         return ''
       }, fetchGitHub, cloneGitHub
     })
@@ -114,7 +114,7 @@ describe('Workspace inspection', () => {
       'branch --show-current': 'feature/import\n',
       'rev-parse HEAD': '0123456789abcdef0123456789abcdef01234567\n',
       'symbolic-ref --short refs/remotes/origin/HEAD': 'origin/main\n',
-      'status --porcelain=v1 --untracked-files=all': 'M  staged.ts\n M working.ts\n?? notes.md\n'
+      '--no-optional-locks status --porcelain=v1 --untracked-files=all': 'M  staged.ts\n M working.ts\n?? notes.md\n'
     }
 
     const state = await inspectWorkspace('/work/demo', {
@@ -146,7 +146,7 @@ describe('Workspace inspection', () => {
       'branch --show-current': 'feature/import\n',
       'rev-parse HEAD': 'abc123\n',
       'symbolic-ref --short refs/remotes/upstream/HEAD': 'upstream/trunk\n',
-      'status --porcelain=v1 --untracked-files=all': ''
+      '--no-optional-locks status --porcelain=v1 --untracked-files=all': ''
     }
 
     const state = await inspectWorkspace('/work/demo', {
@@ -221,7 +221,7 @@ describe('Workspace inspection', () => {
         if (command === 'branch --show-current') return 'main\n'
         if (command === 'rev-parse HEAD') return 'abc123\n'
         if (command === 'symbolic-ref --short refs/remotes/origin/HEAD') return 'origin/main\n'
-        if (command === 'status --porcelain=v1 --untracked-files=all') return status
+        if (command === '--no-optional-locks status --porcelain=v1 --untracked-files=all') return status
         throw new Error(`unexpected command: ${command}`)
       }
     })

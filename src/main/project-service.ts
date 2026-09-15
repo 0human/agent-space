@@ -120,8 +120,9 @@ export async function inspectWorkspace(
     ? await readOptional(['symbolic-ref', '--short', `refs/remotes/${remoteName}/HEAD`])
     : null
   const defaultBranch = remoteHead?.replace(`${remoteName}/`, '') ?? currentBranch
+  // Registration and Preflight must not write cached stat data back to the index.
   const dirtySummary = parseStatus(await dependencies.execGit(workspacePath, [
-    'status', '--porcelain=v1', '--untracked-files=all'
+    '--no-optional-locks', 'status', '--porcelain=v1', '--untracked-files=all'
   ]))
 
   return {
@@ -232,8 +233,14 @@ export function createProjectService(dependencies: ProjectServiceDependencies) {
   }
 
   async function refresh(project: Project): Promise<Project> {
-    const state = await inspectWorkspace(project.workspacePath, dependencies)
-    return { ...project, ...state, updatedAt: now() }
+    if (isProjectDeleted(project)) return project
+    try {
+      const state = await inspectWorkspace(project.workspacePath, dependencies)
+      return { ...project, ...state, updatedAt: now() }
+    } catch {
+      // Keep the registration readable, but prevent Preflight from trusting stale state.
+      return { ...project, workspaceAvailable: false }
+    }
   }
 
   return {
@@ -244,15 +251,7 @@ export function createProjectService(dependencies: ProjectServiceDependencies) {
     async list(filePath: string): Promise<Project[]> {
       return withProjectRegistryLock(async () => {
         const projects = await load(filePath)
-        const refreshed = await Promise.all(projects.map(async (project) => {
-          if (isProjectDeleted(project)) return project
-          try {
-            return await refresh(project)
-          } catch {
-            // Keep the durable registration available when the workspace is offline or moved.
-            return { ...project, workspaceAvailable: false }
-          }
-        }))
+        const refreshed = await Promise.all(projects.map(refresh))
         await save(filePath, refreshed)
         return refreshed.filter((project) => !isProjectDeleted(project))
       })
@@ -313,7 +312,9 @@ export function createProjectService(dependencies: ProjectServiceDependencies) {
 
     async findById(filePath: string, projectId: string): Promise<Project | null> {
       const projects = await load(filePath)
-      return projects.find((project) => project.id === projectId) ?? null
+      const project = projects.find((project) => project.id === projectId)
+      // Single-Project reads must not depend on a previous overview/list refresh.
+      return project ? refresh(project) : null
     },
 
     withProjectRegistryLock,

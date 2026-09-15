@@ -120,8 +120,9 @@ export async function inspectWorkspace(
     ? await readOptional(['symbolic-ref', '--short', `refs/remotes/${remoteName}/HEAD`])
     : null
   const defaultBranch = remoteHead?.replace(`${remoteName}/`, '') ?? currentBranch
+  // Registration and Preflight must not write cached stat data back to the index.
   const dirtySummary = parseStatus(await dependencies.execGit(workspacePath, [
-    'status', '--porcelain=v1', '--untracked-files=all'
+    '--no-optional-locks', 'status', '--porcelain=v1', '--untracked-files=all'
   ]))
 
   return {

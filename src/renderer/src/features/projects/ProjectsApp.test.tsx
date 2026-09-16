@@ -112,6 +112,9 @@ describe('Project through the App seam', () => {
 
     render(<App />)
     await user.click(screen.getByRole('button', { name: '创建 Project' }))
+    expect(screen.getByText(/目录无需为空/)).toHaveTextContent(
+      '创建 Project 只登记和读取目录，保留现有文件和配置，不代表批准后续修改。',
+    )
     await user.click(
       screen.getByRole('button', { name: '选择 Workspace 目录' }),
     )
@@ -129,6 +132,10 @@ describe('Project through the App seam', () => {
 
     await user.click(screen.getByRole('button', { name: '在外部 IDE 中打开' }))
     expect(window.appShell.openProjectInIde).toHaveBeenCalledWith('project-1')
+
+    await user.click(screen.getByRole('button', { name: '返回 Project 概览' }))
+    expect(screen.getByText('1 个 Project')).toBeVisible()
+    expect(screen.getByRole('button', { name: /demo/ })).toHaveTextContent('/work/demo')
   })
 
   it('explains when an imported Workspace reuses an existing Project registration', async () => {

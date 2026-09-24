@@ -1059,12 +1059,12 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
       }))
     },
 
-    async blockRuntimeHistory(runId: string, reason: string, nextAction: string): Promise<StoredRun> {
+    async blockRuntimeHistory(runId: string, historyExecutionId: string, reason: string, nextAction: string): Promise<StoredRun> {
       return locked(async () => transaction(async () => {
         const current = await load(runId)
         if (!current) throw new Error('找不到 Workflow Run。')
-        const executionId = current.snapshot.currentStepExecutionId
-        if (!isWorkflowRunInProgress(current.status) || !executionId) return current
+        const executionId = current.snapshot.currentStepExecutionId ?? historyExecutionId
+        if (!isWorkflowRunInProgress(current.status)) return current
         if (current.status === 'blocked' && current.snapshot.blockedBy?.reason === reason) return current
         const timestamp = now()
         await updateRunStatus(runId, 'blocked', reason, timestamp)
@@ -1073,7 +1073,7 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
           blockedBy: { phaseIndex: current.snapshot.phaseIndex, stepIndex: current.snapshot.stepIndex, executionId, reason, recoveryAction: 'resume' },
           nextAction
         })
-        await appendEvent(runId, 'blocked', { executionId, reason }, timestamp)
+        await appendEvent(runId, 'blocked', { executionId, historyExecutionId, reason }, timestamp)
         return (await load(runId))!
       }))
     },

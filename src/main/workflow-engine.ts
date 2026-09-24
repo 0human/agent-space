@@ -397,7 +397,7 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
     }
     if (unavailable) {
       // A live Turn still has a safe owner. Inspecting history must not stop it.
-      if (!active.has(runId)) await store.blockRuntimeHistory(runId, zhCNMain.codexSession.historyUnavailable, zhCNMain.codexSession.historyRecovery)
+      if (!active.has(runId)) await store.blockRuntimeHistory(runId, executionId, zhCNMain.codexSession.historyUnavailable, zhCNMain.codexSession.historyRecovery)
       throw new Error(zhCNMain.codexSession.historyUnavailable)
     }
   }

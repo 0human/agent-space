@@ -150,4 +150,33 @@ describe('Workflow history recovery', () => {
       expect(restored.stepExecutions).toEqual(before.stepExecutions)
     }
   })
+
+  it('blocks missing history while paused between Steps without moving the durable cursor', async () => {
+    directory = await mkdtemp(join(tmpdir(), 'agent-space-history-'))
+    const databasePath = join(directory, 'runs.sqlite')
+    let finish!: () => void
+    engine = createWorkflowEngine({ databasePath, runtime: {
+      async execute(context) {
+        await context.persistRuntimeLocator?.(locators[0])
+        return new Promise((resolve) => { finish = () => resolve([{ type: 'status_changed', status: 'completed' }]) })
+      },
+      async interrupt() { finish() },
+    } })
+    const twoSteps: WorkflowView = { ...workflow, definition: { ...workflow.definition, phases: [{
+      ...workflow.definition.phases[0], steps: [...workflow.definition.phases[0].steps, { id: 'next', name: 'Next', kind: 'skill' }],
+    }] } }
+    const run = await engine.startRun({ project, workflow: twoSteps, idea: 'Pause between Steps' })
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'))
+    const paused = await engine.pauseRun(run.id)
+    expect(paused.snapshot).toMatchObject({ stepIndex: 1, currentStepExecutionId: null })
+    await engine.close()
+    const { runtime } = historyRuntime(() => { throw new Error('Thread deleted') })
+    engine = createWorkflowEngine({ databasePath, runtime })
+    await engine.recover()
+    expect(await engine.getRun(run.id)).toMatchObject({
+      status: 'blocked', stepExecutions: paused.stepExecutions,
+      snapshot: { stepIndex: 1, currentStepExecutionId: null, blockedBy: { reason: 'Codex 执行历史不可用' } },
+    })
+    await expect(engine.resumeRun(run.id)).rejects.toThrow('Codex 执行历史不可用')
+  })
 })

@@ -450,6 +450,24 @@ describe('Codex Session Module', () => {
     ])
   })
 
+  it.each(['interrupted', 'failed'] as const)('restores unfinished commands in a %s Turn with the live terminal status', async (status) => {
+    const command = { id: 'command', type: 'commandExecution', command: 'pnpm test', status: 'inProgress', aggregatedOutput: 'Starting tests' }
+    const locator = { runtimeProvider: 'codex', threadId: 'thread-history', turnId: 'first', runtimeVersion: '0.144.3' }
+    const projectionScope = { runId: 'run-history', executionId: 'execution-history', permissionPolicy: { grantedPermissions: [] }, source: 'codex app-server' }
+    const transport = new ControlledTransport()
+    const request = transport.request.bind(transport)
+    transport.request = (method, params) => method === 'thread/read'
+      ? Promise.resolve({ thread: { id: locator.threadId, turns: [{ id: locator.turnId, status, items: [command] }] } }) : request(method, params)
+    const projection = createCodexItemProjection()
+    const live = createCodexItemProjection()
+    live.handle({ method: 'item/started', params: { threadId: locator.threadId, turnId: locator.turnId, item: command } }, { ...projectionScope, runtimeLocator: locator })
+    live.completeTurn(status, null, { ...projectionScope, runtimeLocator: locator })
+    const session = createCodexSessionModule({ createTransport: () => transport, itemProjection: projection })
+    await session.readThread({ cwd: '/work/demo', command: 'codex', locator, projectionScope })
+    expect(projection.list('execution-history').find((item) => item.type === 'command')).toEqual(live.list('execution-history').find((item) => item.type === 'command'))
+    expect(projection.list('execution-history').find((item) => item.type === 'command')?.status).toBe(status === 'interrupted' ? 'declined' : 'failed')
+  })
+
   it.each([
     { id: 'wrong-thread', turns: [{ id: 'turn-history', items: [] }] },
     { id: 'thread-history', turns: [{ id: 'turn-history' }] },

@@ -665,7 +665,7 @@ export function createCodexItemProjection(dependencies: CodexItemProjectionDepen
       }
       for (const item of turn.items) {
         const status = record(item)?.status
-        const active = turn.status === 'inProgress' && status !== 'completed' && status !== 'failed' && status !== 'declined'
+        const active = status === 'inProgress' || (turn.status === 'inProgress' && status !== 'completed' && status !== 'failed' && status !== 'declined')
         projection.handle({
           method: active ? 'item/started' : 'item/completed',
           params: {

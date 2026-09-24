@@ -71,6 +71,16 @@ export function RunActivityView(
     items.push(item)
     itemsByExecution.set(item.executionId, items)
   }
+  for (const execution of run.stepExecutions) {
+    const turnOrder = (item: RuntimeItem): number => {
+      const index = execution.runtimeLocators?.findIndex((locator) =>
+        locator.runtimeProvider === item.runtimeLocator.runtimeProvider &&
+        locator.threadId === item.runtimeLocator.threadId && locator.turnId === item.runtimeLocator.turnId,
+      ) ?? -1
+      return index < 0 ? Number.MAX_SAFE_INTEGER : index
+    }
+    itemsByExecution.get(execution.id)?.sort((left, right) => turnOrder(left) - turnOrder(right))
+  }
   const pendingQuestion = run.status === 'waiting' && run.snapshot.pendingQuestionDetails?.answer === null
     ? run.snapshot.pendingQuestionDetails : null
   const questionText = pendingQuestion?.question ?? (run.status === 'waiting' && !run.snapshot.pendingQuestionDetails ? run.snapshot.pendingQuestion : null)

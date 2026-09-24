@@ -433,9 +433,15 @@ export type WorkflowLogType = RuntimeEvent['type']
 
 export interface AgentRuntimeAdapter {
   preflight?(context: RuntimePreflightContext): Promise<RuntimePreflightResult>
+  readHistory?(context: RuntimeHistoryContext): Promise<void>
   execute(context: RuntimeExecutionContext): Promise<RuntimeEventInput[]>
   interrupt?(context: RuntimeInterruptContext): Promise<void | boolean>
   rejectApproval?(context: RuntimeInterruptContext): Promise<void>
+}
+
+export interface RuntimeHistoryContext extends RuntimeInterruptContext {
+  workspace: { path: string }
+  permissionPolicy: PermissionPolicy
 }
 
 export interface RuntimeInterruptContext {

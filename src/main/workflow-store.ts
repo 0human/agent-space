@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { isWorkflowRunInProgress } from '../shared/workflow-run'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
@@ -1058,6 +1059,25 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
       }))
     },
 
+    async blockRuntimeHistory(runId: string, historyExecutionId: string, reason: string, nextAction: string): Promise<StoredRun> {
+      return locked(async () => transaction(async () => {
+        const current = await load(runId)
+        if (!current) throw new Error('找不到 Workflow Run。')
+        const executionId = current.snapshot.currentStepExecutionId ?? historyExecutionId
+        if (!isWorkflowRunInProgress(current.status)) return current
+        if (current.status === 'blocked' && current.snapshot.blockedBy?.reason === reason) return current
+        const timestamp = now()
+        await updateRunStatus(runId, 'blocked', reason, timestamp)
+        await updateSnapshot(runId, {
+          ...current.snapshot,
+          blockedBy: { phaseIndex: current.snapshot.phaseIndex, stepIndex: current.snapshot.stepIndex, executionId, reason, recoveryAction: 'resume' },
+          nextAction
+        })
+        await appendEvent(runId, 'blocked', { executionId, historyExecutionId, reason }, timestamp)
+        return (await load(runId))!
+      }))
+    },
+
     async resume(runId: string, guidance?: string): Promise<StoredRun> {
       return locked(async () => transaction(async () => {
         const current = await load(runId)
@@ -1065,6 +1085,14 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
         if (!['paused', 'waiting', 'blocked'].includes(current.status)) return current
         if (current.status === 'waiting' && (current.snapshot.pendingQuestionDetails || current.snapshot.pendingApprovalDetails)) return current
         const timestamp = now()
+        const previousExecution = current.stepExecutions.find((execution) => execution.id === current.snapshot.currentStepExecutionId)
+        if (current.status === 'blocked' && (current.snapshot.pendingQuestion || current.snapshot.pendingApproval || previousExecution?.status === 'failed')) {
+          const status = current.snapshot.pendingQuestion || current.snapshot.pendingApproval ? 'waiting' : 'failed'
+          await updateRunStatus(runId, status, status === 'failed' ? previousExecution?.error ?? null : null, timestamp)
+          await updateSnapshot(runId, { ...current.snapshot, blockedBy: null, nextAction: statusNextAction(status) })
+          await appendEvent(runId, status, { executionId: previousExecution?.id, reason: 'runtime_history_restored' }, timestamp)
+          return (await load(runId))!
+        }
         let executionId = current.snapshot.currentStepExecutionId
         const targetTicket = current.snapshot.ticketProgress?.currentTicketId
           ? current.implementationTickets?.find((ticket) => ticket.id === current.snapshot.ticketProgress?.currentTicketId) ?? null

@@ -129,7 +129,7 @@ export const workflowRunCopy = {
     runtimeItemsTitle: '实时 Runtime Item',
     noRuntimeItems: '当前还没有实时 Runtime Item。',
     runtimeTimelineUnavailable:
-      '当前无法读取 Runtime Item 历史；已接收的实时更新仍会展示。',
+      'Codex 执行历史不可用；已接收的实时更新仍会展示。',
     agentMessageItem: 'Agent 消息',
     userMessageItem: '用户消息',
     userMessageAuthor: '你',

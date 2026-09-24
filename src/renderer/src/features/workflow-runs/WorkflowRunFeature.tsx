@@ -25,6 +25,9 @@ export function WorkflowRunFeature({
   const [error, setError] = useState<string | null>(null)
 
   const revision = useRef(0)
+  const historyRevision = JSON.stringify(run.stepExecutions.map((execution) => [
+    execution.id, execution.status, execution.runtimeLocators,
+  ]))
 
   useEffect(() => {
     let disposed = false
@@ -69,7 +72,7 @@ export function WorkflowRunFeature({
     return () => {
       disposed = true
     }
-  }, [api, run.id, run.stepExecutions.length])
+  }, [api, run.id, historyRevision])
 
   useEffect(() => {
     try {

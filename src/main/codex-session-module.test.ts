@@ -218,6 +218,84 @@ describe('Codex Session Module', () => {
     ])
   })
 
+  it('exposes a scoped command approval and waits for server acknowledgement before resolving it', async () => {
+    const request = { id: 7, method: 'item/commandExecution/requestApproval', params: {
+      threadId: 'thread-1', turnId: 'turn-1', itemId: 'command-1', approvalId: 'callback-1',
+      command: 'git status', reason: '需要访问工作区', availableDecisions: ['accept', 'decline', 'cancel'],
+    } }
+    const transport = new ControlledTransport([request])
+    const projection = createCodexItemProjection({ publish: () => undefined })
+    const session = createCodexSessionModule({ createTransport: () => transport, itemProjection: projection })
+    let received!: CodexRuntimeApprovalRequest
+    const resolved = vi.fn(async () => undefined)
+    const waiting = await session.runTurn({ cwd: '/work/demo', command: 'codex', executionId: 'execution-1',
+      workUnit: { kind: 'phase', runId: 'run-1', phaseId: 'discovery' }, input: 'run',
+      onApproval: (request) => { received = request },
+    })
+    expect(received.runtimeApproval).toMatchObject({
+      requestId: 7, approvalId: 'callback-1', itemId: 'command-1', requestType: 'command',
+      runtimeLocator: waiting.locator, availableDecisions: ['accept', 'decline', 'cancel'],
+    })
+    await expect(session.respondToApproval(received, 'acceptForSession')).rejects.toThrow()
+    expect(transport.respond).not.toHaveBeenCalled()
+    let deliver!: (message: CodexAppServerMessage) => void
+    const messages: CodexAppServerMessage[] = []
+    transport.nextMessage = async () => messages.shift() ?? new Promise((resolve) => { deliver = resolve })
+    const continued = session.respondToApproval(received, 'accept', false, resolved)
+    await vi.waitFor(() => expect(transport.respond).toHaveBeenCalledWith(7, { decision: 'accept' }))
+    expect(projection.list('execution-1').find((item) => item.type === 'approval')).toMatchObject({ status: 'in_progress' })
+    expect(resolved).not.toHaveBeenCalled()
+    deliver({ method: 'serverRequest/resolved', params: { threadId: 'thread-1', requestId: '7' } })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(resolved).not.toHaveBeenCalled()
+    deliver({ method: 'serverRequest/resolved', params: { threadId: 'thread-1', requestId: 7 } })
+    await vi.waitFor(() => expect(resolved).toHaveBeenCalledOnce())
+    expect(projection.list('execution-1').find((item) => item.type === 'approval')).toMatchObject({ status: 'completed', decision: 'accept' })
+    deliver(completedTurn())
+    expect((await continued).locator).toEqual(waiting.locator)
+    expect(transport.requests.filter((request) => request.method === 'turn/start')).toHaveLength(1)
+  })
+
+  it('resolves a file approval from the final Item and ignores retransmitted requests', async () => {
+    const params = { threadId: 'thread-1', turnId: 'turn-1', itemId: 'file-1' }
+    const request = { id: 'file-request', method: 'item/fileChange/requestApproval', params }
+    const transport = new ControlledTransport([request])
+    const session = createCodexSessionModule({ createTransport: () => transport })
+    let received!: CodexRuntimeApprovalRequest
+    const approval = vi.fn((request: CodexRuntimeApprovalRequest) => { received = request })
+    await session.runTurn({ cwd: '/work/demo', command: 'codex', workUnit: { kind: 'phase', runId: 'run-1', phaseId: 'discovery' }, input: 'run', onApproval: approval })
+    const resolved = vi.fn(async () => undefined)
+    transport.enqueue(
+      { method: 'item/completed', params: { ...params, item: { id: 'file-1', type: 'fileChange', status: 'declined', changes: [] } } },
+      request, completedTurn(),
+    )
+    const result = await session.respondToApproval(received, 'decline', false, resolved)
+    expect(result.status).toBe('completed')
+    expect(resolved).toHaveBeenCalledOnce()
+    expect(approval).toHaveBeenCalledOnce()
+    expect(transport.respond).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps distinct approvals for the same Item visible within one Turn', async () => {
+    const params = { threadId: 'thread-1', turnId: 'turn-1', itemId: 'command-1' }
+    const first = { id: 1, method: 'item/commandExecution/requestApproval', params: { ...params, command: 'git status', reason: 'First callback' } }
+    const second = { id: 2, method: first.method, params: { ...params, command: 'git diff', reason: 'Second callback' } }
+    const transport = new ControlledTransport([first])
+    const projection = createCodexItemProjection({ publish: () => undefined })
+    const session = createCodexSessionModule({ createTransport: () => transport, itemProjection: projection })
+    let received!: CodexRuntimeApprovalRequest
+    await session.runTurn({ cwd: '/work/demo', command: 'codex', executionId: 'execution-1', workUnit: { kind: 'phase', runId: 'run-1', phaseId: 'discovery' }, input: 'run', onApproval: (request) => { received = request } })
+    transport.enqueue({ method: 'serverRequest/resolved', params: { threadId: params.threadId, requestId: 1 } }, second)
+    expect((await session.respondToApproval(received, 'decline')).status).toBe('waiting')
+    expect(projection.list('execution-1').filter((item) => item.type === 'approval')).toEqual([
+      expect.objectContaining({ requestId: 1, decision: 'decline', status: 'declined' }),
+      expect.objectContaining({ requestId: 2, reason: 'Second callback', decision: null, status: 'in_progress' }),
+    ])
+    transport.enqueue(completedTurn())
+    await session.respondToApproval(received, 'accept')
+    expect(transport.requests.filter((request) => request.method === 'turn/start')).toHaveLength(1)
+  })
+
   it('retains a pending approval request after returning waiting and responds through its original transport', async () => {
     const approval = { id: 'approval-1', method: 'item/commandExecution/requestApproval', params: { threadId: 'thread-1', turnId: 'turn-1', command: 'git status' } }
     const transport = new ControlledTransport([approval])

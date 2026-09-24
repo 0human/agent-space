@@ -120,6 +120,7 @@ export function WorkflowRunFeature({
       onRetry={(guidance) => updateRun(() => api.retryWorkflowStep(run.id, guidance))}
       onCancel={() => updateRun(() => api.cancelWorkflowRun(run.id))}
       onAnswer={(answer) => updateRun(() => api.answerWorkflowQuestion(run.id, answer))}
+      onRuntimeApproval={(requestId, decision) => updateRun(() => api.decideRuntimeApproval(run.id, requestId, decision))}
       onApprove={() => updateRun(() => api.approveWorkflowApproval(run.id))}
       onReject={() => updateRun(() => api.rejectWorkflowApproval(run.id))}
     />

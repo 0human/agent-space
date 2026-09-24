@@ -120,8 +120,24 @@ export interface RuntimeQuestionItem extends RuntimeItemBase {
 
 export type RuntimeApprovalDecision = 'accept' | 'acceptForSession' | 'decline' | 'cancel' | 'acceptWithExecpolicyAmendment' | 'applyNetworkPolicyAmendment' | 'completed'
 
+/** Supported decisions never amend the Project's Permission Policy. */
+export type RuntimeApprovalChoice = 'accept' | 'acceptForSession' | 'decline' | 'cancel'
+
+export interface RuntimeApprovalRequest {
+  id: string
+  runtimeLocator: RuntimeLocator
+  itemId: string
+  requestId: string | number
+  approvalId?: string
+  requestType: 'command' | 'file-change'
+  availableDecisions: RuntimeApprovalChoice[]
+}
+
 export interface RuntimeApprovalItem extends RuntimeItemBase {
   type: 'approval'
+  itemId?: string
+  requestId?: string | number
+  reason?: string
   kind: 'command' | 'file_change' | 'permissions' | 'exec_command' | 'apply_patch'
   summary: string
   decision: RuntimeApprovalDecision | null
@@ -200,7 +216,7 @@ export interface DecisionRecord {
   phaseId: string
   stepId: string
   executionId: string
-  source: 'runtime-question' | 'approval-gate'
+  source: 'runtime-question' | 'approval-gate' | 'runtime-approval'
   question: string
   answer: string
   continuation: RunContinuation
@@ -308,7 +324,13 @@ export interface PendingQuestion {
   continuation: RunContinuation
 }
 
+export interface PendingRuntimeApproval extends RuntimeApprovalRequest {
+  state: 'pending' | 'responding' | 'resolved' | 'unavailable'
+  decision: RuntimeApprovalChoice | null
+}
+
 export interface PendingApproval {
+  runtime?: PendingRuntimeApproval
   approval: string
   decision: 'approved' | 'rejected' | null
   continuation: RunContinuation
@@ -316,7 +338,7 @@ export interface PendingApproval {
 
 export interface RunBlocker extends RunContinuation {
   reason: string
-  recoveryAction: 'resume'
+  recoveryAction: 'resume' | 'none'
 }
 
 export interface WorkflowRun {
@@ -387,6 +409,8 @@ export interface RuntimeExecutionContext {
   decisionRecords: DecisionRecord[]
   permissionPolicy: PermissionPolicy
   events: WorkflowEvent[]
+  runtimeApproval?: PendingRuntimeApproval
+  resolveRuntimeApproval?(requestId: string): Promise<void>
   persistRuntimeLocator?(locator: RuntimeLocator): Promise<void>
 }
 
@@ -404,7 +428,7 @@ type RuntimeEventPayload =
   | { type: 'text_delta'; text: string }
   | { type: 'tool_call'; name: string; input: Record<string, unknown> }
   | { type: 'question'; question: string }
-  | { type: 'approval_required'; approval: string }
+  | { type: 'approval_required'; approval: string; runtimeApproval?: RuntimeApprovalRequest }
   | { type: 'artifact_produced'; artifact: RuntimeArtifact }
   | { type: 'ticket_progress'; stage: ImplementationTicketStage; status: ImplementationTicketStageStatus }
   | { type: 'file_changes'; changes: RuntimeFileChange[] }
@@ -436,6 +460,7 @@ export interface AgentRuntimeAdapter {
   readHistory?(context: RuntimeHistoryContext): Promise<void>
   execute(context: RuntimeExecutionContext): Promise<RuntimeEventInput[]>
   interrupt?(context: RuntimeInterruptContext): Promise<void | boolean>
+  canRespondToApproval?(request: RuntimeApprovalRequest): boolean
   rejectApproval?(context: RuntimeInterruptContext): Promise<void>
 }
 

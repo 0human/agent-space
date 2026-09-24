@@ -1377,6 +1377,91 @@ describe('WorkflowEngine public API', () => {
     expect(outcomes[0].stepExecutions).toHaveLength(1)
   })
 
+  it.each([
+    ['command', 'accept'], ['file-change', 'accept'], ['command', 'decline'], ['file-change', 'decline'],
+    ['command', 'cancel'], ['file-change', 'cancel'], ['command', 'acceptForSession'],
+  ] as const)('persists and responds to a %s Runtime approval with %s independently of the Workflow Gate', async (kind, decision) => {
+    directory = await mkdtemp(join(tmpdir(), 'agent-space-run-'))
+    type Message = JsonRpcNotification | JsonRpcServerRequest
+    const incoming: Message[] = []
+    let receive: ((message: Message | null) => void) | undefined
+    const enqueue = (message: Message) => { if (receive) { const next = receive; receive = undefined; next(message) } else incoming.push(message) }
+    const replies: unknown[] = []
+    const requests: string[] = []
+    const params = { threadId: 'thread-runtime', turnId: 'turn-runtime', itemId: 'item-runtime' }
+    const transport = {
+      request: async (method: string) => {
+        requests.push(method)
+        if (method === 'initialize') return { userAgent: 'codex/1.0.0', capabilities: { methods: ['thread/start', 'thread/resume', 'thread/read', 'turn/start', 'turn/interrupt'], events: ['item/started', 'item/completed', 'turn/completed'] } }
+        if (method === 'turn/start') return { turn: { id: params.turnId } }
+        return { thread: { id: params.threadId } }
+      },
+      notify: async () => undefined,
+      respond: async (id: string | number, result: unknown) => { replies.push({ id, result }) },
+      nextMessage: async () => incoming.shift() ?? new Promise<Message | null>((resolve) => { receive = resolve }),
+      nextNotification: async () => null,
+      close: async () => { receive?.(null) },
+    }
+    const runtime = createCodexRuntimeAdapter({ createTransport: () => transport })
+    runtime.preflight = undefined
+    engine = createWorkflowEngine({ databasePath: join(directory, 'runs.sqlite'), runtime })
+    const gated = { ...workflow, definition: { ...workflow.definition, phases: [{ ...workflow.definition.phases[0], steps: [{ ...workflow.definition.phases[0].steps[0], approvalGate: '业务确认' }] }] } }
+    const run = await engine.startRun({ project, workflow: gated, idea: 'Runtime approval' })
+    await engine.waitForIdle(run.id)
+    await engine.approve(run.id)
+    enqueue({ id: 42, method: kind === 'command' ? 'item/commandExecution/requestApproval' : 'item/fileChange/requestApproval', params: { ...params, command: 'git status', reason: 'PRIVATE_APPROVAL_REASON', availableDecisions: ['accept', 'acceptForSession', 'decline', 'cancel'] } })
+    const waiting = await engine.waitForIdle(run.id)
+    const pending = waiting.snapshot.pendingApprovalDetails?.runtime
+    expect(pending).toMatchObject({ requestId: 42, requestType: kind, itemId: params.itemId, runtimeLocator: { threadId: params.threadId, turnId: params.turnId }, state: 'pending', decision: null })
+    const executionId = waiting.stepExecutions[0].id
+    expect(waiting.logs).toEqual([])
+    expect(JSON.stringify(waiting)).not.toContain('PRIVATE_APPROVAL_REASON')
+    runtime.readHistory = vi.fn(async () => { throw new Error('Live approvals must not be restored from history') })
+    await engine.loadRuntimeHistory(run.id, executionId)
+    expect(runtime.readHistory).not.toHaveBeenCalled()
+    await engine.decideRuntimeApproval(run.id, pending!.id, decision)
+    await vi.waitFor(() => expect(replies).toEqual([{ id: 42, result: { decision } }]))
+    const responding = await engine.getRun(run.id)
+    expect(responding).toMatchObject({ status: 'waiting', snapshot: { pendingApprovalDetails: { runtime: { state: 'responding', decision } } } })
+    await expect(engine.decideRuntimeApproval(run.id, pending!.id, 'decline')).rejects.toThrow()
+    enqueue({ method: 'serverRequest/resolved', params: { threadId: params.threadId, requestId: 42 } })
+    await vi.waitFor(async () => expect((await engine!.getRun(run.id))?.status).toBe('running'))
+    enqueue({ method: 'turn/completed', params: { threadId: params.threadId, turn: { id: params.turnId, status: decision === 'cancel' ? 'interrupted' : 'completed' } } })
+    const finished = await engine.waitForIdle(run.id)
+    expect(finished.status).toBe(decision === 'cancel' ? 'paused' : 'completed')
+    expect(finished.stepExecutions).toHaveLength(1)
+    expect(finished.stepExecutions[0]).toMatchObject({ id: executionId, attempt: 1, runtimeLocators: [expect.objectContaining({ turnId: params.turnId })] })
+    expect(requests.filter((method) => method === 'turn/start')).toHaveLength(1)
+    expect(finished.events.filter((event) => event.type === 'approval_approved')).toHaveLength(1)
+    expect(finished.decisionRecords.map((record) => record.source)).toEqual(['approval-gate', 'runtime-approval'])
+  })
+
+  it('recovers the persisted Runtime approval locator, checks history and blocks an unaddressable request', async () => {
+    directory = await mkdtemp(join(tmpdir(), 'agent-space-run-'))
+    const databasePath = join(directory, 'runs.sqlite')
+    const runtime = new FakeRuntime()
+    engine = createWorkflowEngine({ databasePath, runtime })
+    const run = await engine.startRun({ project, workflow, idea: 'Recover pending approval' })
+    await vi.waitFor(() => expect(runtime.calls).toHaveLength(1))
+    const runtimeLocator = { runtimeProvider: 'codex', threadId: 'durable-thread', turnId: 'durable-turn', runtimeVersion: '1' }
+    const request = { id: 'durable-request', requestId: 9, itemId: 'durable-item', requestType: 'file-change' as const, runtimeLocator, availableDecisions: ['accept', 'decline', 'cancel'] as const }
+    runtime.finish([{ type: 'approval_required', approval: '文件修改审批', runtimeLocator, runtimeApproval: { ...request, availableDecisions: [...request.availableDecisions] } }])
+    const waiting = await engine.waitForIdle(run.id)
+    await engine.close()
+    const readHistory = vi.fn(async () => undefined)
+    const restarted = { execute: vi.fn(async () => []), readHistory, canRespondToApproval: () => false }
+    engine = createWorkflowEngine({ databasePath, runtime: restarted })
+    expect((await engine.getRun(run.id))?.snapshot.pendingApprovalDetails).toEqual(waiting.snapshot.pendingApprovalDetails)
+    await engine.recover()
+    expect(readHistory).toHaveBeenCalledWith(expect.objectContaining({ runtimeLocator }))
+    const blocked = await engine.getRun(run.id)
+    expect(blocked).toMatchObject({ status: 'blocked', snapshot: { blockedBy: { recoveryAction: 'none' }, pendingApprovalDetails: { runtime: { ...request, state: 'unavailable', decision: null } } } })
+    await expect(engine.resumeRun(run.id)).rejects.toThrow('恢复动作')
+    await expect(engine.decideRuntimeApproval(run.id, request.id, 'accept')).rejects.toThrow()
+    expect(restarted.execute).not.toHaveBeenCalled()
+    expect(blocked?.stepExecutions).toHaveLength(1)
+  })
+
   it.each(['approve', 'answer', 'reject', 'end', 'reject-retry'] as const)('handles %s on the original waiting Codex Turn', async (action) => {
     directory = await mkdtemp(join(tmpdir(), 'agent-space-run-'))
     const incoming: Array<JsonRpcNotification | JsonRpcServerRequest> = [{

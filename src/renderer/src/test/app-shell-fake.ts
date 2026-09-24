@@ -38,6 +38,7 @@ export function createAppShellApi(): AppShellApi {
     retryWorkflowStep: vi.fn(),
     cancelWorkflowRun: vi.fn(),
     answerWorkflowQuestion: vi.fn(),
+    decideRuntimeApproval: vi.fn(),
     approveWorkflowApproval: vi.fn(),
     rejectWorkflowApproval: vi.fn(),
     openWorkflowFile: vi.fn().mockResolvedValue({ ok: true, error: null }),

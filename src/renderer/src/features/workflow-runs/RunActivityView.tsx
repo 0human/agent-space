@@ -3,6 +3,8 @@ import { ArrowLeft } from 'lucide-react'
 
 import type {
   RuntimeItem,
+  RuntimeApprovalChoice,
+  PendingRuntimeApproval,
   StepExecution,
   WorkflowRun,
 } from '../../../../shared/workflow-run'
@@ -34,6 +36,7 @@ export interface RunActivityViewProps {
   onRetry: (guidance?: string) => void | Promise<void | boolean>
   onCancel: () => void | Promise<void | boolean>
   onAnswer: (answer: string) => void | Promise<void | boolean>
+  onRuntimeApproval?: (requestId: string, decision: RuntimeApprovalChoice) => void | Promise<void | boolean>
   onApprove: () => void | Promise<void | boolean>
   onReject: () => void | Promise<void | boolean>
 }
@@ -225,7 +228,12 @@ export function RunActivityView(
                 {run.snapshot.pendingApprovalDetails?.continuation
                   .executionId === execution.id &&
                 run.snapshot.pendingApprovalDetails.decision === null && run.status === 'waiting' ? (
-                  <Approval
+                  run.snapshot.pendingApprovalDetails.runtime ? <RuntimeApproval
+                    request={run.snapshot.pendingApprovalDetails.runtime}
+                    items={itemsByExecution.get(execution.id) ?? []}
+                    disabled={pending !== null || !props.onRuntimeApproval}
+                    onDecide={(requestId, decision) => { void perform('approve', () => props.onRuntimeApproval?.(requestId, decision)) }}
+                  /> : <Approval
                     run={run}
                     execution={execution}
                     disabled={pending !== null}
@@ -286,7 +294,7 @@ function ExecutionDetails({
   execution: StepExecution
 }): React.JSX.Element {
   const decisions = (run.decisionRecords ?? []).filter(
-    (entry) => entry.executionId === execution.id && entry.source === 'approval-gate',
+    (entry) => entry.executionId === execution.id && (entry.source === 'approval-gate' || entry.source === 'runtime-approval'),
   )
   const blocker =
     run.snapshot.blockedBy?.executionId === execution.id
@@ -312,7 +320,7 @@ function ExecutionDetails({
       {decisions.map((decision) => (
         <div key={decision.id} className="my-3 border-l-2 pl-3 text-sm">
           <strong>{decision.question}</strong>
-          <p>{decision.answer}</p>
+          <p>{decision.source === 'runtime-approval' ? copy.run.runtimeApprovalActions[decision.answer as RuntimeApprovalChoice] ?? decision.answer : decision.answer}</p>
         </div>
       ))}
       {run.artifacts
@@ -360,4 +368,27 @@ function Approval({
       </div>
     </article>
   )
+}
+
+function RuntimeApproval({ request, items, disabled, onDecide }: {
+  request: PendingRuntimeApproval
+  items: RuntimeItem[]
+  disabled: boolean
+  onDecide: (requestId: string, decision: RuntimeApprovalChoice) => void
+}): React.JSX.Element {
+  const item = items.find((item) => item.type === 'approval' && item.itemId === request.itemId && item.requestId === request.requestId &&
+    item.runtimeLocator.threadId === request.runtimeLocator.threadId && item.runtimeLocator.turnId === request.runtimeLocator.turnId)
+  const title = copy.run.runtimeApprovalTitle(request.requestType)
+  return <article className="mt-4 rounded-lg border p-4" aria-label={title}>
+    <h4 className="font-semibold">{title}</h4>
+    <p className="mt-2 break-words text-xs text-muted-foreground">{copy.run.runtimeApprovalItem(request.itemId)}</p>
+    <p className="mt-2 whitespace-pre-wrap break-words text-sm">{item?.type === 'approval' && item.reason || copy.run.runtimeApprovalReasonUnavailable}</p>
+    {request.state === 'responding' ? <p role="status" className="mt-2 text-sm">{copy.run.runtimeApprovalWaiting}</p> : null}
+    <div className="mt-3 flex flex-wrap gap-2">
+      {request.availableDecisions.map((decision) => <Button key={decision} size="sm" variant={decision === 'accept' ? 'default' : 'outline'}
+        disabled={disabled || request.state !== 'pending'} onClick={() => onDecide(request.id, decision)}>
+        {copy.run.runtimeApprovalActions[decision]}
+      </Button>)}
+    </div>
+  </article>
 }

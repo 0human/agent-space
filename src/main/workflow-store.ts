@@ -17,6 +17,8 @@ import type {
   PhaseContext,
   RunBlocker,
   PendingApproval,
+  RuntimeApprovalChoice,
+  RuntimeApprovalRequest,
   PendingQuestion,
   ImplementationTicket,
   ImplementationTicketStages,
@@ -223,7 +225,7 @@ function statusNextAction(status: WorkflowRunStatus): string {
 function resolveRuntimeEvents(events: RuntimeEvent[]):
   | { type: 'completed'; output?: Record<string, unknown>; artifacts: RuntimeArtifact[] }
   | { type: 'paused' }
-  | { type: 'waiting'; question: string | null; approval: string | null }
+  | { type: 'waiting'; question: string | null; approval: string | null; runtimeApproval?: RuntimeApprovalRequest }
   | { type: 'blocked'; reason: string }
   | { type: 'failed'; error: string } {
   const artifacts = events.filter((event): event is Extract<RuntimeEvent, { type: 'artifact_produced' }> => event.type === 'artifact_produced').map((event) => event.artifact)
@@ -233,7 +235,7 @@ function resolveRuntimeEvents(events: RuntimeEvent[]):
   const question = events.find((event): event is Extract<RuntimeEvent, { type: 'question' }> => event.type === 'question')
   if (question) return { type: 'waiting', question: question.question, approval: null }
   const approval = events.find((event): event is Extract<RuntimeEvent, { type: 'approval_required' }> => event.type === 'approval_required')
-  if (approval) return { type: 'waiting', question: null, approval: approval.approval }
+  if (approval) return { type: 'waiting', question: null, approval: approval.approval, runtimeApproval: approval.runtimeApproval }
   const paused = events.find((event): event is Extract<RuntimeEvent, { type: 'status_changed' }> => event.type === 'status_changed' && event.status === 'paused')
   if (paused) return { type: 'paused' }
   const blocked = events.find((event): event is Extract<RuntimeEvent, { type: 'status_changed' }> => event.type === 'status_changed' && event.status === 'blocked')
@@ -660,6 +662,11 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
   async function appendRuntimeRecords(current: StoredRun, executionId: string, events: RuntimeEvent[], createdAt: string): Promise<RuntimeEvent[]> {
     const insertedEvents: RuntimeEvent[] = []
     for (const [index, event] of events.entries()) {
+      // Runtime approvals persist only their control locator in the Run Snapshot.
+      if (event.type === 'approval_required' && event.runtimeApproval) {
+        insertedEvents.push(event)
+        continue
+      }
       const idempotencyKey = event.idempotencyKey ?? `${executionId}:runtime:${index}:${json(event)}`
       const result = await run(db, 'INSERT INTO workflow_logs (run_id, execution_id, type, message, data_json, idempotency_key, created_at) SELECT ?, ?, ?, ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM workflow_logs WHERE run_id = ? AND idempotency_key = ?)', [
         current.id, executionId, event.type, runtimeLogMessage(event), json(event), idempotencyKey, createdAt, current.id, idempotencyKey
@@ -937,7 +944,7 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
           if (implementationTicketId) await finishImplementationTicket(implementationTicketId, runStatus, timestamp)
           const continuation = { phaseIndex: current.snapshot.phaseIndex, stepIndex: current.snapshot.stepIndex, executionId }
           const pendingQuestionDetails = result.type === 'waiting' && result.question ? { question: result.question, answer: null, continuation } : null
-          const pendingApprovalDetails = result.type === 'waiting' && result.approval ? { approval: result.approval, decision: null, continuation } : null
+          const pendingApprovalDetails: PendingApproval | null = result.type === 'waiting' && result.approval ? { approval: result.approval, decision: null, continuation, ...(result.runtimeApproval ? { runtime: { ...result.runtimeApproval, state: 'pending', decision: null } } : {}) } : null
           const blockedBy = result.type === 'blocked' ? { ...continuation, reason: result.reason, recoveryAction: 'resume' as const } : null
           const snapshot = { ...current.snapshot, pendingQuestion: result.type === 'waiting' ? result.question : null, pendingApproval: result.type === 'waiting' ? result.approval : null, pendingQuestionDetails, pendingApprovalDetails, blockedBy, nextAction: statusNextAction(runStatus) }
           await updateSnapshot(runId, snapshot)
@@ -1159,12 +1166,63 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
       }))
     },
 
+    async decideRuntimeApproval(runId: string, requestId: string, decision: RuntimeApprovalChoice): Promise<StoredRun> {
+      return locked(async () => transaction(async () => {
+        const current = await load(runId)
+        const pending = current?.snapshot.pendingApprovalDetails
+        const runtime = pending?.runtime
+        if (!current || current.status !== 'waiting' || !pending || !runtime || runtime.id !== requestId || runtime.state !== 'pending') throw new Error('Runtime 审批已失效或已提交决定。')
+        if (!runtime.availableDecisions.includes(decision)) throw new Error('Runtime 审批不允许这个决定。')
+        const timestamp = now()
+        await appendDecisionRecord(current, pending.continuation.executionId, 'runtime-approval', pending.approval, decision, pending.continuation, timestamp)
+        await updateSnapshot(runId, { ...current.snapshot, pendingApprovalDetails: { ...pending, runtime: { ...runtime, state: 'responding', decision } }, nextAction: '等待 Runtime 确认审批决定。' })
+        await appendEvent(runId, 'runtime_approval_decided', { executionId: pending.continuation.executionId, request: runtime, decision }, timestamp)
+        return (await load(runId))!
+      }))
+    },
+
+    async resolveRuntimeApproval(runId: string, requestId: string): Promise<void> {
+      await locked(async () => transaction(async () => {
+        const current = await load(runId)
+        const pending = current?.snapshot.pendingApprovalDetails
+        if (!current || current.status !== 'waiting' || !pending?.runtime || pending.runtime.id !== requestId || pending.runtime.state !== 'responding') return
+        const timestamp = now()
+        const executionId = pending.continuation.executionId
+        await run(db, 'UPDATE step_executions SET status = ? WHERE id = ?', ['running', executionId])
+        const execution = current.stepExecutions.find((candidate) => candidate.id === executionId)
+        const ticket = current.implementationTickets?.find((candidate) => candidate.id === execution?.implementationTicketId)
+        if (ticket) await startImplementationTicket(ticket, timestamp)
+        await updateRunStatus(runId, 'running', null, timestamp)
+        await updateSnapshot(runId, { ...current.snapshot, pendingApproval: null, pendingApprovalDetails: { ...pending, runtime: { ...pending.runtime, state: 'resolved' } }, nextAction: statusNextAction('running') })
+        await appendEvent(runId, 'runtime_approval_resolved', { executionId, requestId }, timestamp)
+      }))
+    },
+
+    async blockRuntimeApproval(runId: string): Promise<StoredRun> {
+      return locked(async () => transaction(async () => {
+        const current = await load(runId)
+        if (!current) throw new Error('找不到 Workflow Run。')
+        const pending = current.snapshot.pendingApprovalDetails
+        if (!pending?.runtime || pending.runtime.state === 'resolved') return current
+        const reason = 'Runtime 审批的原连接已失效，无法安全响应原请求；请结束此 Run。'
+        const timestamp = now()
+        await run(db, 'UPDATE step_executions SET status = ?, error = ? WHERE id = ?', ['blocked', reason, pending.continuation.executionId])
+        const execution = current.stepExecutions.find((candidate) => candidate.id === pending.continuation.executionId)
+        if (execution?.implementationTicketId) await finishImplementationTicket(execution.implementationTicketId, 'blocked', timestamp)
+        await updateRunStatus(runId, 'blocked', reason, timestamp)
+        await updateSnapshot(runId, { ...current.snapshot, pendingApprovalDetails: { ...pending, runtime: { ...pending.runtime, state: 'unavailable' } }, blockedBy: { ...pending.continuation, reason, recoveryAction: 'none' }, nextAction: reason })
+        await appendEvent(runId, 'runtime_approval_unavailable', { executionId: pending.continuation.executionId, requestId: pending.runtime.id }, timestamp, `runtime-approval-unavailable:${pending.runtime.id}`)
+        return (await load(runId))!
+      }))
+    },
+
     async decideApproval(runId: string, decision: 'approved' | 'rejected'): Promise<StoredRun> {
       return locked(async () => transaction(async () => {
         const current = await load(runId)
         if (!current) throw new Error('找不到 Workflow Run。')
         const pending = current.snapshot.pendingApprovalDetails
         if (current.status !== 'waiting' || !pending || !current.snapshot.pendingApproval) return current
+        if (pending.runtime) throw new Error('Runtime 审批必须响应原请求。')
         const timestamp = now()
         const executionId = pending.continuation.executionId
         await appendDecisionRecord(current, executionId, 'approval-gate', pending.approval, decision, pending.continuation, timestamp)

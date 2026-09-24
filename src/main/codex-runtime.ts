@@ -204,7 +204,7 @@ function sanitizeRuntimeEvent(event: RuntimeEventInput): RuntimeEventInput {
     case 'question':
       return { type: 'question', ...metadata, question: sanitizeSensitiveText(event.question) }
     case 'approval_required':
-      return { type: 'approval_required', ...metadata, approval: sanitizeSensitiveText(event.approval) }
+      return { type: 'approval_required', ...metadata, approval: sanitizeSensitiveText(event.approval), ...(event.runtimeApproval ? { runtimeApproval: event.runtimeApproval } : {}) }
     case 'file_changes':
       return { type: 'file_changes', ...metadata, changes: sanitizeSensitiveValue(event.changes, 'changes') as typeof event.changes }
     case 'ticket_progress':
@@ -522,6 +522,9 @@ export function createCodexRuntimeAdapter(dependencies: CodexRuntimeDependencies
       let runtimeLocator: RuntimeLocator | null = null
       const events: RuntimeEventInput[] = []
       try {
+        if (context.runtimeApproval && (!pending?.request.runtimeApproval || pending.request.id !== context.runtimeApproval.id)) {
+          return enrichEvents([{ type: 'status_changed', status: 'blocked', reason: zhCNMain.codexSession.approvalContinuationExpired }], context)
+        }
         if (!pending) gitGuard = await createGitGuard(context.project.defaultBranch, context.permissionPolicy.grantedPermissions.includes('network.github'))
         const sandbox = context.permissionPolicy.grantedPermissions.includes('workspace.write') ? 'workspace-write' : 'read-only'
         const phaseId = context.workflow.phases[context.phaseIndex]?.id ?? 'unknown'
@@ -532,9 +535,11 @@ export function createCodexRuntimeAdapter(dependencies: CodexRuntimeDependencies
         if (pending) {
           const answer = context.execution.input?.answer
           const approved = context.events.some((event) => event.type === 'approval_approved' && event.data.executionId === context.execution.id)
-          if (pending.request.kind === 'question' ? typeof answer !== 'string' : !approved) throw new Error(zhCNMain.codexRuntime.requestUnanswered)
+          if (!context.runtimeApproval && (pending.request.kind === 'question' ? typeof answer !== 'string' : !approved)) throw new Error(zhCNMain.codexRuntime.requestUnanswered)
           pendingRequests.delete(context.execution.id)
-          result = await session.respondToApproval(pending.request, pending.request.kind === 'question' ? { answer } : { approved })
+          result = await session.respondToApproval(pending.request,
+            context.runtimeApproval ? { decision: context.runtimeApproval.decision } : pending.request.kind === 'question' ? { answer } : { approved },
+            false, async () => { await context.resolveRuntimeApproval?.(pending.request.id) })
         } else result = await session.runTurn({
           command,
           cwd: context.workspace.path,
@@ -560,7 +565,11 @@ export function createCodexRuntimeAdapter(dependencies: CodexRuntimeDependencies
         else if (result.status === 'interrupted') events.push({ type: 'status_changed', status: 'paused' })
         else if (result.status === 'waiting') {
           const request = pendingRequests.get(context.execution.id)?.request
-          if (request && request.kind !== 'question') events.push({ type: 'approval_required', approval: request.summary })
+          if (request && request.kind !== 'question') events.push({
+            type: 'approval_required',
+            approval: request.runtimeApproval ? (request.kind === 'command' ? '命令执行审批' : '文件修改审批') : request.summary,
+            ...(request.runtimeApproval ? { runtimeApproval: request.runtimeApproval } : {}),
+          })
         }
         else if (!events.some((event) => event.type === 'error')) {
           events.push({ type: 'error', error: result.error ?? zhCNMain.codexRuntime.turnFailed })
@@ -599,6 +608,11 @@ export function createCodexRuntimeAdapter(dependencies: CodexRuntimeDependencies
         await pending?.guard?.cleanup().catch(() => undefined)
       }
       return interrupted
+    },
+    canRespondToApproval(request) {
+      return [...pendingRequests.values()].some((pending) => pending.request.id === request.id &&
+        pending.request.runtimeApproval?.runtimeLocator.threadId === request.runtimeLocator.threadId &&
+        pending.request.runtimeApproval.runtimeLocator.turnId === request.runtimeLocator.turnId)
     },
     async rejectApproval(context) {
       const pending = pendingRequests.get(context.executionId)

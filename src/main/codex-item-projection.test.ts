@@ -456,7 +456,7 @@ describe('Codex Item Projection', () => {
 
     expect(projection.list(scope.executionId)).toEqual([
       expect.objectContaining({
-        id: 'approval:approval-1',
+        id: 'approval:["approval-1","approval-request-1"]',
         type: 'approval',
         status: 'declined',
         kind: 'command',

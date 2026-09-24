@@ -159,6 +159,10 @@ export interface WorkflowEngine {
   close(): Promise<void>
 }
 
+function needsRuntimeExecution(run: WorkflowRun | null): boolean {
+  return run?.status === 'running' || (run?.status === 'waiting' && run.snapshot.pendingApprovalDetails?.runtime?.state === 'responding')
+}
+
 export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): WorkflowEngine {
   const store = createSqliteRunStore(dependencies)
   const releaseManager = dependencies.releaseManager ?? createDefaultReleaseManager()
@@ -175,7 +179,7 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
       controls.delete(runId)
       if (!closed) {
         const latest = await store.getRun(runId)
-        if (latest?.status === 'running' || (latest?.status === 'waiting' && latest.snapshot.pendingApprovalDetails?.runtime?.state === 'responding')) ensureRunning(runId)
+        if (needsRuntimeExecution(latest)) ensureRunning(runId)
       }
     })
     controls.set(runId, { action, promise })
@@ -191,7 +195,7 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
     while (true) {
       const run = await store.getRun(runId)
       if (stopIntent(runId)) return
-      if (!run || (run.status !== 'running' && !(run.status === 'waiting' && run.snapshot.pendingApprovalDetails?.runtime?.state === 'responding')) || !run.snapshot.currentStepExecutionId) return
+      if (!run || !needsRuntimeExecution(run) || !run.snapshot.currentStepExecutionId) return
       const execution = run.stepExecutions.find((candidate) => candidate.id === run.snapshot.currentStepExecutionId)
       if (!execution) return
       const step = run.workflow.phases[run.snapshot.phaseIndex]?.steps[run.snapshot.stepIndex]
@@ -362,7 +366,7 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
       void previous.then(async () => {
         if (!closed) {
           const latest = await store.getRun(runId)
-          if (latest?.status === 'running' || (latest?.status === 'waiting' && latest.snapshot.pendingApprovalDetails?.runtime?.state === 'responding')) ensureRunning(runId)
+          if (needsRuntimeExecution(latest)) ensureRunning(runId)
         }
       })
       return
@@ -585,9 +589,9 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
 
     async decideRuntimeApproval(runId, requestId, decision) {
       return control(runId, `runtime-approval:${requestId}:${decision}`, async () => {
-        const current = await requireRunStatus(runId, '响应 Runtime 审批', ['waiting'])
+        const current = await requireRunStatus(runId, zhCNMain.runtimeApproval.respond, ['waiting'])
         const pending = current.snapshot.pendingApprovalDetails?.runtime
-        if (!pending || pending.id !== requestId || pending.state !== 'pending') throw new Error('Runtime 审批已失效或已提交决定。')
+        if (!pending || pending.id !== requestId || pending.state !== 'pending') throw new Error(zhCNMain.runtimeApproval.expired)
         if (!dependencies.runtime.canRespondToApproval?.(pending)) return store.blockRuntimeApproval(runId)
         const run = await store.decideRuntimeApproval(runId, requestId, decision)
         ensureRunning(runId)

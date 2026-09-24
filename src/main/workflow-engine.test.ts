@@ -1424,7 +1424,17 @@ describe('WorkflowEngine public API', () => {
     const responding = await engine.getRun(run.id)
     expect(responding).toMatchObject({ status: 'waiting', snapshot: { pendingApprovalDetails: { runtime: { state: 'responding', decision } } } })
     await expect(engine.decideRuntimeApproval(run.id, pending!.id, 'decline')).rejects.toThrow()
+    if (decision === 'decline') enqueue({ id: 43, method: 'item/fileChange/requestApproval', params: { ...params, itemId: 'followup-item', reason: 'Follow-up change' } })
     enqueue({ method: 'serverRequest/resolved', params: { threadId: params.threadId, requestId: 42 } })
+    if (decision === 'decline') {
+      const following = await engine.waitForIdle(run.id)
+      const second = following.snapshot.pendingApprovalDetails?.runtime
+      expect(second).toMatchObject({ requestId: 43, state: 'pending', decision: null })
+      await expect(engine.decideRuntimeApproval(run.id, pending!.id, 'accept')).rejects.toThrow()
+      await engine.decideRuntimeApproval(run.id, second!.id, 'accept')
+      await vi.waitFor(() => expect(replies).toHaveLength(2))
+      enqueue({ method: 'item/completed', params: { ...params, item: { id: 'followup-item', type: 'fileChange', status: 'completed', changes: [] } } })
+    }
     await vi.waitFor(async () => expect((await engine!.getRun(run.id))?.status).toBe('running'))
     enqueue({ method: 'turn/completed', params: { threadId: params.threadId, turn: { id: params.turnId, status: decision === 'cancel' ? 'interrupted' : 'completed' } } })
     const finished = await engine.waitForIdle(run.id)
@@ -1433,7 +1443,7 @@ describe('WorkflowEngine public API', () => {
     expect(finished.stepExecutions[0]).toMatchObject({ id: executionId, attempt: 1, runtimeLocators: [expect.objectContaining({ turnId: params.turnId })] })
     expect(requests.filter((method) => method === 'turn/start')).toHaveLength(1)
     expect(finished.events.filter((event) => event.type === 'approval_approved')).toHaveLength(1)
-    expect(finished.decisionRecords.map((record) => record.source)).toEqual(['approval-gate', 'runtime-approval'])
+    expect(finished.decisionRecords.map((record) => record.source)).toEqual(decision === 'decline' ? ['approval-gate', 'runtime-approval', 'runtime-approval'] : ['approval-gate', 'runtime-approval'])
   })
 
   it('recovers the persisted Runtime approval locator, checks history and blocks an unaddressable request', async () => {

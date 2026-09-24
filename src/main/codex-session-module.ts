@@ -387,6 +387,7 @@ export function createCodexSessionModule(dependencies: CodexSessionModuleDepende
     waitingRequest: CodexRuntimeApprovalRequest | null
     waitingRawRequest: JsonRpcServerRequest | null
     stopping?: boolean
+    deferredRequests: JsonRpcServerRequest[]
     answeredRequests: Set<string | number>
     respondedRequestId?: string
     awaitingResolution?: { request: JsonRpcServerRequest; result: unknown; onResolved?: () => Promise<void> }
@@ -514,7 +515,8 @@ export function createCodexSessionModule(dependencies: CodexSessionModuleDepende
   async function consumeTurn(state: TurnState): Promise<CodexSessionTurnResult> {
     try {
       while (true) {
-        const message = state.transport.nextMessage ? await state.transport.nextMessage() : await state.transport.nextNotification()
+        const deferred = !state.awaitingResolution ? state.deferredRequests.shift() : undefined
+        const message = deferred ?? (state.transport.nextMessage ? await state.transport.nextMessage() : await state.transport.nextNotification())
         if (!message) throw new Error(zhCNMain.codexSession.turnClosed)
         if (!('id' in message)) {
           const belongsToTurn = message.params?.threadId === state.locator.threadId && message.params?.turnId === state.locator.turnId
@@ -536,6 +538,12 @@ export function createCodexSessionModule(dependencies: CodexSessionModuleDepende
           if (request.params?.turnId && request.params.turnId !== state.locator.turnId) continue
           // Retransmitted requests must not produce another decision or Step attempt.
           if (state.answeredRequests.has(request.id)) continue
+          if (state.awaitingResolution) {
+            // A later request must not replace the durable pending approval
+            // until its predecessor has been acknowledged by the server.
+            state.deferredRequests.push(request)
+            continue
+          }
           const publicRequest = publicApprovalRequest(request, state.locator)
           if (state.input.executionId) {
             observeProjection(() => itemProjection?.handleRequest(request, projectionScope(state)))
@@ -650,7 +658,7 @@ export function createCodexSessionModule(dependencies: CodexSessionModuleDepende
         const activeKey = `${threadId}:${turnId}`
         activeTransports.set(activeKey, transport)
         await input.onLocator?.(locator)
-        const state: TurnState = { transport, activeKey, locator, events: [], input, waitingRequest: null, waitingRawRequest: null, processing: null, answeredRequests: new Set() }
+        const state: TurnState = { transport, activeKey, locator, events: [], input, waitingRequest: null, waitingRawRequest: null, processing: null, deferredRequests: [], answeredRequests: new Set() }
         turnStates.set(activeKey, state)
         if (input.executionId) observeProjection(() => itemProjection?.startTurn(projectionScope(state), turnStartedAt))
         state.processing = consumeTurn(state)

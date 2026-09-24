@@ -60,6 +60,17 @@ export const zhCNMain = {
       completed: 'Workflow Run 已完成。'
     }
   },
+  runtimeApproval: {
+    command: '命令执行审批',
+    fileChange: '文件修改审批',
+    respond: '响应 Runtime 审批',
+    expired: 'Runtime 审批已失效或已提交决定。',
+    invalidDecision: 'Runtime 审批不允许这个决定。',
+    invalidParameters: 'Runtime 审批参数无效。',
+    waiting: '等待 Runtime 确认审批决定。',
+    unavailable: 'Runtime 审批的原连接已失效，无法安全响应原请求；请结束此 Run。',
+    originalRequestRequired: 'Runtime 审批必须响应原请求。',
+  },
   codexSession: {
     capabilityNegotiationFailed: (command: string, version: string, missing: string) => `Codex App Server 能力协商失败（路径：${command}；版本：${version}；缺失能力：${missing}）。请更新本机 Codex CLI 后重试。`,
     capabilitySuggestion: '请安装或更新 Codex CLI，使其支持所需的 App Server 方法和事件。',

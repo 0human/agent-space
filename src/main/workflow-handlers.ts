@@ -134,7 +134,7 @@ export function registerWorkflowHandlers({ handle, projectService, workflowServi
   handle(APP_SHELL_CHANNELS.cancelWorkflowRun, async (_event: unknown, runId: unknown) => workflowEngine!.cancelRun(String(runId)))
   handle(APP_SHELL_CHANNELS.answerWorkflowQuestion, async (_event: unknown, runId: unknown, answer: unknown) => workflowEngine!.answerQuestion(String(runId), typeof answer === 'string' ? answer : ''))
   handle(APP_SHELL_CHANNELS.decideRuntimeApproval, async (_event: unknown, runId: unknown, requestId: unknown, decision: unknown) => {
-    if (typeof runId !== 'string' || typeof requestId !== 'string' || typeof decision !== 'string' || !['accept', 'acceptForSession', 'decline', 'cancel'].includes(decision)) throw new Error('Runtime 审批参数无效。')
+    if (typeof runId !== 'string' || typeof requestId !== 'string' || typeof decision !== 'string' || !['accept', 'acceptForSession', 'decline', 'cancel'].includes(decision)) throw new Error(zhCNMain.runtimeApproval.invalidParameters)
     return workflowEngine!.decideRuntimeApproval(runId, requestId, decision as RuntimeApprovalChoice)
   })
   handle(APP_SHELL_CHANNELS.approveWorkflowApproval, async (_event: unknown, runId: unknown) => workflowEngine!.approve(String(runId)))

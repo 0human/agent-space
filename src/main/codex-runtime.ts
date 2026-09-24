@@ -567,7 +567,7 @@ export function createCodexRuntimeAdapter(dependencies: CodexRuntimeDependencies
           const request = pendingRequests.get(context.execution.id)?.request
           if (request && request.kind !== 'question') events.push({
             type: 'approval_required',
-            approval: request.runtimeApproval ? (request.kind === 'command' ? '命令执行审批' : '文件修改审批') : request.summary,
+            approval: request.runtimeApproval ? (request.kind === 'command' ? zhCNMain.runtimeApproval.command : zhCNMain.runtimeApproval.fileChange) : request.summary,
             ...(request.runtimeApproval ? { runtimeApproval: request.runtimeApproval } : {}),
           })
         }

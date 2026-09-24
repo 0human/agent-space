@@ -276,7 +276,7 @@ describe('Codex Session Module', () => {
     expect(transport.respond).toHaveBeenCalledTimes(1)
   })
 
-  it('keeps distinct approvals for the same Item visible within one Turn', async () => {
+  it.each(['before', 'after'] as const)('keeps distinct approvals for the same Item when the next request arrives %s acknowledgement', async (order) => {
     const params = { threadId: 'thread-1', turnId: 'turn-1', itemId: 'command-1' }
     const first = { id: 1, method: 'item/commandExecution/requestApproval', params: { ...params, command: 'git status', reason: 'First callback' } }
     const second = { id: 2, method: first.method, params: { ...params, command: 'git diff', reason: 'Second callback' } }
@@ -285,7 +285,8 @@ describe('Codex Session Module', () => {
     const session = createCodexSessionModule({ createTransport: () => transport, itemProjection: projection })
     let received!: CodexRuntimeApprovalRequest
     await session.runTurn({ cwd: '/work/demo', command: 'codex', executionId: 'execution-1', workUnit: { kind: 'phase', runId: 'run-1', phaseId: 'discovery' }, input: 'run', onApproval: (request) => { received = request } })
-    transport.enqueue({ method: 'serverRequest/resolved', params: { threadId: params.threadId, requestId: 1 } }, second)
+    const acknowledgement = { method: 'serverRequest/resolved', params: { threadId: params.threadId, requestId: 1 } }
+    transport.enqueue(...(order === 'before' ? [second, acknowledgement] : [acknowledgement, second]))
     expect((await session.respondToApproval(received, 'decline')).status).toBe('waiting')
     expect(projection.list('execution-1').filter((item) => item.type === 'approval')).toEqual([
       expect.objectContaining({ requestId: 1, decision: 'decline', status: 'declined' }),

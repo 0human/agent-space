@@ -1171,11 +1171,11 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
         const current = await load(runId)
         const pending = current?.snapshot.pendingApprovalDetails
         const runtime = pending?.runtime
-        if (!current || current.status !== 'waiting' || !pending || !runtime || runtime.id !== requestId || runtime.state !== 'pending') throw new Error('Runtime 审批已失效或已提交决定。')
-        if (!runtime.availableDecisions.includes(decision)) throw new Error('Runtime 审批不允许这个决定。')
+        if (!current || current.status !== 'waiting' || !pending || !runtime || runtime.id !== requestId || runtime.state !== 'pending') throw new Error(zhCNMain.runtimeApproval.expired)
+        if (!runtime.availableDecisions.includes(decision)) throw new Error(zhCNMain.runtimeApproval.invalidDecision)
         const timestamp = now()
         await appendDecisionRecord(current, pending.continuation.executionId, 'runtime-approval', pending.approval, decision, pending.continuation, timestamp)
-        await updateSnapshot(runId, { ...current.snapshot, pendingApprovalDetails: { ...pending, runtime: { ...runtime, state: 'responding', decision } }, nextAction: '等待 Runtime 确认审批决定。' })
+        await updateSnapshot(runId, { ...current.snapshot, pendingApprovalDetails: { ...pending, runtime: { ...runtime, state: 'responding', decision } }, nextAction: zhCNMain.runtimeApproval.waiting })
         await appendEvent(runId, 'runtime_approval_decided', { executionId: pending.continuation.executionId, request: runtime, decision }, timestamp)
         return (await load(runId))!
       }))
@@ -1204,7 +1204,7 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
         if (!current) throw new Error('找不到 Workflow Run。')
         const pending = current.snapshot.pendingApprovalDetails
         if (!pending?.runtime || pending.runtime.state === 'resolved') return current
-        const reason = 'Runtime 审批的原连接已失效，无法安全响应原请求；请结束此 Run。'
+        const reason = zhCNMain.runtimeApproval.unavailable
         const timestamp = now()
         await run(db, 'UPDATE step_executions SET status = ?, error = ? WHERE id = ?', ['blocked', reason, pending.continuation.executionId])
         const execution = current.stepExecutions.find((candidate) => candidate.id === pending.continuation.executionId)
@@ -1222,7 +1222,7 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
         if (!current) throw new Error('找不到 Workflow Run。')
         const pending = current.snapshot.pendingApprovalDetails
         if (current.status !== 'waiting' || !pending || !current.snapshot.pendingApproval) return current
-        if (pending.runtime) throw new Error('Runtime 审批必须响应原请求。')
+        if (pending.runtime) throw new Error(zhCNMain.runtimeApproval.originalRequestRequired)
         const timestamp = now()
         const executionId = pending.continuation.executionId
         await appendDecisionRecord(current, executionId, 'approval-gate', pending.approval, decision, pending.continuation, timestamp)

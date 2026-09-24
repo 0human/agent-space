@@ -659,21 +659,24 @@ export function createCodexSessionModule(dependencies: CodexSessionModuleDepende
         if (!turnId) return response
         const responseRecord = asRecord(response)
         const thread = asRecord(responseRecord?.thread)
-        if (!thread || !Array.isArray(thread.turns)) throw new Error(zhCNMain.codexSession.invalidThreadHistory)
+        if (thread?.id !== input.locator.threadId || !Array.isArray(thread.turns)) throw new Error(zhCNMain.codexSession.invalidThreadHistory)
         const turns = thread.turns.filter((turn) => asRecord(turn)?.id === turnId)
         if (turns.length === 0) throw new Error(zhCNMain.codexSession.missingTurnHistory)
+        if (turns.length !== 1 || (input.projectionScope && !Array.isArray(asRecord(turns[0])?.items))) {
+          throw new Error(zhCNMain.codexSession.invalidThreadHistory)
+        }
         const selected = { ...responseRecord, thread: { ...thread, turns } }
         const runtimeProvider = input.locator.runtimeProvider
         const runtimeVersion = input.locator.runtimeVersion
         const historyScope = input.projectionScope
-        if (historyScope && runtimeProvider && runtimeVersion) {
+        if (historyScope && runtimeProvider) {
           observeProjection(() => itemProjection?.restore(selected, {
             ...historyScope,
             runtimeLocator: {
               runtimeProvider,
               threadId: input.locator.threadId,
               turnId,
-              runtimeVersion
+              runtimeVersion: runtimeVersion ?? ''
             }
           }))
         }

@@ -578,6 +578,19 @@ export function createCodexRuntimeAdapter(dependencies: CodexRuntimeDependencies
         if (!pendingRequests.has(context.execution.id)) await gitGuard?.cleanup().catch(() => undefined)
       }
     },
+    async readHistory(context) {
+      const locator = context.runtimeLocator
+      if (locator.runtimeProvider !== 'codex' || !locator.threadId || !locator.turnId) {
+        throw new Error(zhCNMain.codexSession.invalidThreadHistory)
+      }
+      await session.readThread({
+        command, cwd: context.workspace.path, locator,
+        projectionScope: {
+          runId: context.runId, executionId: context.executionId,
+          permissionPolicy: context.permissionPolicy, source: 'codex app-server'
+        }
+      })
+    },
     async interrupt(context) {
       const interrupted = await session.interrupt(context.runtimeLocator)
       if (interrupted) {

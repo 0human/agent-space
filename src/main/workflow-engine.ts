@@ -142,6 +142,7 @@ export interface WorkflowEngine {
   preflight(input: WorkflowPreflightInput): Promise<WorkflowPreflightResult>
   startRun(input: StartWorkflowRunInput): Promise<WorkflowRun>
   getRun(runId: string): Promise<WorkflowRun | null>
+  loadRuntimeHistory(runId: string, executionId: string): Promise<void>
   getProjectRun(projectId: string): Promise<WorkflowRun | null>
   hasActiveRuns(projectId: string): Promise<boolean>
   pauseRun(runId: string): Promise<WorkflowRun>
@@ -372,7 +373,42 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
     return true
   }
 
+  async function loadRuntimeHistory(runId: string, executionId: string): Promise<void> {
+    const run = await store.getRun(runId)
+    const execution = run?.stepExecutions.find((candidate) => candidate.id === executionId)
+    if (!run || !execution) throw new Error('找不到 Step Execution。')
+    const step = run.workflow.phases.find((phase) => phase.id === execution.phaseId)?.steps.find((step) => step.id === execution.stepId)
+    const liveExecution = active.has(runId) && run.snapshot.currentStepExecutionId === executionId
+    const awaitingGate = run.snapshot.pendingApprovalDetails && step?.approvalGate
+    let unavailable = Boolean(dependencies.runtime.readHistory && !liveExecution && !execution.runtimeLocators.length && (
+      execution.runtimeSessionId || (step?.kind === 'skill' && !awaitingGate && !['pending', 'skipped'].includes(execution.status))
+    ))
+    for (const runtimeLocator of execution.runtimeLocators) {
+      if (liveExecution && runtimeLocator === execution.runtimeLocators.at(-1)) continue
+      try {
+        if (!dependencies.runtime.readHistory) throw new Error('Runtime history reader unavailable')
+        await dependencies.runtime.readHistory({
+          runId, executionId, runtimeLocator, workspace: { path: run.workspacePath },
+          permissionPolicy: run.project.permissionPolicy ?? { grantedPermissions: [] }
+        })
+      } catch {
+        unavailable = true
+      }
+    }
+    if (unavailable) {
+      // A live Turn still has a safe owner. Inspecting history must not stop it.
+      if (!active.has(runId)) await store.blockRuntimeHistory(runId, zhCNMain.codexSession.historyUnavailable, zhCNMain.codexSession.historyRecovery)
+      throw new Error(zhCNMain.codexSession.historyUnavailable)
+    }
+  }
+
+  async function restoreRunHistory(run: WorkflowRun): Promise<void> {
+    if (!dependencies.runtime.readHistory) return
+    for (const execution of run.stepExecutions) await loadRuntimeHistory(run.id, execution.id)
+  }
+
   return {
+    loadRuntimeHistory,
     async preflight(input): Promise<WorkflowPreflightResult> {
       if (isProjectDeleted(input.project)) return { passed: false, checks: [], errors: [zhCNMain.projectDelete.notFound] }
       const checks: string[] = []
@@ -490,6 +526,7 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
         if (current.status === 'blocked' && current.snapshot.blockedBy?.recoveryAction !== 'resume') {
           throw new Error('blocked 状态没有可执行的恢复动作。')
         }
+        await restoreRunHistory(current)
         const run = await store.resume(runId, guidance)
         if (run.status === 'running') ensureRunning(runId)
         return run
@@ -556,6 +593,12 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
     async recover() {
       for (const run of await store.recoverableRuns()) {
         await reconcileCommitArtifacts(run)
+        if (!isWorkflowRunInProgress(run.status)) continue
+        try {
+          await restoreRunHistory(run)
+        } catch {
+          continue
+        }
         if (run.status === 'running') ensureRunning(run.id)
       }
     },

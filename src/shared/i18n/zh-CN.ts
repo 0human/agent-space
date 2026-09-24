@@ -72,6 +72,8 @@ export const zhCNMain = {
     missingTurnId: 'Codex App Server 未返回 Turn ID。',
     invalidThreadHistory: 'Codex App Server 返回的 Thread 历史无效。',
     missingTurnHistory: 'Codex App Server 未返回指定的 Turn 历史。',
+    historyUnavailable: 'Codex 执行历史不可用',
+    historyRecovery: '请恢复本机 Codex 及原始 Thread/Turn 历史后继续，或结束 Run。',
     turnNotActive: '当前 Runtime Turn 不可中断。'
   },
   codexRuntime: {

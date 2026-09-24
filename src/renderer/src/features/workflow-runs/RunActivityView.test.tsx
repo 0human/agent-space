@@ -5,6 +5,16 @@ import { describe, expect, it, vi } from 'vitest'
 import { BUILT_IN_DEVELOPMENT_WORKFLOW } from '../../../../shared/workflow'
 import type { RuntimeItem, WorkflowRun } from '../../../../shared/workflow-run'
 import { RunActivityView, type RunActivityViewProps } from './RunActivityView'
+import { AppShellProvider } from '../../app/app-shell-provider'
+import { createAppShellApi } from '../../test/app-shell-fake'
+import { WorkflowRunFeature } from './WorkflowRunFeature'
+import type { Project } from '../../../../shared/project'
+
+const historyProject: Project = {
+  id: 'project-1', name: 'History', workspacePath: '/work/history', workspaceAvailable: true,
+  remote: null, currentBranch: null, head: null, defaultBranch: null, isGreenfield: false, dirty: false,
+  dirtySummary: { staged: 0, unstaged: 0, untracked: 0, files: [] }, updatedAt: '2026-09-24T00:00:00Z',
+}
 
 function fixture(): RunActivityViewProps {
   const run: WorkflowRun = {
@@ -564,6 +574,56 @@ describe('Run Activity View', () => {
     ).toHaveAttribute('aria-current', 'step')
   })
 
+  it('reloads history when a continued attempt gains another Locator without adding an execution', async () => {
+    const props = fixture()
+    const first = { ...props.runtimeItems[0], type: 'final_response' as const, status: 'completed' as const, text: 'First saved answer' }
+    const second = { ...first, runtimeLocator: { ...first.runtimeLocator, turnId: 'turn-2' }, text: 'Continued saved answer' }
+    const initial = { ...props.run, stepExecutions: [{ ...props.run.stepExecutions[0], runtimeLocators: [first.runtimeLocator] }] }
+    const updated = { ...initial, stepExecutions: [{ ...initial.stepExecutions[0], runtimeLocators: [first.runtimeLocator, second.runtimeLocator] }] }
+    const api = createAppShellApi()
+    api.getWorkflowRun = vi.fn().mockResolvedValue(updated)
+    api.listRuntimeItems = vi.fn().mockResolvedValueOnce([first]).mockResolvedValue([first, second])
+    render(<AppShellProvider api={api}><WorkflowRunFeature project={historyProject} initialRun={initial} onNavigate={vi.fn()} /></AppShellProvider>)
+    expect(await screen.findByText('Continued saved answer')).toBeVisible()
+    expect(screen.getByText('First saved answer')).toBeVisible()
+  })
+
+  it('shows unavailable history without hiding saved Artifacts and restores it on re-entry', async () => {
+    const props = fixture()
+    const execution = props.run.stepExecutions[0]
+    const run: WorkflowRun = { ...props.run, status: 'completed', stepExecutions: [execution], artifacts: [{
+      id: 'document', runId: props.run.id, stepExecutionId: execution.id, type: 'document', name: 'Saved domain document',
+      location: '/work/history/CONTEXT.md', versionHash: null, status: 'available', createdAt: '2026-09-24T00:00:00Z',
+    }] }
+    const api = createAppShellApi()
+    api.getWorkflowRun = vi.fn().mockResolvedValue(run)
+    api.listRuntimeItems = vi.fn().mockRejectedValue(new Error('Codex 执行历史不可用'))
+    const view = () => <AppShellProvider api={api}><WorkflowRunFeature project={historyProject} initialRun={run} onNavigate={vi.fn()} /></AppShellProvider>
+    const firstVisit = render(view())
+    expect(await screen.findByText(/Codex 执行历史不可用/)).toBeVisible()
+    expect(screen.getByText('Saved domain document')).toBeInTheDocument()
+    firstVisit.unmount()
+    api.listRuntimeItems = vi.fn().mockResolvedValue([{ ...props.runtimeItems[0], type: 'final_response', status: 'completed', text: 'Restored final answer' }])
+    render(view())
+    expect(await screen.findByText('Restored final answer')).toBeVisible()
+    expect(screen.queryByText(/Codex 执行历史不可用/)).not.toBeInTheDocument()
+    expect(screen.getByText('Saved domain document')).toBeInTheDocument()
+  })
+
+  it('places restored Turns before newer live Items according to the persisted Locator order', () => {
+    const props = fixture()
+    const execution = props.run.stepExecutions[0]
+    const first = { runtimeProvider: 'codex', threadId: 'thread-history', turnId: 'first', runtimeVersion: '0.144.3' }
+    const second = { ...first, turnId: 'second' }
+    execution.runtimeLocators = [first, second]
+    const metadata = { runId: props.run.id, executionId: execution.id, provider: 'codex', source: 'codex app-server', permissionPolicy: { grantedPermissions: [] }, status: 'completed' as const, type: 'final_response' as const }
+    render(<RunActivityView {...props} runtimeItems={[
+      { ...metadata, id: 'reply', runtimeLocator: second, text: 'Later live reply' },
+      { ...metadata, id: 'reply', runtimeLocator: first, text: 'Earlier restored reply' },
+    ]} />)
+    expect(screen.getByText('Earlier restored reply').compareDocumentPosition(screen.getByText('Later live reply')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
   it('explains empty or unavailable history without hiding live Items and shows action errors', () => {
     const props = fixture()
     const empty = {
@@ -591,7 +651,7 @@ describe('Run Activity View', () => {
     )
     expect(
       screen.getByText(
-        '当前无法读取 Runtime Item 历史；已接收的实时更新仍会展示。',
+        'Codex 执行历史不可用；已接收的实时更新仍会展示。',
       ),
     ).toBeVisible()
     expect(screen.getByText('执行输出 5')).toBeVisible()

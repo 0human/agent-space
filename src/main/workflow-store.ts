@@ -1201,7 +1201,7 @@ export function createSqliteRunStore(dependencies: SqliteRunStoreDependencies) {
     async blockRuntimeApproval(runId: string): Promise<StoredRun> {
       return locked(async () => transaction(async () => {
         const current = await load(runId)
-        if (!current) throw new Error('找不到 Workflow Run。')
+        if (!current) throw new Error(zhCNMain.workflowRun.notFound)
         const pending = current.snapshot.pendingApprovalDetails
         if (!pending?.runtime || pending.runtime.state === 'resolved') return current
         const reason = zhCNMain.runtimeApproval.unavailable

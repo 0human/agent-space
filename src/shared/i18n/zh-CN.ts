@@ -36,6 +36,7 @@ export const zhCNMain = {
     ideUnavailable: '没有找到可用的外部 IDE。'
   },
   workflowRun: {
+    notFound: '找不到 Workflow Run。',
     alreadyExists: '该工程已有运行实例，每个工程仅允许创建一个 Run。',
     controlInProgress: 'Run 正在处理另一个操作。',
     fileChangesSummary: '文件修改累计数据',
@@ -59,6 +60,17 @@ export const zhCNMain = {
       cancelled: 'Workflow Run 已取消。',
       completed: 'Workflow Run 已完成。'
     }
+  },
+  runtimeApproval: {
+    command: '命令执行审批',
+    fileChange: '文件修改审批',
+    respond: '响应 Runtime 审批',
+    expired: 'Runtime 审批已失效或已提交决定。',
+    invalidDecision: 'Runtime 审批不允许这个决定。',
+    invalidParameters: 'Runtime 审批参数无效。',
+    waiting: '等待 Runtime 确认审批决定。',
+    unavailable: 'Runtime 审批的原连接已失效，无法安全响应原请求；请结束此 Run。',
+    originalRequestRequired: 'Runtime 审批必须响应原请求。',
   },
   codexSession: {
     capabilityNegotiationFailed: (command: string, version: string, missing: string) => `Codex App Server 能力协商失败（路径：${command}；版本：${version}；缺失能力：${missing}）。请更新本机 Codex CLI 后重试。`,

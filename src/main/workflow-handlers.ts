@@ -5,7 +5,7 @@ import { APP_SHELL_CHANNELS } from '../shared/app-shell'
 import { zhCNMain } from '../shared/i18n/zh-CN'
 import { DEFAULT_PROJECT_PERMISSIONS, isProjectDeleted, type Project } from '../shared/project'
 import type { WorkflowView } from '../shared/workflow'
-import type { WorkflowPreflightResult, WorkflowRunActionResult } from '../shared/workflow-run'
+import type { RuntimeApprovalChoice, WorkflowPreflightResult, WorkflowRunActionResult } from '../shared/workflow-run'
 import type { WorkflowEngine } from './workflow-engine'
 
 interface WorkflowService {
@@ -133,6 +133,10 @@ export function registerWorkflowHandlers({ handle, projectService, workflowServi
   })
   handle(APP_SHELL_CHANNELS.cancelWorkflowRun, async (_event: unknown, runId: unknown) => workflowEngine!.cancelRun(String(runId)))
   handle(APP_SHELL_CHANNELS.answerWorkflowQuestion, async (_event: unknown, runId: unknown, answer: unknown) => workflowEngine!.answerQuestion(String(runId), typeof answer === 'string' ? answer : ''))
+  handle(APP_SHELL_CHANNELS.decideRuntimeApproval, async (_event: unknown, runId: unknown, requestId: unknown, decision: unknown) => {
+    if (typeof runId !== 'string' || typeof requestId !== 'string' || typeof decision !== 'string' || !['accept', 'acceptForSession', 'decline', 'cancel'].includes(decision)) throw new Error(zhCNMain.runtimeApproval.invalidParameters)
+    return workflowEngine!.decideRuntimeApproval(runId, requestId, decision as RuntimeApprovalChoice)
+  })
   handle(APP_SHELL_CHANNELS.approveWorkflowApproval, async (_event: unknown, runId: unknown) => workflowEngine!.approve(String(runId)))
   handle(APP_SHELL_CHANNELS.rejectWorkflowApproval, async (_event: unknown, runId: unknown) => workflowEngine!.reject(String(runId)))
   handle(APP_SHELL_CHANNELS.openWorkflowFile, async (_event: unknown, projectId: unknown) => {

@@ -1,6 +1,6 @@
 import type { GitHubProjectCloneResponse, OpenProjectResult, Project, ProjectDeletionResult, ProjectImportResult } from './project'
 import type { WorkflowView } from './workflow'
-import type { RuntimeItem, WorkflowPreflightResult, WorkflowRun, WorkflowRunActionResult } from './workflow-run'
+import type { RuntimeApprovalChoice, RuntimeItem, WorkflowPreflightResult, WorkflowRun, WorkflowRunActionResult } from './workflow-run'
 import type { InstalledSkillRecord, SkillInstallPreview, SkillSource } from './skill-package'
 
 export interface RuntimeInfo {
@@ -30,6 +30,7 @@ export const APP_SHELL_CHANNELS = {
   retryWorkflowStep: 'workflow-run:retry-step',
   cancelWorkflowRun: 'workflow-run:cancel',
   answerWorkflowQuestion: 'workflow-run:answer-question',
+  decideRuntimeApproval: 'workflow-run:runtime-approval',
   approveWorkflowApproval: 'workflow-run:approve',
   rejectWorkflowApproval: 'workflow-run:reject',
   openWorkflowFile: 'workflow:open-file',
@@ -60,6 +61,7 @@ export interface AppShellApi {
   retryWorkflowStep: (runId: string, guidance?: string) => Promise<WorkflowRun>
   cancelWorkflowRun: (runId: string) => Promise<WorkflowRun>
   answerWorkflowQuestion: (runId: string, answer: string) => Promise<WorkflowRun>
+  decideRuntimeApproval: (runId: string, requestId: string, decision: RuntimeApprovalChoice) => Promise<WorkflowRun>
   approveWorkflowApproval: (runId: string) => Promise<WorkflowRun>
   rejectWorkflowApproval: (runId: string) => Promise<WorkflowRun>
   openWorkflowFile: (projectId: string) => Promise<OpenProjectResult>

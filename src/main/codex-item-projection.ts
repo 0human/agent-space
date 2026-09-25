@@ -164,7 +164,7 @@ function approvalDecision(value: unknown): RuntimeApprovalDecision {
 function requestItemId(request: JsonRpcServerRequest, itemId: string): string {
   return request.method === 'item/tool/requestUserInput'
     ? `question:${itemId}`
-    : `approval:${itemId}`
+    : `approval:${JSON.stringify([itemId, request.id])}`
 }
 
 function safeRuntimeLocator(locator: RuntimeLocator): RuntimeLocator {
@@ -555,6 +555,9 @@ export function createCodexItemProjection(dependencies: CodexItemProjectionDepen
           status: 'in_progress',
           kind,
           summary: sanitizeSensitiveText(command ?? reason ?? request.method),
+          itemId: sanitizeSensitiveText(itemId),
+          requestId: request.id,
+          reason: sanitizeSensitiveText(reason ?? ''),
           decision: null
         })
         refreshWaiting(scope)

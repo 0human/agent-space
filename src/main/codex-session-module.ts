@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { constants } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { access, mkdtemp, readFile, rm } from 'node:fs/promises'
@@ -5,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 
 import type { PermissionPolicy } from '../shared/project'
-import type { RuntimeArtifact, RuntimeEventInput, RuntimeLocator } from '../shared/workflow-run'
+import type { RuntimeArtifact, RuntimeEventInput, RuntimeLocator, RuntimeApprovalRequest } from '../shared/workflow-run'
 import { zhCNMain } from '../shared/i18n/zh-CN'
 import { createStdioCodexAppServerTransport, type CodexAppServerTransport, type JsonRpcServerRequest, type JsonRpcNotification } from './codex-app-server-transport'
 import type { CodexItemProjection, CodexItemProjectionScope } from './codex-item-projection'
@@ -19,6 +20,7 @@ export interface CodexRuntimeApprovalRequest {
   readonly id: string
   readonly kind: 'question' | 'command' | 'file-change' | 'permissions' | 'exec-command' | 'apply-patch' | 'other'
   readonly summary: string
+  readonly runtimeApproval?: RuntimeApprovalRequest
 }
 
 export interface CodexCapabilityInspectorInput extends CodexSessionPreflightInput {
@@ -82,7 +84,7 @@ export interface CodexSessionModule {
   preflight(input: CodexSessionPreflightInput): Promise<CodexCapabilityNegotiation>
   runTurn(input: CodexSessionTurnInput): Promise<CodexSessionTurnResult>
   interrupt(locator: Pick<RuntimeLocator, 'threadId' | 'turnId'>): Promise<boolean>
-  respondToApproval(request: CodexRuntimeApprovalRequest, result: unknown, endTurn?: boolean): Promise<CodexSessionTurnResult>
+  respondToApproval(request: CodexRuntimeApprovalRequest, result: unknown, endTurn?: boolean, onResolved?: () => Promise<void>): Promise<CodexSessionTurnResult>
   readThread(input: CodexSessionPreflightInput & {
     locator: Pick<RuntimeLocator, 'threadId'> & Partial<Omit<RuntimeLocator, 'threadId'>>
     projectionScope?: Omit<CodexItemProjectionScope, 'runtimeLocator'>
@@ -376,7 +378,6 @@ export function createCodexSessionModule(dependencies: CodexSessionModuleDepende
   const workUnits = new Map<string, { threadId: string; runtimeVersion: string }>()
   const activeTransports = new Map<string, CodexSessionTransport>()
   const allTransports = new Set<CodexSessionTransport>()
-  let nextApprovalId = 1
   type TurnState = {
     transport: CodexSessionTransport
     activeKey: string
@@ -386,7 +387,10 @@ export function createCodexSessionModule(dependencies: CodexSessionModuleDepende
     waitingRequest: CodexRuntimeApprovalRequest | null
     waitingRawRequest: JsonRpcServerRequest | null
     stopping?: boolean
+    deferredRequests: JsonRpcServerRequest[]
+    answeredRequests: Set<string | number>
     respondedRequestId?: string
+    awaitingResolution?: { request: JsonRpcServerRequest; result: unknown; onResolved?: () => Promise<void> }
     processing: Promise<CodexSessionTurnResult> | null
   }
   const turnStates = new Map<string, TurnState>()
@@ -415,8 +419,26 @@ export function createCodexSessionModule(dependencies: CodexSessionModuleDepende
       : `implementation-ticket:${workUnit.runId}:${workUnit.ticketId}`
   }
 
-  function publicApprovalRequest(request: JsonRpcServerRequest): CodexRuntimeApprovalRequest {
-    return Object.freeze({ id: `runtime-approval-${nextApprovalId++}`, kind: approvalKind(request.method), summary: approvalSummary(request) })
+  function publicApprovalRequest(request: JsonRpcServerRequest, locator: RuntimeLocator): CodexRuntimeApprovalRequest {
+    const id = `runtime-approval-${randomUUID()}`
+    const kind = approvalKind(request.method)
+    const itemId = asString(request.params?.itemId)
+    const choices = ['accept', 'acceptForSession', 'decline', 'cancel'] as const
+    const available = request.params?.availableDecisions
+    const runtimeApproval: RuntimeApprovalRequest | undefined = itemId && (kind === 'command' || kind === 'file-change') ? {
+      id, runtimeLocator: locator, itemId, requestId: request.id, requestType: kind,
+      ...(typeof request.params?.approvalId === 'string' ? { approvalId: request.params.approvalId } : {}),
+      availableDecisions: choices.filter((choice) => !Array.isArray(available) || available.includes(choice)),
+    } : undefined
+    return Object.freeze({ id, kind, summary: approvalSummary(request), ...(runtimeApproval ? { runtimeApproval } : {}) })
+  }
+
+  async function resolveApproval(state: TurnState): Promise<void> {
+    const pending = state.awaitingResolution
+    if (!pending) return
+    state.awaitingResolution = undefined
+    if (state.input.executionId) observeProjection(() => itemProjection?.completeRequest(pending.request, pending.result, projectionScope(state)))
+    await pending.onResolved?.()
   }
 
   async function initialize(input: CodexSessionPreflightInput): Promise<{ transport: CodexSessionTransport; negotiation: CodexCapabilityNegotiation }> {
@@ -457,18 +479,21 @@ export function createCodexSessionModule(dependencies: CodexSessionModuleDepende
     await transport.close().catch(() => undefined)
   }
 
-  async function respondToApproval(request: CodexRuntimeApprovalRequest, result: unknown, endTurn?: boolean): Promise<CodexSessionTurnResult> {
+  async function respondToApproval(request: CodexRuntimeApprovalRequest, result: unknown, endTurn?: boolean, onResolved?: () => Promise<void>): Promise<CodexSessionTurnResult> {
     const state = [...turnStates.values()].find((candidate) => candidate.waitingRequest?.id === request.id)
     const original = state?.waitingRawRequest ?? null
     if (!state || !original) throw new Error(zhCNMain.codexSession.approvalContinuationExpired)
     if (!state.transport.respond) throw new Error(zhCNMain.codexSession.approvalExpired)
     const normalized = normalizeApprovalResult(original, result)
+    if (request.runtimeApproval && !request.runtimeApproval.availableDecisions.some((choice) => choice === asRecord(normalized)?.decision)) {
+      throw new Error(zhCNMain.codexSession.invalidApprovalDecision(original.method))
+    }
     if (state.respondedRequestId !== request.id) {
       await state.transport.respond(original.id, normalized)
       state.respondedRequestId = request.id
-      if (state.input.executionId) {
-        observeProjection(() => itemProjection?.completeRequest(original, normalized, projectionScope(state)))
-      }
+      state.answeredRequests.add(original.id)
+      if (request.runtimeApproval) state.awaitingResolution = { request: original, result: normalized, onResolved }
+      else if (state.input.executionId) observeProjection(() => itemProjection?.completeRequest(original, normalized, projectionScope(state)))
     }
     if (endTurn) {
       state.stopping = true
@@ -490,10 +515,16 @@ export function createCodexSessionModule(dependencies: CodexSessionModuleDepende
   async function consumeTurn(state: TurnState): Promise<CodexSessionTurnResult> {
     try {
       while (true) {
-        const message = state.transport.nextMessage ? await state.transport.nextMessage() : await state.transport.nextNotification()
+        const deferred = !state.awaitingResolution ? state.deferredRequests.shift() : undefined
+        const message = deferred ?? (state.transport.nextMessage ? await state.transport.nextMessage() : await state.transport.nextNotification())
         if (!message) throw new Error(zhCNMain.codexSession.turnClosed)
         if (!('id' in message)) {
           const belongsToTurn = message.params?.threadId === state.locator.threadId && message.params?.turnId === state.locator.turnId
+          const pending = state.awaitingResolution?.request
+          if (pending && message.params?.threadId === state.locator.threadId && (
+            (message.method === 'serverRequest/resolved' && message.params.requestId === pending.id) ||
+            (belongsToTurn && message.method === 'item/completed' && asRecord(message.params.item)?.id === pending.params?.itemId)
+          )) await resolveApproval(state)
           const event = belongsToTurn ? runtimeEventForNotification(message) : null
           if (event) state.events.push(event)
           if (state.input.executionId) {
@@ -503,7 +534,17 @@ export function createCodexSessionModule(dependencies: CodexSessionModuleDepende
         if ('id' in message) {
           if (state.stopping) continue
           const request = message as JsonRpcServerRequest
-          const publicRequest = publicApprovalRequest(request)
+          if (request.params?.threadId && request.params.threadId !== state.locator.threadId) continue
+          if (request.params?.turnId && request.params.turnId !== state.locator.turnId) continue
+          // Retransmitted requests must not produce another decision or Step attempt.
+          if (state.answeredRequests.has(request.id)) continue
+          if (state.awaitingResolution) {
+            // A later request must not replace the durable pending approval
+            // until its predecessor has been acknowledged by the server.
+            state.deferredRequests.push(request)
+            continue
+          }
+          const publicRequest = publicApprovalRequest(request, state.locator)
           if (state.input.executionId) {
             observeProjection(() => itemProjection?.handleRequest(request, projectionScope(state)))
           }
@@ -515,6 +556,7 @@ export function createCodexSessionModule(dependencies: CodexSessionModuleDepende
             if (!state.transport.respond) throw new Error(zhCNMain.codexSession.approvalExpired)
             const normalized = normalizeApprovalResult(request, approvalResult)
             await state.transport.respond(request.id, normalized)
+            state.answeredRequests.add(request.id)
             if (state.input.executionId) {
               observeProjection(() => itemProjection?.completeRequest(request, normalized, projectionScope(state)))
             }
@@ -527,6 +569,7 @@ export function createCodexSessionModule(dependencies: CodexSessionModuleDepende
         if (message.method !== 'turn/completed' || message.params?.threadId !== state.locator.threadId) continue
         const turn = asRecord(message.params.turn)
         if (turn?.id !== state.locator.turnId) continue
+        await resolveApproval(state)
         const turnError = asRecord(turn.error)
         const status = asString(turn.status)
         const terminalStatus = status === 'completed' || status === 'interrupted' ? status : 'failed'
@@ -615,7 +658,7 @@ export function createCodexSessionModule(dependencies: CodexSessionModuleDepende
         const activeKey = `${threadId}:${turnId}`
         activeTransports.set(activeKey, transport)
         await input.onLocator?.(locator)
-        const state: TurnState = { transport, activeKey, locator, events: [], input, waitingRequest: null, waitingRawRequest: null, processing: null }
+        const state: TurnState = { transport, activeKey, locator, events: [], input, waitingRequest: null, waitingRawRequest: null, processing: null, deferredRequests: [], answeredRequests: new Set() }
         turnStates.set(activeKey, state)
         if (input.executionId) observeProjection(() => itemProjection?.startTurn(projectionScope(state), turnStartedAt))
         state.processing = consumeTurn(state)

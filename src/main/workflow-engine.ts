@@ -10,7 +10,8 @@ import type {
   StartWorkflowRunInput,
   PullRequestState,
   RuntimeEventInput,
-  RuntimeArtifact
+  RuntimeArtifact,
+  RuntimeApprovalChoice
 } from '../shared/workflow-run'
 import { isWorkflowRunInProgress } from '../shared/workflow-run'
 import type { GitMergeRequest, GitPullRequestRequest, GitPullRequestResult } from './git-delivery'
@@ -150,11 +151,16 @@ export interface WorkflowEngine {
   retryStep(runId: string, guidance?: string): Promise<WorkflowRun>
   cancelRun(runId: string): Promise<WorkflowRun>
   answerQuestion(runId: string, answer: string): Promise<WorkflowRun>
+  decideRuntimeApproval(runId: string, requestId: string, decision: RuntimeApprovalChoice): Promise<WorkflowRun>
   approve(runId: string): Promise<WorkflowRun>
   reject(runId: string): Promise<WorkflowRun>
   recover(): Promise<void>
   waitForIdle(runId: string): Promise<WorkflowRun>
   close(): Promise<void>
+}
+
+function needsRuntimeExecution(run: WorkflowRun | null): boolean {
+  return run?.status === 'running' || (run?.status === 'waiting' && run.snapshot.pendingApprovalDetails?.runtime?.state === 'responding')
 }
 
 export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): WorkflowEngine {
@@ -171,7 +177,10 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
     if (pending) return pending.action === action ? pending.promise : Promise.reject(new Error(zhCNMain.workflowRun.controlInProgress))
     const promise = Promise.resolve().then(operation).finally(async () => {
       controls.delete(runId)
-      if (!closed && (await store.getRun(runId))?.status === 'running') ensureRunning(runId)
+      if (!closed) {
+        const latest = await store.getRun(runId)
+        if (needsRuntimeExecution(latest)) ensureRunning(runId)
+      }
     })
     controls.set(runId, { action, promise })
     return promise
@@ -186,7 +195,7 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
     while (true) {
       const run = await store.getRun(runId)
       if (stopIntent(runId)) return
-      if (!run || run.status !== 'running' || !run.snapshot.currentStepExecutionId) return
+      if (!run || !needsRuntimeExecution(run) || !run.snapshot.currentStepExecutionId) return
       const execution = run.stepExecutions.find((candidate) => candidate.id === run.snapshot.currentStepExecutionId)
       if (!execution) return
       const step = run.workflow.phases[run.snapshot.phaseIndex]?.steps[run.snapshot.stepIndex]
@@ -222,6 +231,8 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
         decisionRecords: run.decisionRecords,
         permissionPolicy: run.project.permissionPolicy ?? { grantedPermissions: [...DEFAULT_PROJECT_PERMISSIONS] },
         events: run.events,
+        ...(run.snapshot.pendingApprovalDetails?.runtime?.state === 'responding' ? { runtimeApproval: run.snapshot.pendingApprovalDetails.runtime } : {}),
+        resolveRuntimeApproval: (requestId) => store.resolveRuntimeApproval(runId, requestId),
         persistRuntimeLocator: async (runtimeLocator) => {
           await store.recordRuntimeLocator(runId, execution.id, runtimeLocator)
         }
@@ -284,6 +295,14 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
       }
       events = normalizeExternalFailure(events)
       if (closed) { executing.delete(runId); return }
+      if (context.runtimeApproval && events.some((event) => event.type === 'error' || (event.type === 'status_changed' && event.status === 'blocked'))) {
+        executing.delete(runId)
+        const latest = await store.getRun(runId)
+        if (latest?.snapshot.pendingApprovalDetails?.runtime?.state === 'responding') {
+          await store.blockRuntimeApproval(runId)
+          return
+        }
+      }
       const reviewStep = step?.id === 'review' || step?.skill?.name === 'code-review' || /review/i.test(step?.name ?? '')
       if (!stopIntent(runId) && reviewStep && events.some((event) => event.type === 'status_changed' && event.status === 'completed') && !events.some((event) => event.type === 'error') && dependencies.gitDeliveryManager) {
         try {
@@ -345,7 +364,10 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
     const previous = active.get(runId)
     if (previous) {
       void previous.then(async () => {
-        if (!closed && (await store.getRun(runId))?.status === 'running') ensureRunning(runId)
+        if (!closed) {
+          const latest = await store.getRun(runId)
+          if (needsRuntimeExecution(latest)) ensureRunning(runId)
+        }
       })
       return
     }
@@ -378,8 +400,9 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
     const execution = run?.stepExecutions.find((candidate) => candidate.id === executionId)
     if (!run || !execution) throw new Error('找不到 Step Execution。')
     const step = run.workflow.phases.find((phase) => phase.id === execution.phaseId)?.steps.find((step) => step.id === execution.stepId)
-    const liveExecution = active.has(runId) && run.snapshot.currentStepExecutionId === executionId
-    const awaitingGate = run.snapshot.pendingApprovalDetails && step?.approvalGate
+    const pendingRuntimeApproval = run.snapshot.pendingApprovalDetails?.runtime
+    const liveExecution = run.snapshot.currentStepExecutionId === executionId && (active.has(runId) || Boolean(pendingRuntimeApproval && dependencies.runtime.canRespondToApproval?.(pendingRuntimeApproval)))
+    const awaitingGate = run.snapshot.pendingApprovalDetails && !pendingRuntimeApproval && step?.approvalGate
     let unavailable = Boolean(dependencies.runtime.readHistory && !liveExecution && !execution.runtimeLocators.length && (
       execution.runtimeSessionId || (step?.kind === 'skill' && !awaitingGate && !['pending', 'skipped'].includes(execution.status))
     ))
@@ -397,7 +420,7 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
     }
     if (unavailable) {
       // A live Turn still has a safe owner. Inspecting history must not stop it.
-      if (!active.has(runId)) await store.blockRuntimeHistory(runId, executionId, zhCNMain.codexSession.historyUnavailable, zhCNMain.codexSession.historyRecovery)
+      if (!active.has(runId) && !run.snapshot.pendingApprovalDetails?.runtime) await store.blockRuntimeHistory(runId, executionId, zhCNMain.codexSession.historyUnavailable, zhCNMain.codexSession.historyRecovery)
       throw new Error(zhCNMain.codexSession.historyUnavailable)
     }
   }
@@ -564,7 +587,21 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
       })
     },
 
+    async decideRuntimeApproval(runId, requestId, decision) {
+      return control(runId, `runtime-approval:${requestId}:${decision}`, async () => {
+        const current = await requireRunStatus(runId, zhCNMain.runtimeApproval.respond, ['waiting'])
+        const pending = current.snapshot.pendingApprovalDetails?.runtime
+        if (!pending || pending.id !== requestId || pending.state !== 'pending') throw new Error(zhCNMain.runtimeApproval.expired)
+        if (!dependencies.runtime.canRespondToApproval?.(pending)) return store.blockRuntimeApproval(runId)
+        const run = await store.decideRuntimeApproval(runId, requestId, decision)
+        ensureRunning(runId)
+        return run
+      })
+    },
+
     async approve(runId) {
+      const pending = (await store.getRun(runId))?.snapshot.pendingApprovalDetails?.runtime
+      if (pending) return this.decideRuntimeApproval(runId, pending.id, 'accept')
       return control(runId, 'approve', async () => {
         const stored = await requireRunStatus(runId, '批准', ['waiting'])
         if (!stored.snapshot.pendingApprovalDetails || !stored.snapshot.pendingApproval) throw new Error('waiting 状态没有可决定的 Approval。')
@@ -580,6 +617,8 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
     },
 
     async reject(runId) {
+      const pending = (await store.getRun(runId))?.snapshot.pendingApprovalDetails?.runtime
+      if (pending) return this.decideRuntimeApproval(runId, pending.id, 'decline')
       return control(runId, 'reject', async () => {
         const current = await requireRunStatus(runId, '拒绝', ['waiting'])
         if (!current.snapshot.pendingApprovalDetails || !current.snapshot.pendingApproval) throw new Error('waiting 状态没有可决定的 Approval。')
@@ -594,6 +633,18 @@ export function createWorkflowEngine(dependencies: WorkflowEngineDependencies): 
       for (const run of await store.recoverableRuns()) {
         await reconcileCommitArtifacts(run)
         if (!isWorkflowRunInProgress(run.status)) continue
+        const pending = run.snapshot.pendingApprovalDetails?.runtime
+        if (pending && pending.state !== 'resolved') {
+          if (!dependencies.runtime.canRespondToApproval?.(pending)) {
+            try {
+              await restoreRunHistory(run)
+            } catch {
+              // History cannot reconstitute the original transport's request handle.
+            }
+            await store.blockRuntimeApproval(run.id)
+          }
+          continue
+        }
         try {
           await restoreRunHistory(run)
         } catch {

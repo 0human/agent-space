@@ -126,6 +126,32 @@ function fixture(): RunActivityViewProps {
 }
 
 describe('Run Activity View', () => {
+  it('shows Runtime approval context and only the allowed decisions, then disables them while awaiting confirmation', async () => {
+    const props = fixture()
+    const locator = { runtimeProvider: 'codex', threadId: 'thread-5', turnId: 'turn-5', runtimeVersion: '1' }
+    props.run.status = 'waiting'
+    props.run.snapshot.pendingApproval = '命令执行审批'
+    props.run.snapshot.pendingApprovalDetails = {
+      approval: '命令执行审批', decision: null, continuation: { phaseIndex: 3, stepIndex: 0, executionId: 'execution-5' },
+      runtime: { id: 'request-42', requestId: 42, runtimeLocator: locator, itemId: 'command-5', requestType: 'command', availableDecisions: ['decline', 'cancel'], state: 'pending', decision: null },
+    }
+    props.onRuntimeApproval = vi.fn()
+    props.runtimeItems.push({ id: 'approval-command-5', type: 'approval', kind: 'command', status: 'in_progress', summary: 'git status', reason: '需要访问工作区', itemId: 'command-5', requestId: 42, decision: null, runId: props.run.id, executionId: 'execution-5', provider: 'codex', source: 'codex', permissionPolicy: { grantedPermissions: [] }, runtimeLocator: locator })
+    const { rerender } = render(<RunActivityView {...props} />)
+    const card = screen.getByRole('article', { name: 'Runtime 审批：命令执行' })
+    expect(within(card).getByText('command-5', { exact: false })).toBeVisible()
+    expect(within(card).getByText('需要访问工作区')).toBeVisible()
+    expect(within(card).queryByRole('button', { name: '批准本次' })).not.toBeInTheDocument()
+    await userEvent.click(within(card).getByRole('button', { name: '取消当前 Turn' }))
+    expect(props.onRuntimeApproval).toHaveBeenCalledWith('request-42', 'cancel')
+    expect(props.onApprove).not.toHaveBeenCalled()
+    props.run.snapshot.pendingApprovalDetails.runtime!.state = 'responding'
+    props.run.snapshot.pendingApprovalDetails.runtime!.decision = 'cancel'
+    rerender(<RunActivityView {...props} />)
+    expect(within(card).getByText('已提交决定，等待 Runtime 确认。')).toBeVisible()
+    expect(within(card).getByRole('button', { name: '取消当前 Turn' })).toBeDisabled()
+  })
+
   it('shows the saved answer once after its original question and before the next Turn', () => {
     const props = fixture()
     const question = '首个里程碑要证明什么？\n推荐先完成模拟执行。'

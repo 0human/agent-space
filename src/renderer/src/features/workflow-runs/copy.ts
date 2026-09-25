@@ -12,6 +12,11 @@ const approvalDecisionLabels: Record<RuntimeApprovalDecision, string> = {
 
 export const workflowRunCopy = {
   run: {
+    runtimeApprovalTitle: (kind: 'command' | 'file-change') => `Runtime 审批：${kind === 'command' ? '命令执行' : '文件修改'}`,
+    runtimeApprovalItem: (itemId: string) => `相关 Item：${itemId}`,
+    runtimeApprovalWaiting: '已提交决定，等待 Runtime 确认。',
+    runtimeApprovalReasonUnavailable: '未提供审批原因。',
+    runtimeApprovalActions: { accept: '批准本次', acceptForSession: '本会话允许', decline: '拒绝本次', cancel: '取消当前 Turn' },
     eyebrow: 'Workflow Run',
     newRunTitle: '新运行',
     notStarted: '尚未开始',
